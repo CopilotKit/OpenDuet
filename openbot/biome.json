@@ -1,0 +1,121 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.10/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/dist",
+      "!.",
+      "!.superpowers",
+      "!**/.venv*",
+      "!app/src/lib/generated/application-config.ts",
+      "!app/src/routeTree.gen.ts",
+      "!desktop/src-tauri/gen",
+      "!**/target",
+      "!server/drizzle",
+      "!server/tests/fixtures/arcade-catalogue.json"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space"
+  },
+  "linter": {
+    "enabled": true
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/tests/**", "**/*.test.ts", "**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["toolkit/src/**", "!toolkit/src/copilotkit/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../**"],
+                    "message": "The toolkit runs turns without the server. Take what it needs as a port in toolkit/ports.ts instead of importing server code."
+                  },
+                  {
+                    "group": [
+                      "./copilotkit/**",
+                      "@openbot/toolkit/copilotkit",
+                      "@openbot/toolkit/copilotkit/**"
+                    ],
+                    "message": "The toolkit core does not depend on CopilotKit. Code that needs @copilotkit/runtime lives in toolkit/src/copilotkit and imports the core, not the other way round."
+                  },
+                  {
+                    "group": [
+                      "@copilotkit/**",
+                      "drizzle-orm",
+                      "drizzle-orm/**",
+                      "hono",
+                      "hono/**"
+                    ],
+                    "message": "The toolkit core depends on @ag-ui, rxjs, zod and @openbot/shared only. CopilotKit-specific code goes in toolkit/src/copilotkit."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["toolkit/src/copilotkit/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../../**"],
+                    "message": "The CopilotKit adapters run without the server. Take what they need as a port or a constructor option instead of importing server code."
+                  },
+                  {
+                    "group": [
+                      "drizzle-orm",
+                      "drizzle-orm/**",
+                      "hono",
+                      "hono/**"
+                    ],
+                    "message": "The CopilotKit adapters do not reach the database or the HTTP framework."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["app/src/components/ui/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useSemanticElements": "off",
+            "noLabelWithoutControl": "off",
+            "useKeyWithClickEvents": "off"
+          }
+        }
+      }
+    }
+  ]
+}

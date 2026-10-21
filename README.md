@@ -4,11 +4,13 @@
 
 **The open-source proactive agent. It tells you what needs you, handles what can wait, and asks before it acts.**
 
-[**What it does**](#what-it-does) · [**Status**](#status) · [**Quick start**](#quick-start) · [**How it works**](#how-it-works) · [**OpenBot**](https://github.com/CopilotKit/openbot)
+[**What it does**](#what-it-does) · [**Status**](#status) · [**Quick start**](#quick-start) · [**Make it your own**](#make-it-your-own) · [**How it works**](#how-it-works) · [**OpenBot**](https://github.com/CopilotKit/openbot)
 
 [![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/openbot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
+
+**[Building on OpenDuet? Talk to a CopilotKit engineer →](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)**
 
 </div>
 
@@ -23,7 +25,7 @@ shows you exactly what it is about to do and waits for your answer.
 
 </div>
 
-> **Early, and in active development.** OpenDuet is not ready to run on its own yet. It is being built on [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, and much of what it stands on already works there today. The [status table](#status) says which parts are which. Expect things to move. Issues and ideas are welcome.
+> **Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. Watching your mail and calendar, sorting what needs you, and the morning brief are being built now. The [status table](#status) says which parts work and which do not yet. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
@@ -39,17 +41,18 @@ Some of this works today through OpenBot, and some of it is being built now. See
 
 ## Status
 
-**Available today via OpenBot** means it works in [OpenBot](https://github.com/CopilotKit/openbot) now, and OpenDuet builds on it. **In progress** means it is new work for OpenDuet.
+**Available today via OpenBot** means it works when you run this repository today, and the code comes from [OpenBot](https://github.com/CopilotKit/openbot), which OpenDuet is built on. **In progress** means it is new work for OpenDuet and does not work yet.
 
 | Capability                   | What it means for you                                                                 | Status                      |
 | ---------------------------- | ------------------------------------------------------------------------------------- | --------------------------- |
 | A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away.         | Available today via OpenBot |
-| Asks before it acts          | Actions that need you pause for **Allow once**, **Always allow**, or **Refuse**. Every action is checked against policy and recorded. | Available today via OpenBot |
+| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. Messages to other people always ask. Every action is checked against policy and recorded. | Available today via OpenBot |
 | Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. | Available today via OpenBot |
 | Memory                       | Threads and memory carry over through CopilotKit Intelligence.                        | Available today via OpenBot |
 | Skills                       | Reusable instructions you write once and call with `/`.                               | Available today via OpenBot |
 | Connected apps               | Governed MCP connectors, including Google Drive and Notion.                           | Available today via OpenBot |
 | Scheduled work               | Routines: ask it to do something on a schedule and it runs as you.                    | Available today via OpenBot |
+| Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). | Available today via OpenBot |
 | Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages without being asked.          | In progress                 |
 | What needs you, what can wait | Sorts what comes in by how much it needs you.                                        | In progress                 |
 | Morning brief                | One message to start the day, built from what it watched and sorted.                  | In progress                 |
@@ -58,18 +61,72 @@ Some of this works today through OpenBot, and some of it is being built now. See
 
 ## Quick start
 
-OpenDuet does not have its own setup yet. That is coming soon.
-
-To run the base it is built on today, run OpenBot:
+You will need Docker, [Bun](https://bun.sh) 1.3 or newer, a model key, and a CopilotKit Intelligence project. **Intelligence is required**: it keeps OpenDuet's threads and memory, and the server will not start without its key. The free Developer plan is enough.
 
 ```sh
-git clone https://github.com/CopilotKit/openbot.git
-cd openbot
+git clone https://github.com/CopilotKit/OpenDuet.git
+cd OpenDuet
+cp .env.example .env
+bun install
 ```
 
-Then follow [OpenBot's quick start](https://github.com/CopilotKit/openbot#quick-start). You will need Docker, [Bun](https://bun.sh) 1.3+, a CopilotKit Intelligence project (a free plan is available), and a model key.
+Sign in and pick an Intelligence project. These write the project's key and its telemetry ID to `.env`:
 
-Once it is running, you can try the parts OpenDuet builds on: give a Bot a task and watch it work on its own computer, choose what it must ask you about first in `/settings/approvals`, and ask it to do something on a schedule, which you can see in `/routines`.
+```sh
+npx --yes copilotkit@latest login
+npx --yes copilotkit@latest project select
+bun scripts/setup-learning.ts
+```
+
+Put your model key in `.env`:
+
+```sh
+OPENAI_API_KEY=sk-...
+```
+
+Then start it:
+
+```sh
+bash scripts/start.sh
+```
+
+and open <http://localhost:3010>. The script starts Postgres and each Bot's computer in Docker, applies the database migrations, and starts the API server, the routine worker, and the app. It checks that each one answers before it prints the next steps. `bash scripts/stop.sh` stops all of it and deletes nothing.
+
+If port 5432 is already taken on your machine, set `POSTGRES_PORT` in `.env` to a free port and change the port in `DATABASE_URL` to match.
+
+The CopilotKit runtime sends usage telemetry to CopilotKit, tagged OpenDuet. Set `COPILOTKIT_TELEMETRY_DISABLED=true` or `DO_NOT_TRACK=1` to turn it off. [What is sent](docs/telemetry.md).
+
+Once it is running, try the parts that work today:
+
+- Ask the OpenDuet Bot to do something in its own browser, and watch it work on its computer.
+- Choose what it must ask you about first in `/settings/approvals`.
+- Ask it to do something on a schedule. You will find it in `/routines`.
+
+The rest of the setup, including sign-in for a team, Slack and Teams, and deploying with Docker or Helm, is OpenBot's. See [openbot/docs](openbot/docs/README.md).
+
+## Make it your own
+
+OpenDuet is meant to be copied. Everything that makes it OpenDuet rather than OpenBot is in [`openbot/examples/openduet`](openbot/examples/openduet):
+
+| File            | What it decides                                                       |
+| --------------- | --------------------------------------------------------------------- |
+| `brand.yaml`    | The product's name, everywhere in the app.                            |
+| `agents.yaml`   | The Bots, their instructions, and which skills each one holds.        |
+| `channels.yaml` | The conversations people see, and which Bots answer in each.          |
+| `model.yaml`    | The model provider and default model.                                 |
+| `skills.yaml`   | Instructions anyone can call with `/`, and the tools each one needs.  |
+
+Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your copy (relative to `openbot/server`). OpenBot's code underneath stays as it is, so OpenBot's fixes can still be brought in. [docs/plan.md](docs/plan.md) describes how this repository tracks OpenBot.
+
+## What is in this repository
+
+| Path                  | What it is                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `openbot/`            | The platform OpenDuet runs on: [OpenBot](https://github.com/CopilotKit/openbot)'s server, app, worker, each Bot's computer, Docker and Helm files. |
+| `openbot/examples/openduet` | OpenDuet's tenant package: its name, Bots, channels, model and skills.                       |
+| `scripts/`            | `start.sh` and `stop.sh`, which run OpenBot's scripts with this repository's `.env`.               |
+| `docs/`               | OpenDuet's plan and its telemetry. OpenBot's own documentation is in `openbot/docs`.               |
+| `assets/`             | The banner and the launch film.                                                                    |
 
 ## How it works
 
@@ -125,6 +182,8 @@ OpenDuet is early, so please open an issue before starting substantial work. Muc
 OpenDuet is built and maintained by [CopilotKit](https://www.copilotkit.ai), the team behind [OpenBot](https://github.com/CopilotKit/openbot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
 
 It is CopilotKit's open-source take on the proactive-agent category: assistants that reach out first, such as Claude Duet. OpenDuet is an independent project and is not affiliated with or endorsed by Anthropic.
+
+**Rolling it out at your company?** [Talk to a CopilotKit engineer.](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
 - [Discord](https://discord.gg/6dffbvGU3D): ask a question or share what you are building
 - [@copilotkit on X](https://x.com/copilotkit): releases and what is shipping
