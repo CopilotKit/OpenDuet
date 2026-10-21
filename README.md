@@ -2,30 +2,41 @@
 
 # OpenDuet
 
-**The open-source proactive agent. It tells you what needs you, handles what can wait, and asks before it acts.**
+### Tells you what needs you, handles what can wait, and asks before it acts.
 
-[**What it does**](#what-it-does) · [**Status**](#status) · [**Quick start**](#quick-start) · [**Make it your own**](#make-it-your-own) · [**How it works**](#how-it-works) · [**OpenBot**](https://github.com/CopilotKit/openbot)
+**The open-source proactive agent, with a computer of its own. Use it on the web, in Slack, or in Microsoft Teams.**
+
+Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https://docs.copilotkit.ai). · [Quick start](#quick-start) · [Overview](#overview) · [Status](#status) · [How it works](#how-it-works) · [Contributing](#contributing)
 
 [![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/openbot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
 
-**[Building on OpenDuet? Talk to a CopilotKit engineer →](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)**
+Host OpenDuet yourself and choose your own model. It needs a [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory; the free Developer plan is enough. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
+
+[**Building on OpenDuet? Talk to a CopilotKit engineer →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
 </div>
 
-![OpenDuet by CopilotKit. The open-source proactive agent. A notification card reads: Morning brief. 2 things need you, 5 can wait. Send your reply to Priya? Allow once, Always allow, Refuse.](./assets/banner.png)
+---
 
 <div align="center">
 
-Most assistants wait to be asked. OpenDuet starts your day with a short brief,
-keeps working on a computer of its own while you step away, and comes back only
-when something needs you. Before it sends, pays, signs, or deletes anything, it
-shows you exactly what it is about to do and waits for your answer.
+<table><tr><td>
+
+![OpenDuet by CopilotKit. The open-source proactive agent. A notification card reads: Morning brief. 2 things need you, 5 can wait. Send your reply to Priya? Allow once, Always allow, Refuse.](./assets/banner.png)
+
+</td></tr></table>
 
 </div>
 
-> **Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. Watching your mail and calendar, sorting what needs you, and the morning brief are being built now. The [status table](#status) says which parts work and which do not yet. Expect things to move. Issues and ideas are welcome.
+_A morning brief, then a reply that waits for your answer. The one-minute [launch film](./assets/openduet-launch.mp4) shows the experience OpenDuet is being built toward; [Status](#status) says which parts work today._
+
+## Overview
+
+OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
+
+**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. Watching your mail and calendar, sorting what needs you, and the morning brief are being built now. The [status table](#status) says which parts work and which do not yet. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
