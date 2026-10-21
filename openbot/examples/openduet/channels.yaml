@@ -1,0 +1,11 @@
+channels:
+  - id: openduet
+    name: OpenDuet
+    description: Your brief, and anything that needs you.
+    permitted_agents: [openduet]
+    allowed_groups: [all]
+  - id: your-agent
+    name: Your agent
+    description: The same job, run by an agent you bring over AG-UI.
+    permitted_agents: [your-agent]
+    allowed_groups: [all]

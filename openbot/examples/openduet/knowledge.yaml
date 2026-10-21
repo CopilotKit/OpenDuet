@@ -1,0 +1,3 @@
+# Document sources this deployment may connect to. None by default: a person connects their own
+# accounts on the Connections page, and an administrator decides what each Bot may use.
+sources: []

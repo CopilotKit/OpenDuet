@@ -1,0 +1,266 @@
+import { type ComponentProps, Fragment, type ReactNode, useId } from "react";
+import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
+import { DuetCard, OutcomePill, Rule, Tile } from "@/components/duet/kit";
+import {
+  approvalOutcome,
+  clockTime,
+  decisionReceipt,
+  describeApproval,
+} from "@/lib/approval-view";
+import type { ApprovalDecision, ApprovalRequest } from "@/lib/approvals";
+import { cn } from "@/lib/utils";
+
+const KIND_ICON: Record<
+  ReturnType<typeof describeApproval>["kind"],
+  DuetIconName
+> = {
+  mail: "mail",
+  browser: "globe",
+  command: "wrench",
+  other: "shield",
+};
+
+/** A pill button half the card wide, as the film draws Refuse and Allow once. */
+export function PillButton({
+  children,
+  primary = false,
+  className,
+  ...props
+}: ComponentProps<"button"> & { primary?: boolean }) {
+  return (
+    <button
+      className={cn(
+        "type-row inline-flex h-[46px] min-w-0 flex-1 basis-0 items-center justify-center rounded-full px-4 font-semibold transition-[filter,transform,opacity] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
+        primary
+          ? "bg-duet-black text-duet-on-black hover:brightness-125"
+          : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
+        className,
+      )}
+      type="button"
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * One action a Bot wants to take, drawn the way the film draws the email it wants to send: what it
+ * is, who it goes to, what it says, and the person's three answers. "Always allow" is a quiet text
+ * button under the two, because it changes a rule rather than answering this one request.
+ *
+ * Once decided, the answers fold into a line saying who decided and when, and a pill says how it
+ * ended. Everything the request carries stays one tap away under Details.
+ */
+export function ApprovalCard({
+  request,
+  botName,
+  busy = false,
+  error,
+  onDecide,
+  compact = false,
+  className,
+}: {
+  request: ApprovalRequest;
+  /** Said when the card is shown away from the Bot's own conversation. */
+  botName?: string;
+  busy?: boolean;
+  error?: string | null;
+  onDecide?: (choice: ApprovalDecision) => void;
+  /** Only the title, the outcome and who decided: a decided card left in a conversation. */
+  compact?: boolean;
+  className?: string;
+}) {
+  const view = describeApproval(request);
+  const waiting = request.status === "pending";
+  const handOff = request.action.policy?.behaviour === "hand_off";
+  const outcome = approvalOutcome(request);
+  const receipt = waiting ? null : decisionReceipt(request);
+  const caption = [botName, view.app, request.action.scope]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <DuetCard
+      aria-label={waiting ? "Waiting for your approval" : undefined}
+      className={className}
+      raised
+      role={waiting ? "region" : undefined}
+    >
+      <div className="flex min-h-[54px] items-center gap-2.5 px-4 py-2.5">
+        <Tile icon={KIND_ICON[view.kind]} size={32} />
+        <div className="min-w-0 flex-1">
+          <p className="type-row font-semibold">
+            {handOff && waiting ? `This needs you: ${view.title}` : view.title}
+          </p>
+          {caption ? (
+            <p className="type-label truncate text-duet-ink-3">{caption}</p>
+          ) : null}
+        </div>
+        {outcome ? (
+          <OutcomePill
+            icon={outcome.tone === "green" ? "check" : null}
+            tone={outcome.tone}
+          >
+            {outcome.label}
+          </OutcomePill>
+        ) : null}
+      </div>
+      {compact ? null : (
+        <ApprovalContent handOff={handOff} request={request} view={view} />
+      )}
+      {error ? (
+        <p className="type-label px-4 pb-2 text-duet-red" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {waiting && onDecide ? (
+        <div className="px-4 pt-1 pb-3">
+          <div className="flex gap-2">
+            {handOff ? (
+              <>
+                <PillButton disabled={busy} onClick={() => onDecide("deny")}>
+                  Don't do it
+                </PillButton>
+                <PillButton
+                  disabled={busy}
+                  onClick={() => onDecide("handled")}
+                  primary
+                >
+                  I did it myself
+                </PillButton>
+              </>
+            ) : (
+              <>
+                <PillButton disabled={busy} onClick={() => onDecide("deny")}>
+                  Refuse
+                </PillButton>
+                <PillButton
+                  disabled={busy}
+                  onClick={() => onDecide("allow_once")}
+                  primary
+                >
+                  Allow once
+                </PillButton>
+              </>
+            )}
+          </div>
+          {handOff ? null : (
+            <button
+              className="type-label mx-auto mt-1 flex h-10 items-center rounded-full px-3 font-semibold text-duet-ink-2 hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+              disabled={busy}
+              onClick={() => onDecide("allow_always")}
+              type="button"
+            >
+              Always allow
+            </button>
+          )}
+        </div>
+      ) : null}
+      {receipt ? (
+        <DecidedLine
+          at={request.decidedAt ?? null}
+          tone={request.decision === "deny" ? "red" : "green"}
+        >
+          {receipt}
+        </DecidedLine>
+      ) : null}
+    </DuetCard>
+  );
+}
+
+/** The fields, the body, why the Bot asked, and everything else it would send. */
+function ApprovalContent({
+  request,
+  view,
+  handOff,
+}: {
+  request: ApprovalRequest;
+  view: ReturnType<typeof describeApproval>;
+  handOff: boolean;
+}) {
+  const detailsId = useId();
+  return (
+    <>
+      {view.fields.map((field) => (
+        <Fragment key={field.label}>
+          <Rule />
+          <div className="flex min-h-[43px] items-baseline gap-2 px-4 py-2.5">
+            <span className="type-sub w-[66px] shrink-0 font-medium text-duet-ink-3">
+              {field.label}
+            </span>
+            <span className="type-sub min-w-0 font-medium [overflow-wrap:anywhere]">
+              {field.value}
+            </span>
+          </div>
+        </Fragment>
+      ))}
+      {view.body ? (
+        <>
+          <Rule />
+          <p className="type-row max-h-64 overflow-y-auto whitespace-pre-wrap px-4 py-3 leading-6 [overflow-wrap:anywhere]">
+            {view.body}
+          </p>
+        </>
+      ) : null}
+      {request.action.policy?.reason ? (
+        <p className="type-label px-4 pt-1 pb-1 text-duet-ink-2">
+          {handOff ? "Handed to you: " : ""}
+          {request.action.policy.reason}
+        </p>
+      ) : null}
+      <details className="group px-4 pb-1">
+        <summary
+          aria-controls={detailsId}
+          className="type-label inline-flex cursor-pointer list-none items-center gap-1 py-1 font-medium text-duet-ink-3 outline-none focus-visible:underline [&::-webkit-details-marker]:hidden"
+        >
+          Details
+          <DuetIcon
+            className="transition-transform group-open:rotate-90"
+            name="chevronRight"
+            size={14}
+            stroke={2.2}
+          />
+        </summary>
+        <pre
+          className="mt-1 mb-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-xl bg-duet-tile p-3 font-mono text-duet-ink-2 text-xs"
+          id={detailsId}
+        >
+          {JSON.stringify(request.action.args, null, 2)}
+        </pre>
+      </details>
+    </>
+  );
+}
+
+function DecidedLine({
+  children,
+  at,
+  tone,
+}: {
+  children: ReactNode;
+  at: string | null;
+  tone: "green" | "red";
+}) {
+  return (
+    <div className="relative flex min-h-[52px] items-center gap-[9px] px-4">
+      <div
+        aria-hidden
+        className="absolute top-0 right-4 left-4 h-px bg-duet-hair-2"
+      />
+      <span className={tone === "green" ? "text-duet-green" : "text-duet-red"}>
+        <DuetIcon
+          name={tone === "green" ? "checkCircle" : "x"}
+          size={20}
+          stroke={2.2}
+        />
+      </span>
+      <span className="type-sub font-semibold">{children}</span>
+      {at ? (
+        <span className="type-label ml-auto font-medium text-duet-ink-3">
+          {clockTime(at)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
