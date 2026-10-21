@@ -2,17 +2,17 @@
 
 # OpenDuet
 
-### Tells you what needs you, handles what can wait, and asks before it acts.
+### An open-source proactive agent that gets your work done and keeps you in the loop
 
-**The open-source proactive agent, with a computer of its own. Use it on the web, in Slack, or in Microsoft Teams.**
-
-Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https://docs.copilotkit.ai). · [Quick start](#quick-start) · [Overview](#overview) · [Status](#status) · [How it works](#how-it-works) · [Contributing](#contributing)
+Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https://docs.copilotkit.ai) · [Quick start](#quick-start) · [Overview](#overview) · [Status](#status) · [How it works](#how-it-works) · [Contributing](#contributing)
 
 [![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/openbot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
 
-Host OpenDuet yourself and choose your own model. It needs a [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory; the free Developer plan is enough. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
+ **Each agent has a computer of its own. Use it on the web, in Slack, or in Microsoft Teams.**
+
+Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
 
 [**Building on OpenDuet? Talk to a CopilotKit engineer →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
