@@ -75,6 +75,7 @@ import {
 } from "./tool-activity";
 import {
   attachmentModality,
+  repliesLast,
   type SentAttachment,
   toVisibleChatItems,
 } from "./chat-messages";
@@ -1577,7 +1578,10 @@ export function ChatTranscript({
    * cost was markdown parsing and chart SVGs, and those are skipped by the memoised children below,
    * which is where the 25x came from. This runs per render and is not worth guarding.
    */
-  const items = groupToolSteps(toVisibleChatItems(messages), isDrawn);
+  const items = groupToolSteps(
+    repliesLast(toVisibleChatItems(messages)),
+    isDrawn,
+  );
 
   /*
    * ONLY WHILE THERE IS NOTHING ELSE TO LOOK AT. Once a reply starts streaming, or a tool line

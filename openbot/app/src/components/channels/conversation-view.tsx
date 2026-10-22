@@ -1,9 +1,11 @@
 import type { Message } from "@ag-ui/core";
 import type { Attachment } from "@copilotkit/react-core/v2";
+import { text } from "prompt-area/helpers";
 import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -18,6 +20,12 @@ import {
   type QueuedMessage,
   reduceQueue,
 } from "@/components/channels/composer";
+import { toDraft } from "@/components/channels/composer/draft";
+import {
+  type ConversationSend,
+  ConversationSendContext,
+  latestTurnToolCalls,
+} from "@/components/channels/conversation-send";
 import {
   stepFor,
   useReportChatPresence,
@@ -358,6 +366,49 @@ export function ConversationView({
   );
 
   /**
+   * Words sent from inside the conversation instead of typed: a reply chip, a Start button. See
+   * `conversation-send.tsx`.
+   *
+   * The composer's own fork, taken with the composer's own facts. A turn in flight parks the words
+   * where this conversation queues and refuses them where it does not, and a read-only conversation
+   * refuses them, so a tap can never start a second turn the send button would not have started.
+   */
+  const sendAsPerson = useCallback(
+    (words: string) => {
+      const draft = toDraft([text(words)]);
+      if (draft.isEmpty || disabled || (inFlight && !queueWhileBusy)) {
+        return false;
+      }
+      /*
+       * The composer catches a failed send to put the words back in its box. A tap has no box to
+       * put them back in, and the conversation's notice already says the turn failed, so the
+       * rejection ends here rather than surfacing as an unhandled one.
+       */
+      void submit(draft, inFlight)?.catch(() => undefined);
+      return true;
+    },
+    [disabled, inFlight, queueWhileBusy, submit],
+  );
+
+  /*
+   * THE LATEST TURN'S TOOL CALLS, KEYED AS ONE STRING, so the value below keeps its identity while
+   * a reply streams in. `messages` can be the same array mutated in place (see `ChatTranscript`), so
+   * it cannot be a dependency itself, and a new value on every token would redraw every chip in the
+   * thread to change nothing. A parked message is the person speaking after the turn as much as a
+   * sent one is, so while anything is parked no tool call is in the latest turn.
+   */
+  const latestTurn = JSON.stringify(
+    queued.length > 0 ? [] : latestTurnToolCalls(messages),
+  );
+  const conversationSend = useMemo<ConversationSend>(() => {
+    const current = new Set<string>(JSON.parse(latestTurn));
+    return {
+      send: sendAsPerson,
+      isLatestTurn: (toolCallId) => current.has(toolCallId),
+    };
+  }, [latestTurn, sendAsPerson]);
+
+  /**
    * The turn ended. Whatever was waiting for it goes now, as one message.
    *
    * KEYED ON THE TURN BEING OVER AND NOT ON HOW IT ENDED, which is what makes Stop useful rather
@@ -438,31 +489,37 @@ export function ConversationView({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex flex-1 min-h-0">
-        {/*
-         * The command NAMES, joined, rather than the option objects.
-         *
-         * The transcript needs them only to tell a real skill chip from a message that happens to
-         * begin with a slash, and its message rows are memoised on primitives — handing them an
-         * array would give every message a new prop identity on each refetch and re-render the whole
-         * conversation to change nothing.
-         */}
-        <ChatTranscript
-          busy={busy}
-          {...(inShell
-            ? { contentClassName: "max-w-none gap-[14px] px-4 pt-[100px] pb-6" }
-            : {})}
-          lead={lead}
-          commandNames={(commands ?? [])
-            .map((command) => command.name)
-            .join(",")}
-          messages={messages}
-          onRemoveQueued={(id) => {
-            apply({ id, type: "remove" });
-          }}
-          queued={queued}
-          restoring={restoring}
-          {...(stopped ? { stopped } : {})}
-        />
+        {/* What the transcript draws can send as the person. See `conversation-send.tsx`. */}
+        <ConversationSendContext.Provider value={conversationSend}>
+          {/*
+           * The command NAMES, joined, rather than the option objects.
+           *
+           * The transcript needs them only to tell a real skill chip from a message that happens to
+           * begin with a slash, and its message rows are memoised on primitives — handing them an
+           * array would give every message a new prop identity on each refetch and re-render the
+           * whole conversation to change nothing.
+           */}
+          <ChatTranscript
+            busy={busy}
+            {...(inShell
+              ? {
+                  contentClassName:
+                    "max-w-none gap-[14px] px-4 pt-[100px] pb-6",
+                }
+              : {})}
+            lead={lead}
+            commandNames={(commands ?? [])
+              .map((command) => command.name)
+              .join(",")}
+            messages={messages}
+            onRemoveQueued={(id) => {
+              apply({ id, type: "remove" });
+            }}
+            queued={queued}
+            restoring={restoring}
+            {...(stopped ? { stopped } : {})}
+          />
+        </ConversationSendContext.Provider>
       </div>
       <div
         className={

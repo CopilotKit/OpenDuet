@@ -1,6 +1,9 @@
 import type { Message, ToolCall } from "@ag-ui/core";
 import { describe, expect, test } from "bun:test";
-import { toVisibleChatItems } from "../src/components/channels/chat-messages";
+import {
+  repliesLast,
+  toVisibleChatItems,
+} from "../src/components/channels/chat-messages";
 
 /**
  * What a channel transcript shows, out of the messages a run produced.
@@ -1048,5 +1051,47 @@ describe("what a sent attachment is drawn as", () => {
         }),
       ).toBe("image");
     }
+  });
+});
+
+describe("repliesLast", () => {
+  const replies = (id: string): ToolCall => ({
+    id,
+    type: "function",
+    function: { name: "suggest_replies", arguments: "{}" },
+  });
+  const ids = (messages: Message[]) =>
+    repliesLast(toVisibleChatItems(messages)).map((item) => item.id);
+
+  test("draws reply chips under the Bot's last words in their turn, wherever it called for them", () => {
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "What needs me?" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-1")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: "Shown." },
+        { id: "a2", role: "assistant", content: "Which first?" },
+        { id: "u2", role: "user", content: "Ana first." },
+        { id: "a3", role: "assistant", content: "On it." },
+      ]),
+    ).toEqual(["u1", "a2", "call-1", "u2", "a3"]);
+  });
+
+  test("leaves a turn whose chips already come last as it was", () => {
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "What needs me?" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "Which first?",
+          toolCalls: [replies("call-1")],
+        },
+      ]),
+    ).toEqual(["u1", "a1", "call-1"]);
   });
 });
