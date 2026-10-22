@@ -251,6 +251,7 @@ import { createRoutineRunner } from "./routines/runner";
 import { createRoutineStore } from "./routines/store";
 import { createIntentRouter } from "./routing/classify";
 import { createModelCompleter } from "./routing/model";
+import { createPageStore } from "./openduet/pages";
 import { createOpenDuetTools } from "./openduet/wiring";
 import { reportIntelligenceEntitlement } from "./intelligence-entitlement-check";
 import { createSelfHostBanner } from "./self-host-banner";
@@ -1354,11 +1355,13 @@ const memorySweep = repeatAfterEach(async () => {
 const wakeUpStore = createWakeUpStore(database, { auditStore: bootAuditStore });
 
 /**
- * OpenDuet's own tools: the morning brief, read through the plugin store as the person, and reply
- * chips. See openduet/wiring.ts.
+ * OpenDuet's own tools: the morning brief, read through the plugin store as the person, reply chips,
+ * and the pages it makes. See openduet/wiring.ts.
  */
+const openDuetPages = createPageStore(database);
 const openDuetTools = createOpenDuetTools({
   database,
+  pages: openDuetPages,
   callTool: (input) => pluginStore.callTool(input),
   complete: chooseSkills,
   model: runtimeModel.defaultModel,
@@ -2563,6 +2566,7 @@ const app = createApp(
     },
     memory: { store: personalMemoryStore, ingestion: memoryIngestion },
     proactive: { store: proactiveStore, engine: proactiveEngine },
+    openduet: { pages: openDuetPages },
     responsibilities: {
       store: responsibilityStore,
       engine: responsibilityEngine,
