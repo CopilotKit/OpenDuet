@@ -8,6 +8,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ConversationView } from "@/components/channels/conversation-view";
+import { FIRST_DAY_REQUEST, FirstDay } from "@/components/shell/first-day";
 import {
   seedMessage,
   stashFirstMessage,
@@ -68,6 +69,13 @@ export function ChatScreen() {
         Couldn't load your conversation. Reload the page.
       </ScreenNotice>
     );
+  /*
+   * A conversation that has never had a message still opens on the first-day offer: one made only to
+   * hold the Bot's background research, say. The first message then goes into it rather than into a
+   * second conversation.
+   */
+  if (channel && !started && channel.lastMessageAt === null)
+    return <FirstMessage bot={bot} existing={channel} onStarted={setStarted} />;
   if (channel)
     return (
       <OngoingChat
@@ -104,13 +112,17 @@ function OngoingChat({
 
 /**
  * No conversation yet. The first message creates the channel, recorded as a choice of this Bot the
- * way picking it anywhere else is, and the chat takes over in place.
+ * way picking it anywhere else is, and the chat takes over in place. Until then Chat offers to start
+ * by getting to know the person, which sends that request as their first message.
  */
 function FirstMessage({
   bot,
+  existing,
   onStarted,
 }: {
   bot: AgentProfile;
+  /** A conversation with the Bot that has no messages yet, to start in instead of making one. */
+  existing?: AgentChannel;
   onStarted: (channel: AgentChannel) => void;
 }) {
   const queryClient = useQueryClient();
@@ -118,17 +130,47 @@ function FirstMessage({
   const [sent, setSent] = useState<Message | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /** Sends the first message, from the composer or from "Get to know me". Throws when it fails. */
+  const start = async (text: string) => {
+    setError(null);
+    setSent(seedMessage(text, newId()));
+    try {
+      await startWithChosen({
+        agentId: bot.id,
+        text,
+        record: routeMessage,
+        start: async (agentId, first) => {
+          const channel =
+            existing ?? (await createChannel.mutateAsync([agentId]));
+          queryClient.setQueryData(channelKeys.detail(channel.id), channel);
+          stashFirstMessage(channel.id, first);
+          onStarted(channel);
+        },
+      });
+    } catch (caught) {
+      setSent(null);
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Couldn't start the conversation. Try again.",
+      );
+      throw caught;
+    }
+  };
+
   return (
     <ConversationView
       inShell
       lead={
         sent ? null : (
-          <div className="px-1 pt-2">
-            <h1 className="type-title font-semibold">{bot.name}</h1>
-            <p className="type-sub mt-1 text-duet-ink-2">
-              {bot.roleDescription}
-            </p>
-          </div>
+          <FirstDay
+            busy={createChannel.isPending}
+            name={bot.name}
+            onStart={() => {
+              // The notice above the composer says what went wrong; there is no draft to keep.
+              start(FIRST_DAY_REQUEST).catch(() => {});
+            }}
+          />
         )
       }
       messages={sent ? [sent] : []}
@@ -139,32 +181,8 @@ function FirstMessage({
           </p>
         ) : null
       }
-      onSubmit={async (draft) => {
-        setError(null);
-        setSent(seedMessage(draft.text, newId()));
-        try {
-          await startWithChosen({
-            agentId: bot.id,
-            text: draft.text,
-            record: routeMessage,
-            start: async (agentId, text) => {
-              const channel = await createChannel.mutateAsync([agentId]);
-              queryClient.setQueryData(channelKeys.detail(channel.id), channel);
-              stashFirstMessage(channel.id, text);
-              onStarted(channel);
-            },
-          });
-        } catch (caught) {
-          // The composer keeps the draft for another try.
-          setSent(null);
-          setError(
-            caught instanceof Error
-              ? caught.message
-              : "Couldn't start the conversation. Try again.",
-          );
-          throw caught;
-        }
-      }}
+      // The composer keeps the draft for another try when this throws.
+      onSubmit={(draft) => start(draft.text)}
       pending={createChannel.isPending}
       placeholder={`Message ${bot.name}`}
     />
