@@ -177,18 +177,20 @@ export function ConversationRoster({
 
   return (
     <div className="flex flex-col gap-px">
-      <InputGroup className="h-9 rounded-lg bg-background text-sm">
-        <InputGroupInput
-          aria-label="Search conversations"
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search…"
-          value={search}
-        />
-        <InputGroupAddon>
-          <IconSearch />
-        </InputGroupAddon>
-      </InputGroup>
-      <div className="h-2 w-full" />
+      {/* The menu scrolls the roster by itself, and the search stays above the rows it filters. */}
+      <div className="sticky top-0 z-10 bg-duet-surface pb-2">
+        <InputGroup className="h-9 rounded-lg bg-background text-sm">
+          <InputGroupInput
+            aria-label="Search conversations"
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search…"
+            value={search}
+          />
+          <InputGroupAddon>
+            <IconSearch />
+          </InputGroupAddon>
+        </InputGroup>
+      </div>
       {/*
        * TWO DIFFERENT NOTHINGS, AND SAYING THE WRONG ONE IS ALARMING. A roster nobody has
        * used yet needs telling how to start. A roster that simply does not match what is in
