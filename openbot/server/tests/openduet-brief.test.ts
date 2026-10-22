@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BRIEF_MAIL_CAP,
   buildMorningBrief,
   CALENDAR_LIST,
   type CallTool,
@@ -119,6 +120,59 @@ describe("morning brief", () => {
     ]);
     expect(brief.couldNotCheck).toEqual([]);
     expect(brief.checked).toEqual({ mail: 3, byRules: 1, byModel: 2 });
+  });
+
+  test("a window with more mail than the brief reads says so, instead of dropping the oldest in silence", async () => {
+    // A working inbox's day: more matches than the cap, newest first, so the oldest never arrive.
+    const page = Array.from({ length: BRIEF_MAIL_CAP }, (_, index) => ({
+      ...MAIL[1],
+      id: `bulk-${index}`,
+    }));
+    let asked: Record<string, unknown> = {};
+    const brief = await buildMorningBrief(
+      {
+        callTool: async ({ ref, args }) => {
+          if (ref === GMAIL_SEARCH) {
+            asked = args;
+            return {
+              text: JSON.stringify({ messages: page, resultSizeEstimate: 73 }),
+              isError: false,
+            };
+          }
+          return { text: JSON.stringify({ events: [] }), isError: false };
+        },
+        model: "test-model",
+        complete: async () => "{}",
+      },
+      input,
+    );
+    expect(asked.maxResults).toBe(BRIEF_MAIL_CAP);
+    expect(brief.checked.mail).toBe(BRIEF_MAIL_CAP);
+    expect(brief.couldNotCheck).toEqual([
+      {
+        source: "Gmail",
+        why: `Only the newest ${BRIEF_MAIL_CAP} of about 73 messages from this window were sorted. Older ones were not checked.`,
+      },
+    ]);
+  });
+
+  test("a window the brief read in full says nothing about a cap", async () => {
+    const brief = await buildMorningBrief(
+      {
+        callTool: async ({ ref }) =>
+          ref === GMAIL_SEARCH
+            ? {
+                text: JSON.stringify({ messages: MAIL, resultSizeEstimate: 3 }),
+                isError: false,
+              }
+            : { text: JSON.stringify({ events: [] }), isError: false },
+        model: "test-model",
+        complete: async () =>
+          '{"verdict":"can_wait","reason":"Nothing to do today."}',
+      },
+      input,
+    );
+    expect(brief.couldNotCheck).toEqual([]);
   });
 
   test("a source that is not connected is reported, not skipped in silence", async () => {

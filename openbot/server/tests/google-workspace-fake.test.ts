@@ -269,7 +269,7 @@ describe("the adapter against the fake", () => {
     expect(result.isError).toBe(false);
     const found = JSON.parse(result.text);
 
-    // Every one of the sixty arrived within the last day; twenty-five is the default page.
+    // Every one of the set arrived within the last day; twenty-five is the default page.
     expect(found.resultSizeEstimate).toBe(seeds.length);
     expect(found.messages).toHaveLength(25);
     for (const message of found.messages) {
@@ -287,7 +287,11 @@ describe("the adapter against the fake", () => {
           "to",
         ].sort(),
       );
-      expect(message.to).toEqual(["maya@marlowceramics.com"]);
+      // To Maya, or to a group she is in, which says so in its List-Id.
+      expect(
+        message.to.includes("maya@marlowceramics.com") ||
+          "List-Id" in message.headers,
+      ).toBe(true);
       expect(Date.now() - Date.parse(message.date)).toBeLessThan(86_400_000);
     }
     // Newest first, as Gmail lists them.
@@ -309,8 +313,16 @@ describe("the adapter against the fake", () => {
     );
     expect(bulk.length).toBeGreaterThan(0);
     for (const message of bulk) {
-      expect(message.headers.Precedence).toBe("bulk");
+      // A newsletter says bulk, a Google Group says list, a mailing service may say neither.
+      expect([undefined, "bulk", "list"]).toContain(message.headers.Precedence);
     }
+    // The security report to Maya's group comes with the group it went through.
+    expect(
+      found.messages.some(
+        (message: { headers: Record<string, string> }) =>
+          message.headers["List-Id"] === "<security.marlowceramics.com>",
+      ),
+    ).toBe(true);
     // The eval's answers are never served, only the mail.
     expect(result.text).not.toContain("needs_you");
     for (const seed of seeds) expect(result.text).not.toContain(seed.why);

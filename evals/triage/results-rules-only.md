@@ -1,14 +1,14 @@
 # Triage eval (rules only)
 
-Run 2026-10-21T22:14:59.879Z against 60 labelled messages (25 needs_you, 35 can_wait). Model: none.
+Run 2026-10-22T21:31:35.768Z against 62 labelled messages (27 needs_you, 35 can_wait). Model: none.
 
 | Measure | Value |
 | --- | --- |
 | Precision for needs_you | n/a (0 of 0 flagged were right) |
 | Recall for needs_you | n/a (0 of 0 that needed her were flagged) |
-| Accuracy | 100.0% of 16 decided |
-| Decided by rules, no model call | 16 of 60, 0 wrong |
-| Not decided (model error or left for the model) | 44 |
+| Accuracy | 100.0% of 12 decided |
+| Decided by rules, no model call | 12 of 62, 0 wrong |
+| Not decided (model error or left for the model) | 50 |
 
 ## Disagreements
 
@@ -29,16 +29,16 @@ None.
 | c09 | can_wait | can_wait | rule:calendar-response | Someone answered an invitation; nothing to do. |
 | c10 | can_wait | - | - |  |
 | c11 | can_wait | - | - |  |
-| c12 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
+| c12 | can_wait | - | - |  |
 | c13 | can_wait | - | - |  |
 | c14 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
 | c15 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
 | c16 | can_wait | - | - |  |
 | c17 | can_wait | - | - |  |
 | c18 | can_wait | - | - |  |
-| c19 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
-| c20 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
-| c21 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
+| c19 | can_wait | - | - |  |
+| c20 | can_wait | - | - |  |
+| c21 | can_wait | - | - |  |
 | c22 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
 | c23 | can_wait | can_wait | rule:bulk | Bulk mail: a newsletter, promotion or digest. |
 | c24 | can_wait | - | - |  |
@@ -78,3 +78,5 @@ None.
 | n23 | needs_you | - | - |  |
 | n24 | needs_you | - | - |  |
 | n25 | needs_you | - | - |  |
+| n26 | needs_you | - | - |  |
+| n27 | needs_you | - | - |  |

@@ -115,6 +115,26 @@ SET = [
     m("n25", "needs_you", "Her assistant can't finish packing Friday's order without her answer.",
       "Sam Ruiz <sam@marlowceramics.com>", "Which box for the Hearth order?",
       "Packing the Hearth order now. Do you want the double-wall boxes or the regular ones? I'm stuck until you say."),
+    # Both shapes below were settled as "can wait" by the list headers alone in a real brief, before
+    # the model ever read them. Invented here; only the headers, the routing and the timing are real.
+    m("n26", "needs_you", "A security researcher reports customer emails exposed by her order form, with a disclosure date.",
+      "Ravi Iyer <ravi@researcher.example>", "Vulnerability report: wholesale order form exposes customer emails",
+      "Hello Marlow Ceramics security team, the wholesale order form at marlowceramics.com/wholesale returns other customers' email addresses when the order number is changed in the URL. I have not shared this. I plan to publish a write-up in 7 days unless I hear it is being fixed. Steps to reproduce are below.",
+      to=["security@marlowceramics.com"],
+      headers={
+          "List-Id": "<security.marlowceramics.com>",
+          "List-Unsubscribe": "<mailto:googlegroups-manage+marlowceramics+security+unsubscribe@googlegroups.com>",
+          "List-Post": "<mailto:security@marlowceramics.com>",
+          "Precedence": "list",
+          "Mailing-list": "list security@marlowceramics.com; contact security+owners@marlowceramics.com",
+      },
+      gmail=["INBOX", "CATEGORY_FORUMS"]),
+    m("n27", "needs_you", "A payments provider found her access token exposed and needs it rotated within 24 hours.",
+      "Square <security@squareup.example>", "Urgent: rotate your access tokens",
+      "We found an access token for your Square account in a public code repository. Rotate it within 24 hours: after that we will revoke it, and card payments through your online store will stop until a new token is set.",
+      headers={"List-Unsubscribe": "<https://squareup.example/email/unsubscribe>"},
+      gmail=["INBOX", "CATEGORY_UPDATES"],
+      date="2026-10-21T17:32:00-07:00"),
     # ---- can_wait --------------------------------------------------------------------------------
     m("c01", "can_wait", "A newsletter.",
       "Ceramics Monthly <news@ceramicsmonthly.example>", "10 glazes for fall",

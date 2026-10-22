@@ -57,9 +57,10 @@ const HEADER_MAX_CHARS = 1_000;
 const LOOKUP_CONCURRENCY = 8;
 
 /**
- * The headers a search asks for. The last four are what triage reads to tell bulk and automatic mail
- * from a person writing: RFC 2369's unsubscribe link, the old `Precedence: bulk`, and RFC 3834's
- * `Auto-Submitted`.
+ * The headers a search asks for. The last five are what triage reads to tell bulk and automatic mail
+ * from a person writing: RFC 2369's unsubscribe link, the old `Precedence: bulk`, RFC 3834's
+ * `Auto-Submitted`, and RFC 2919's `List-Id`, which names the group a message came through so mail
+ * to a team's security@ group is not read as somebody else's.
  */
 const METADATA_HEADERS = [
   "From",
@@ -70,6 +71,7 @@ const METADATA_HEADERS = [
   "List-Unsubscribe",
   "Precedence",
   "Auto-Submitted",
+  "List-Id",
   "Message-ID",
 ] as const;
 
@@ -78,6 +80,7 @@ const PASSED_HEADERS = [
   "List-Unsubscribe",
   "Precedence",
   "Auto-Submitted",
+  "List-Id",
 ] as const;
 
 /**
@@ -88,7 +91,7 @@ const TOOLS: readonly McpTool[] = Object.freeze([
   {
     name: "gmail_search_messages",
     description:
-      "Search your Gmail with Gmail's own search syntax and get each matching message's sender, recipients, subject, date, snippet, labels and the headers that mark bulk or automatic mail. Defaults to the last day of the inbox. Returns JSON.",
+      "Search your Gmail with Gmail's own search syntax and get each matching message's sender, recipients, subject, date, snippet, labels and the headers that mark bulk, group or automatic mail. Defaults to the last day of the inbox. Returns JSON.",
     inputSchema: {
       type: "object",
       properties: {

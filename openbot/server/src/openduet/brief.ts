@@ -78,7 +78,19 @@ const searchedMessage = z.object({
 });
 const searchResult = z.object({
   messages: z.array(searchedMessage).default([]),
+  /** Gmail's estimate of how many messages matched, before the cap. */
+  resultSizeEstimate: z.number().nullable().optional(),
 });
+
+/**
+ * How many of the window's messages the brief reads and sorts, the most the search tool returns.
+ *
+ * It was 25, and a real brief left out a direct "rotate your credentials" notice from 20 hours
+ * earlier: a working inbox gets more than 25 messages a day, the search returns the newest first,
+ * and the oldest ones fell off the end with nothing said. More messages cost more sorting, so the
+ * cap stays, but a window that held more than it is now said out loud under could not check.
+ */
+export const BRIEF_MAIL_CAP = 50;
 const calendarResult = z.object({
   events: z
     .array(
@@ -185,11 +197,20 @@ export async function buildMorningBrief(
   try {
     const result = await call(GMAIL_SEARCH, {
       query: `in:inbox newer_than:${input.since ?? "1d"}`,
-      maxResults: 25,
+      maxResults: BRIEF_MAIL_CAP,
     });
     if (result.isError)
       couldNotCheck.push({ source: "Gmail", why: why(result.text) });
-    else messages = searchResult.parse(JSON.parse(result.text)).messages;
+    else {
+      const found = searchResult.parse(JSON.parse(result.text));
+      messages = found.messages;
+      const matched = found.resultSizeEstimate ?? 0;
+      if (messages.length >= BRIEF_MAIL_CAP && matched > messages.length)
+        couldNotCheck.push({
+          source: "Gmail",
+          why: `Only the newest ${messages.length} of about ${matched} messages from this window were sorted. Older ones were not checked.`,
+        });
+    }
   } catch (error) {
     couldNotCheck.push({ source: "Gmail", why: why(error) });
   }
@@ -199,7 +220,13 @@ export async function buildMorningBrief(
     name: input.person.name ?? owner ?? "the person",
     email: owner ?? "",
   };
-  const sorted = await inParallel(messages, 4, async (message) => {
+  /*
+   * Eight at a time. Reading 50 rather than 25 doubles the messages the model sorts, and at four
+   * at a time a fifty-message morning took about 50 seconds against the fake mailbox; eight keeps
+   * the brief near what 25 cost. Each sort is one small call, so this is well inside a provider's
+   * rate limits for one person.
+   */
+  const sorted = await inParallel(messages, 8, async (message) => {
     const asTriage: TriageMessage = {
       id: message.id,
       from: message.from,
