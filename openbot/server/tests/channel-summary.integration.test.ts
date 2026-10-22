@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import { FIRST_DAY_FRAME, frameFirstDay } from "@openbot/shared/first-day";
 import { FIRING_FRAME, frameFiring } from "@openbot/shared/routine-firing";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
@@ -325,6 +326,33 @@ describe("naming a claimed conversation", () => {
     expect(excerptSeen).toContain("Post the standup summary.");
     expect(excerptSeen).not.toContain(FIRING_FRAME[0]);
     expect((await summaryOf(channel.id))?.summary).toBe("Standup summary");
+  });
+
+  test("titles Chat's first-day conversation from the request, not the first-day frame", async () => {
+    const owner = await createUser();
+    const channel = await createUsedChannel(owner);
+    await offer(channel.id);
+
+    let excerptSeen = "";
+    await summariseClaimedChannels(
+      options({
+        // Chat sends the first day's request for the person, framed: see `shared/first-day.ts`.
+        transcript: transcriptOf(
+          frameFirstDay("Get to know me. Look through my recent mail."),
+          "You run partnerships at Acme.",
+        ),
+        title: async (excerpt) => {
+          excerptSeen = excerpt;
+          return "Getting to know you";
+        },
+      }),
+    );
+
+    expect(excerptSeen).toContain(
+      "Asked: Get to know me. Look through my recent mail.",
+    );
+    for (const line of FIRST_DAY_FRAME) expect(excerptSeen).not.toContain(line);
+    expect((await summaryOf(channel.id))?.summary).toBe("Getting to know you");
   });
 
   test("two replicas racing for the same conversation name it once", async () => {

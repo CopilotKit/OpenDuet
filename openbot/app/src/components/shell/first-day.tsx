@@ -1,42 +1,64 @@
-import { PillButton } from "@/components/approvals/approval-card";
+import { type RefObject, useEffect, useRef } from "react";
+import { useChatDrafting } from "@/components/shell/chat-presence";
+import { claimFirstDay } from "@/lib/channels/first-day-claim";
 
 /**
- * What "Get to know me" sends. It is the person's own message, in the thread for them to read, so
- * the Bot works from a request anybody can see rather than an instruction hidden in front of the
- * run. The `first-day` skill in the tenant package names the mail and calendar tools it needs.
+ * What Chat asks for on the person's first day. It goes out wrapped in the first-day frame
+ * (`shared/first-day.ts`), which tells the model nobody typed it and the welcome is already on
+ * screen, and the transcript draws the Bot's greeting in its place. The `first-day` skill in the
+ * tenant package names the mail and calendar tools it needs.
  */
 export const FIRST_DAY_REQUEST =
   "Get to know me. Look through my recent mail and this week's calendar. In a few sentences, tell me what you think I do. Then give me three ways you can help, one line each. I'll correct anything that's off.";
 
 /**
- * Chat before its first message: an offer to start by learning about the person, the way a new
- * colleague would on their first day. The composer below still takes anything else.
+ * On the first day the Bot speaks first: Chat opened on nothing sends the greeting itself, once,
+ * instead of waiting for the person to press anything.
+ *
+ * `claimKey` names whose first day it is, with which Bot; null while that is not known yet, which
+ * waits. `clear` is read at the last moment, after the claim is held and in the same tick as the
+ * send, so a message the person sent or started typing in the meantime wins and nothing goes.
+ * `greet` sends it through the same start the composer uses; when it throws, the screen has
+ * already said what went wrong, so the throw stops here.
  */
-export function FirstDay({
-  name,
-  busy,
-  onStart,
+export function useFirstDayGreeting({
+  claimKey,
+  clear,
+  greet,
 }: {
-  name: string;
-  busy: boolean;
-  onStart: () => void;
+  claimKey: string | null;
+  clear: () => boolean;
+  greet: () => Promise<void>;
 }) {
-  return (
-    <div className="flex flex-col items-start gap-1 px-1 pt-2">
-      <h1 className="type-title font-semibold">Let's get to know each other</h1>
-      <p className="type-sub text-duet-ink-2">
-        {name} reads your connected mail and calendar. Then it tells you how it
-        can help.
-      </p>
-      <PillButton
-        className="mt-4 flex-none px-6"
-        disabled={busy}
-        onClick={onStart}
-        primary
-      >
-        Get to know me
-      </PillButton>
-      <p className="type-label mt-2 text-duet-ink-3">Or ask anything below.</p>
-    </div>
-  );
+  const latest = useRef({ clear, greet });
+  latest.current = { clear, greet };
+
+  useEffect(() => {
+    if (claimKey === null) return;
+    /*
+     * No cancellation on cleanup, on purpose. StrictMode runs this, cleans it up and runs it again
+     * on the same component; the claim turns the second run away, so a first run that cancelled
+     * itself would leave nothing sent at all.
+     */
+    claimFirstDay(claimKey, async () => {
+      if (!latest.current.clear()) return false;
+      await latest.current.greet();
+      return true;
+    }).catch(() => {});
+  }, [claimKey]);
+}
+
+/**
+ * Keeps `into` true once the person has typed into Chat's composer.
+ *
+ * A leaf that draws nothing, because the draft it reads changes on every keystroke and only this
+ * should re-render for it. It latches: somebody who typed and cleared the box has still started
+ * the conversation themselves.
+ */
+export function DraftWatch({ into }: { into: RefObject<boolean> }) {
+  const drafting = useChatDrafting();
+  useEffect(() => {
+    if (drafting) into.current = true;
+  }, [drafting, into]);
+  return null;
 }

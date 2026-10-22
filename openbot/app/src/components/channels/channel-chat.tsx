@@ -22,6 +22,7 @@ import {
 } from "@/components/channels/transcript-messages";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { attachmentUrl } from "@/lib/channels/attachments";
+import { readFirstDay } from "@/lib/channels/first-day";
 import {
   recordChannelActivityMutationOptions,
   setChannelBusy,
@@ -798,7 +799,12 @@ export function ChannelChat({
       id: newId(),
       role: "user",
     });
-    report(trimmed || describeAttachments(attachments), null);
+    // The roster previews what was asked. Chat's first day sends a request nobody typed, framed for
+    // the model (`shared/first-day.ts`); the preview gets the request, not the frame.
+    report(
+      readFirstDay(trimmed) ?? (trimmed || describeAttachments(attachments)),
+      null,
+    );
 
     // Providers reject later turns if prior tool calls have no result; repair before sending.
     const repaired = repairUnansweredToolCalls(target.messages);
