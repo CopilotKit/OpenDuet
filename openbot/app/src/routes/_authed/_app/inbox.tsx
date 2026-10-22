@@ -1,7 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { InboxScreen } from "@/components/shell/inbox-screen";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-/** Inbox: the actions and questions waiting on the person. */
+/**
+ * `/inbox` became Tasks, whose Needs you section lists what the Inbox did. Notifications and links
+ * sent before still point here, so they land on Tasks.
+ */
 export const Route = createFileRoute("/_authed/_app/inbox")({
-  component: InboxScreen,
+  beforeLoad: () => {
+    throw redirect({ to: "/tasks", replace: true });
+  },
 });

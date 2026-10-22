@@ -7,13 +7,16 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, within } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { ActivityScreen } from "@/components/shell/activity-screen";
 import { agentKeys } from "@/lib/agents/queries";
 import { queryClient } from "@/query-client";
 import { settleReactWork } from "./settle-react-work";
 
-/** The Activity tab: what the product's own Bot did, read from the ledgers OpenBot keeps. */
+/**
+ * The Activity tab: what the product's own Bot did, read from the ledgers OpenBot keeps. What it is
+ * working on and has lined up is on Tasks.
+ */
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3010" }));
 afterEach(() => {
@@ -80,9 +83,17 @@ test("with nothing done yet it says what will appear", async () => {
   expect(await view.findByText("Nothing yet.")).toBeTruthy();
 });
 
-test("finished work and answered actions are listed under Handled for you", async () => {
+test("finished work and answered actions are listed under Handled for you, and nothing else", async () => {
   activity = {
-    inProgress: [],
+    inProgress: [
+      item({
+        id: "now",
+        kind: "handoff",
+        title: "Draft the reply",
+        status: "running",
+        stoppable: true,
+      }),
+    ],
     scheduled: [
       item({ id: "later", title: "Morning brief", status: "scheduled" }),
     ],
@@ -125,6 +136,25 @@ test("finished work and answered actions are listed under Handled for you", asyn
   expect(text).toContain("Didn't finish");
   expect(text).toContain("Send email");
   expect(text).toContain("Allowed once by you");
-  const upcoming = view.getByRole("region", { name: "Coming up" });
-  expect(within(upcoming).getByText("Morning brief")).toBeTruthy();
+  // Work under way and lined up is on Tasks now.
+  expect(view.queryByRole("region", { name: "Working on" })).toBeNull();
+  expect(view.queryByRole("region", { name: "Coming up" })).toBeNull();
+  expect(view.queryByText("Draft the reply")).toBeNull();
+  expect(view.queryByText("Morning brief")).toBeNull();
+  expect(
+    view.queryByRole("button", { name: "Stop Draft the reply" }),
+  ).toBeNull();
+});
+
+test("with only work under way, Activity still says nothing is done yet", async () => {
+  activity = {
+    inProgress: [item({ id: "now", status: "running" })],
+    scheduled: [item({ id: "later", status: "scheduled" })],
+    completed: [],
+  };
+  requests = [];
+  serving();
+  const view = draw();
+  expect(await view.findByText("Nothing yet.")).toBeTruthy();
+  expect(view.getByText("What OpenDuet did for you.")).toBeTruthy();
 });

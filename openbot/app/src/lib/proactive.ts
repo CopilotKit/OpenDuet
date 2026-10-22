@@ -113,6 +113,35 @@ export const createProactiveSettingMutationOptions = (
     onSuccess: settleProactive(queryClient),
   });
 
+/** How often research runs when one button turns it on: every four hours, as when OpenBot does. */
+export const DEFAULT_RESEARCH_INTERVAL_MINUTES = 240;
+
+/**
+ * Turn a Bot's background research on from one button.
+ *
+ * A setting the person turned off comes back on as it was. Without one, a new one is made in the
+ * conversation `channelId` resolves to. That is only asked for here, because finding or starting the
+ * conversation is work a setting that already exists does not need.
+ */
+export const turnOnResearchMutationOptions = (queryClient: QueryClient) =>
+  mutationOptions({
+    mutationFn: async (input: {
+      setting: Pick<ProactiveSetting, "id"> | undefined;
+      agentId: string;
+      focus: string;
+      channelId: () => Promise<string>;
+    }) =>
+      input.setting
+        ? updateProactiveSetting(input.setting.id, { enabled: true })
+        : createProactiveSetting({
+            agentId: input.agentId,
+            channelId: await input.channelId(),
+            focus: input.focus,
+            intervalMinutes: DEFAULT_RESEARCH_INTERVAL_MINUTES,
+          }),
+    onSuccess: settleProactive(queryClient),
+  });
+
 /** What can be done to one background-research setting from its row. */
 export type ProactiveChange =
   | { kind: "toggle" }

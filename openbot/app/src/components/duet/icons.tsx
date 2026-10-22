@@ -9,6 +9,7 @@ export type DuetIconName =
   | "plus"
   | "mic"
   | "arrowUp"
+  | "arrowRight"
   | "chevronRight"
   | "check"
   | "checkCircle"
@@ -20,6 +21,8 @@ export type DuetIconName =
   | "globe"
   | "chat"
   | "inbox"
+  | "tasks"
+  | "bulb"
   | "activity"
   | "eyeOff"
   | "waveform"
@@ -38,6 +41,7 @@ const PATHS: Record<DuetIconName, ReactNode> = {
     </>
   ),
   arrowUp: <path d="m5 12 7-7 7 7M12 19V5" />,
+  arrowRight: <path d="M5 12h14M12 5l7 7-7 7" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
   check: <path d="M20 6 9 17l-5-5" />,
   checkCircle: (
@@ -84,6 +88,18 @@ const PATHS: Record<DuetIconName, ReactNode> = {
     <>
       <path d="M22 12h-6l-2 3h-4l-2-3H2" />
       <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </>
+  ),
+  tasks: (
+    <>
+      <rect x="3" y="4" width="6" height="6" rx="1.5" />
+      <path d="m3 17 2 2 4-4M13 5h8M13 12h8M13 19h8" />
+    </>
+  ),
+  bulb: (
+    <>
+      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+      <path d="M9 18h6M10 22h4" />
     </>
   ),
   activity: (
