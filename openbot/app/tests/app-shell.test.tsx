@@ -8,8 +8,9 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MenuSheet } from "@/components/shell/menu-sheet";
+import { MANAGE_STORAGE_KEY, MenuSheet } from "@/components/shell/menu-sheet";
 import { TabBar, tabForPath } from "@/components/shell/tab-bar";
 import { authKeys } from "@/lib/auth/queries";
 import { channelKeys } from "@/lib/channels/queries";
@@ -17,12 +18,13 @@ import { deploymentKeys } from "@/lib/deployment/queries";
 import { settleReactWork } from "./settle-react-work";
 
 /**
- * The film's shell: the tab bar at the foot of Chat, Inbox and Activity, and the menu that keeps
- * every page OpenBot's sidebar listed one tap away.
+ * The film's shell: the tab bar at the foot of Chat, Inbox and Activity, and the menu that opens on
+ * Chat and the conversations, with every page OpenBot's sidebar listed under Manage and Settings.
  */
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3010" }));
 afterEach(cleanup);
+afterEach(() => window.localStorage.clear());
 afterAll(async () => {
   await settleReactWork();
   GlobalRegistrator.unregister();
@@ -150,6 +152,22 @@ test("with nothing waiting the Inbox carries no badge", async () => {
   );
 });
 
+/** One conversation besides Chat, so the roster has a row to place. */
+const conversation = {
+  id: "c1",
+  name: "OpenDuet",
+  agentIds: ["openduet"],
+  threadId: "t1",
+  active: true,
+  lastMessageAt: "2026-10-21T10:00:00Z",
+  summary: "Ship date with Ana",
+  lastMessage: "Sent.",
+  lastMessageAgentId: "openduet",
+  createdAt: "2026-10-21T09:00:00Z",
+  pinned: false,
+  lastReadAt: "2026-10-21T10:00:00Z",
+};
+
 function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
   return (client: QueryClient) => {
     client.setQueryData(authKeys.currentUser(), {
@@ -165,49 +183,159 @@ function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
       localEvaluation,
     });
     client.setQueryData(channelKeys.list(), {
-      pages: [{ channels: [], nextCursor: null }],
+      pages: [{ channels: [conversation], nextCursor: null }],
       pageParams: [""],
     });
   };
 }
 
-const PAGES = [
-  ["New conversation", "/start"],
-  ["Bots", "/bots"],
-  ["Connections", "/connections"],
-  ["Capabilities", "/capabilities"],
-  ["Routines", "/routines"],
-  ["Approval rules", "/settings/approvals"],
-  ["Settings", "/settings"],
-];
+/** The menu's rows, top to bottom, as a keyboard reaches them. */
+function menuRows(dialog: HTMLElement) {
+  const rows = ["link", "button", "textbox"].flatMap((role) =>
+    within(dialog).getAllByRole(role),
+  );
+  rows.sort((a, b) =>
+    a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+  );
+  return rows.map(
+    (row) => row.getAttribute("aria-label") || row.textContent?.trim() || "",
+  );
+}
 
-test("the menu lists every page the sidebar had, and Admin for an admin", async () => {
+function manageToggle(dialog: HTMLElement) {
+  return within(dialog).getByRole("button", { name: "Manage" });
+}
+
+test("the menu opens on Chat, a new conversation and the conversations, with Manage closed and Settings at the foot", async () => {
   serving();
   const view = draw(
     <MenuSheet onOpenChange={() => {}} open />,
     seedMenu("admin", false),
   );
-  const nav = await view.findByRole("navigation", { name: "Pages" });
-  for (const [label, href] of PAGES) {
-    expect(
-      within(nav).getByRole("link", { name: label }).getAttribute("href"),
-    ).toBe(href);
-  }
-  expect(within(nav).getByRole("link", { name: "Admin" })).toBeTruthy();
-  expect(within(nav).getByRole("button", { name: "Sign out" })).toBeTruthy();
+  const dialog = await view.findByRole("dialog");
+  await within(dialog).findByRole("link", { name: /Ship date with Ana/ });
+  const rows = menuRows(dialog);
+  expect(rows[0]).toBe("Chat");
+  expect(rows[1]).toBe("New conversation");
+  expect(rows[2]).toBe("Search conversations");
+  expect(rows[3]).toContain("Ship date with Ana");
+  expect(rows.slice(4, 8)).toEqual(["Manage", "Settings", "Sign out", "Close"]);
   expect(
-    view.getByRole("textbox", { name: "Search conversations" }),
-  ).toBeTruthy();
+    within(dialog).getByRole("link", { name: "Chat" }).getAttribute("href"),
+  ).toBe("/");
+  expect(
+    within(dialog)
+      .getByRole("link", { name: "New conversation" })
+      .getAttribute("href"),
+  ).toBe("/start");
+  expect(
+    within(dialog).getByRole("link", { name: "Settings" }).getAttribute("href"),
+  ).toBe("/settings");
+  expect(manageToggle(dialog).getAttribute("aria-expanded")).toBe("false");
+  expect(within(dialog).queryByRole("link", { name: "Bots" })).toBeNull();
+  expect(within(dialog).queryByRole("link", { name: "Admin" })).toBeNull();
 });
 
-test("a member sees no Admin, and a single-person install has no Sign out", async () => {
+test("the menu has one heading level", async () => {
   serving();
+  const view = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const dialog = await view.findByRole("dialog");
+  const headings = within(dialog).getAllByRole("heading");
+  expect(headings.map((heading) => heading.tagName)).toEqual([
+    "H2",
+    "H2",
+    "H2",
+  ]);
+  expect(headings.map((heading) => heading.textContent)).toEqual([
+    expect.any(String),
+    "Conversations",
+    "Manage",
+  ]);
+});
+
+const MANAGE = [
+  ["Bots", "/bots"],
+  ["Connections", "/connections"],
+  ["Capabilities", "/capabilities"],
+  ["Routines", "/routines"],
+  ["Approval rules", "/settings/approvals"],
+  ["Admin", "/admin"],
+];
+
+test("Manage opens on a click, lists the pages that set things up, and is remembered", async () => {
+  serving();
+  const user = userEvent.setup({ document });
+  const first = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const dialog = await first.findByRole("dialog");
+  await user.click(manageToggle(dialog));
+  expect(manageToggle(dialog).getAttribute("aria-expanded")).toBe("true");
+  const group = document.getElementById(
+    manageToggle(dialog).getAttribute("aria-controls") ?? "",
+  );
+  expect(group).toBeTruthy();
+  const links = within(group as HTMLElement).getAllByRole("link");
+  expect(
+    links.map((link) => [link.textContent, link.getAttribute("href")]),
+  ).toEqual(MANAGE);
+  // Still above Settings, which stays a row of its own at the foot.
+  const rows = menuRows(dialog);
+  expect(rows.indexOf("Admin")).toBeLessThan(rows.indexOf("Settings"));
+  expect(window.localStorage.getItem(MANAGE_STORAGE_KEY)).toBe("open");
+
+  cleanup();
+  const again = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const reopened = await again.findByRole("dialog");
+  expect(manageToggle(reopened).getAttribute("aria-expanded")).toBe("true");
+  await user.click(manageToggle(reopened));
+  expect(manageToggle(reopened).getAttribute("aria-expanded")).toBe("false");
+  expect(within(reopened).queryByRole("link", { name: "Bots" })).toBeNull();
+  expect(window.localStorage.getItem(MANAGE_STORAGE_KEY)).toBe("closed");
+});
+
+test("a member sees no Admin under Manage, and a single-person install has no Sign out", async () => {
+  serving();
+  const user = userEvent.setup({ document });
   const view = draw(
     <MenuSheet onOpenChange={() => {}} open />,
     seedMenu("user", true),
   );
-  const nav = await view.findByRole("navigation", { name: "Pages" });
-  expect(within(nav).getAllByRole("link")).toHaveLength(PAGES.length);
-  expect(within(nav).queryByRole("link", { name: "Admin" })).toBeNull();
-  expect(within(nav).queryByRole("button", { name: "Sign out" })).toBeNull();
+  const dialog = await view.findByRole("dialog");
+  await user.click(manageToggle(dialog));
+  expect(within(dialog).getByRole("link", { name: "Bots" })).toBeTruthy();
+  expect(within(dialog).queryByRole("link", { name: "Admin" })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Sign out" })).toBeNull();
+});
+
+test("Chat is marked current on Chat and on no other page", async () => {
+  serving();
+  const onChat = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const dialog = await onChat.findByRole("dialog");
+  expect(
+    within(dialog).getByRole("link", { current: "page" }).textContent,
+  ).toBe("Chat");
+
+  cleanup();
+  const onInbox = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+    "/inbox",
+  );
+  const elsewhere = await onInbox.findByRole("dialog");
+  expect(
+    within(elsewhere)
+      .getByRole("link", { name: "Chat" })
+      .getAttribute("aria-current"),
+  ).toBeNull();
 });
