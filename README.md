@@ -24,25 +24,11 @@ Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit In
 
 <table><tr><td>
 
-![OpenDuet by CopilotKit. The open-source proactive agent. A notification card from OpenDuet, marked with its blue mic orb, reads: Morning brief. 2 things need you, 5 can wait. Send your reply to Priya? Allow once, Always allow, Refuse.](./assets/banner.png)
-
-</td></tr></table>
-
-</div>
-
-_A morning brief, then a reply that waits for your answer. The one-minute [launch film](./assets/openduet-launch.mp4) shows the experience OpenDuet is being built toward; [Status](#status) says which parts work today._
-
-<div align="center">
-
-<table><tr><td>
-
 https://github.com/user-attachments/assets/49d94208-e503-4cab-9765-c88da2a147bc
 
 </td></tr></table>
 
 </div>
-
-_Ask for the morning brief, then ask for a reply to Ana: it drafts the email and sends it only after **Allow once**. Recorded on the running app against a fake Gmail; the model's waits are sped up._
 
 ## Overview
 
