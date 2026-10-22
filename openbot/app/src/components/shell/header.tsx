@@ -6,6 +6,7 @@ import { MicOrb } from "@/components/duet/mic-orb";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { appConfig } from "@/lib/generated/application-config";
 import { cn } from "@/lib/utils";
+import { useChatOrb } from "./chat-presence";
 
 const DISC =
   "grid shrink-0 place-items-center rounded-full bg-duet-card text-duet-ink shadow-duet-float transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95";
@@ -18,7 +19,8 @@ export function initialOf(user: { name?: string | null; email: string }) {
 
 /**
  * The film's header: the menu in a disc on the left, OpenDuet's mic orb in the centre (back to
- * Chat), the person's initial in a disc on the right (their settings).
+ * Chat), the person's initial in a disc on the right (their settings). The orb follows Chat: it
+ * thinks while the Bot works, listens while the person types, and rests on every other screen.
  *
  * `floating` lays it over a screen that scrolls under it, behind a fade, as on Chat, Inbox and
  * Activity. Otherwise it is a bar in the page's flow, for the screens the menu opens.
@@ -59,7 +61,7 @@ export function ShellHeader({
         style={{ width: centre, height: centre }}
         to="/"
       >
-        <MicOrb size={centre - 2} />
+        <ChatOrb size={centre - 2} />
       </Link>
       <Link
         aria-label="Your settings"
@@ -73,6 +75,12 @@ export function ShellHeader({
       </Link>
     </header>
   );
+}
+
+/** Its own component, so a keystroke in Chat re-renders the orb and not the whole header. */
+function ChatOrb({ size }: { size: number }) {
+  const { state, keystrokes } = useChatOrb();
+  return <MicOrb keystrokes={keystrokes} size={size} state={state} />;
 }
 
 function Disc({

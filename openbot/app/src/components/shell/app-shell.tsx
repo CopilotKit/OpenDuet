@@ -3,6 +3,7 @@ import { type ReactNode, useState } from "react";
 import { AttentionNotifier } from "@/components/bot-profile/attention";
 import { SelfHostBanner } from "@/components/layout/self-host-banner";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
+import { ChatPresenceProvider } from "./chat-presence";
 import { ShellHeader } from "./header";
 import { MenuSheet } from "./menu-sheet";
 import { TabBar, tabForPath } from "./tab-bar";
@@ -30,32 +31,34 @@ export function AppShell({ children }: { children: ReactNode }) {
   useChannelEvents();
 
   return (
-    <div className="flex h-svh flex-col overflow-hidden bg-duet-surface">
-      <AttentionNotifier />
-      <SelfHostBanner />
-      {tab ? (
-        <div className="duet-face relative mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col text-duet-ink">
-          <ShellHeader
-            floating
-            menuOpen={menuOpen}
-            onMenu={() => setMenuOpen(true)}
-          />
-          <main className="flex min-h-0 flex-1 flex-col">{children}</main>
-          <TabBar current={tab} />
-        </div>
-      ) : (
-        <>
-          <ShellHeader
-            floating={false}
-            menuOpen={menuOpen}
-            onMenu={() => setMenuOpen(true)}
-          />
-          <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-            {children}
-          </main>
-        </>
-      )}
-      <MenuSheet onOpenChange={setMenuOpen} open={menuOpen} />
-    </div>
+    <ChatPresenceProvider>
+      <div className="flex h-svh flex-col overflow-hidden bg-duet-surface">
+        <AttentionNotifier />
+        <SelfHostBanner />
+        {tab ? (
+          <div className="duet-face relative mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col text-duet-ink">
+            <ShellHeader
+              floating
+              menuOpen={menuOpen}
+              onMenu={() => setMenuOpen(true)}
+            />
+            <main className="flex min-h-0 flex-1 flex-col">{children}</main>
+            <TabBar current={tab} />
+          </div>
+        ) : (
+          <>
+            <ShellHeader
+              floating={false}
+              menuOpen={menuOpen}
+              onMenu={() => setMenuOpen(true)}
+            />
+            <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+              {children}
+            </main>
+          </>
+        )}
+        <MenuSheet onOpenChange={setMenuOpen} open={menuOpen} />
+      </div>
+    </ChatPresenceProvider>
   );
 }

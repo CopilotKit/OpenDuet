@@ -13,6 +13,7 @@ import {
   isSegmentsEmpty,
   mergeAdjacentTextSegments,
   type Segment,
+  segmentsToPlainText,
   text,
 } from "prompt-area/helpers";
 import {
@@ -246,6 +247,11 @@ export type ComposerProps = {
   queuedAttachmentCount?: number;
   /** What the empty box says. "Message OpenDuet" in the app shell; "Ask anything" elsewhere. */
   placeholder?: string;
+  /**
+   * Called with the draft's plain text whenever it changes: typing, dictation, a send clearing the
+   * box and a failed send putting the words back alike. The app shell's orb listens through it.
+   */
+  onTextChange?: (text: string) => void;
 };
 
 /**
@@ -332,6 +338,7 @@ export function Composer({
   // Nothing parked is the right answer for every caller without a queue, which is most of them.
   queuedAttachmentCount = 0,
   placeholder = "Ask anything",
+  onTextChange,
 }: ComposerProps) {
   const [value, setValue] = useState<Segment[]>(
     initialValue ? [{ type: "text", text: initialValue }] : [],
@@ -1050,6 +1057,9 @@ export function Composer({
     [agents, commands],
   );
   const draft = useMemo(() => toDraft(value, staged), [staged, value]);
+  useEffect(() => {
+    onTextChange?.(segmentsToPlainText(value));
+  }, [onTextChange, value]);
 
   /**
    * MORE FILES ON THIS STRIP THAN ONE MESSAGE MAY CARRY — a state the screening is supposed to make

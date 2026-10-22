@@ -18,6 +18,7 @@ import {
   type QueuedMessage,
   reduceQueue,
 } from "@/components/channels/composer";
+import { useReportChatPresence } from "@/components/shell/chat-presence";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { newId } from "../../lib/new-id";
 
@@ -163,6 +164,12 @@ export function ConversationView({
    */
   const [running, setRunning] = useState(false);
   const inFlight = pending || running;
+  // The app shell's orb follows Chat: thinking for the turn, listening to the draft. Not while
+  // history is restoring: joining the thread is a run of its own, and it is not an answer.
+  const presence = useReportChatPresence(inShell, {
+    working: (busy || inFlight) && !restoring,
+    failed: Boolean(stopped),
+  });
 
   /**
    * Every change to the queue goes through here, so the ref and the state can never disagree.
@@ -475,8 +482,16 @@ export function ConversationView({
                 }
               : undefined
           }
-          onStop={onStop}
+          onStop={
+            onStop && presence
+              ? () => {
+                  presence.onStop();
+                  onStop();
+                }
+              : onStop
+          }
           onSubmit={(draft) => submit(draft, false)}
+          {...(presence ? { onTextChange: presence.onTextChange } : {})}
           {...(placeholder ? { placeholder } : {})}
           /*
            * `inFlight` rather than the `pending` this was given. A drained turn is started from the
