@@ -32,11 +32,23 @@ Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit In
 
 _A morning brief, then a reply that waits for your answer. The one-minute [launch film](./assets/openduet-launch.mp4) shows the experience OpenDuet is being built toward; [Status](#status) says which parts work today._
 
+<div align="center">
+
+<table><tr><td>
+
+https://github.com/user-attachments/assets/49d94208-e503-4cab-9765-c88da2a147bc
+
+</td></tr></table>
+
+</div>
+
+_Ask for the morning brief, then ask for a reply to Ana: it drafts the email and sends it only after **Allow once**. Recorded on the running app against a fake Gmail; the model's waits are sped up._
+
 ## Overview
 
 OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
 
-**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. Watching your mail and calendar, sorting what needs you, and the morning brief are being built now. The [status table](#status) says which parts work and which do not yet. Expect things to move. Issues and ideas are welcome.
+**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief; watching your mail as it arrives is being built now. The [status table](#status) says which parts work and which do not yet. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
@@ -48,28 +60,28 @@ OpenDuet does not wait to be asked. It starts your day with a short brief, keeps
 - **Checks what leaves.** Every outgoing message is checked for sensitive information, so a card number or a health detail does not go out by accident.
 - **Yours to run.** Self-host it, choose your own model, and keep your data in your own database.
 
-Some of this works today through OpenBot, and some of it is being built now. See [Status](#status).
+Some of this works today, and some of it is being built now. See [Status](#status).
 
 ## Status
 
-**Available today** means OpenDuet added it and it works when you run this repository. **Available today via OpenBot** means it works today and the code comes from [OpenBot](https://github.com/CopilotKit/openbot), which OpenDuet is built on. **In progress** means it does not work yet.
+**Available today** means it works when you run this repository. **In progress** means it does not work yet.
 
-| Capability                   | What it means for you                                                                 | Status                      |
-| ---------------------------- | ------------------------------------------------------------------------------------- | --------------------------- |
-| A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away.         | Available today via OpenBot |
-| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Every action is checked against policy and recorded. | Available today via OpenBot |
-| Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. | Available today via OpenBot |
-| Memory                       | Threads and memory carry over through CopilotKit Intelligence.                        | Available today via OpenBot |
-| Skills                       | Reusable instructions you write once and call with `/`.                               | Available today via OpenBot |
+| Capability                   | What it means for you                                                                 | Status          |
+| ---------------------------- | ------------------------------------------------------------------------------------- | --------------- |
+| A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away.         | Available today |
+| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Every action is checked against policy and recorded. | Available today |
+| Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. | Available today |
+| Memory                       | Threads and memory carry over through CopilotKit Intelligence.                        | Available today |
+| Skills                       | Reusable instructions you write once and call with `/`.                               | Available today |
 | Gmail and Google Calendar    | Each person connects their own account. OpenDuet reads mail and today's calendar, and sends a reply only after you answer. | Available today |
-| Connected apps               | Governed MCP connectors, including Google Drive and Notion.                           | Available today via OpenBot |
-| Scheduled work               | Routines: ask it to do something on a schedule and it runs as you.                    | Available today via OpenBot |
-| Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). | Available today via OpenBot |
-| Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages as they arrive. Today it reads your mail when the brief is made. | In progress                 |
+| Connected apps               | Governed MCP connectors, including Google Drive and Notion.                           | Available today |
+| Scheduled work               | Routines: ask it to do something on a schedule and it runs as you.                    | Available today |
+| Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). | Available today |
+| Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages as they arrive. Today it reads your mail when the brief is made. | In progress     |
 | What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). Slack comes later. | Available today |
 | Morning brief                | Ask for it: what needs you and why, what can wait, today's calendar, and anything it could not check. Getting it on a schedule, through routines, is not yet verified. | Available today |
 | Sensitive-info check         | A check on every outgoing message. OpenBot today classifies each tool as a read or a write and redacts secrets from its audit trail. | In progress |
-| Phone inbox                  | One place on your phone for everything waiting on you.                                | In progress                 |
+| Phone inbox                  | One place on your phone for everything waiting on you.                                | In progress     |
 
 ## Quick start
 
