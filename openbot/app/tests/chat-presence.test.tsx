@@ -18,6 +18,7 @@ import {
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { Composer } from "@/components/channels/composer/composer";
 import { ConversationView } from "@/components/channels/conversation-view";
+import { FINISH_MS } from "@/components/duet/mic-orb";
 import {
   type ChatPresence,
   ChatPresenceProvider,
@@ -25,6 +26,7 @@ import {
   orbStateFor,
   useChatOrb,
   useReportChatPresence,
+  useReportFinish,
 } from "@/components/shell/chat-presence";
 import { ShellHeader } from "@/components/shell/header";
 import { authKeys } from "@/lib/auth/queries";
@@ -51,6 +53,7 @@ const AT_REST: ChatPresence = {
   drafting: false,
   edits: 0,
   answers: 0,
+  finishes: 0,
 };
 const on = (presence: Partial<ChatPresence>) => ({ ...AT_REST, ...presence });
 
@@ -82,6 +85,12 @@ describe("the orb's state for what Chat is doing", () => {
     const away = on({ chat: false, working: true, drafting: true });
     expect(orbStateFor(away, false)).toBe("idle");
     expect(orbStateFor(away, true)).toBe("idle");
+  });
+
+  test("plays a finish over anything, on any screen", () => {
+    expect(orbStateFor(on({ working: true }), false, true)).toBe("finished");
+    expect(orbStateFor(on({ drafting: true }), true, true)).toBe("finished");
+    expect(orbStateFor(on({ chat: false }), false, true)).toBe("finished");
   });
 });
 
@@ -290,6 +299,69 @@ describe("Chat's conversation reporting its turn", () => {
   test("a conversation outside Chat leaves the orb resting", () => {
     const view = render(<Chat busy inShell={false} />);
     expect(orbOf(view)).toBe("idle");
+  });
+});
+
+describe("a finish reported to the header", () => {
+  function Finisher({ keep }: { keep: (finish: () => void) => void }) {
+    keep(useReportFinish());
+    return null;
+  }
+
+  test("plays over a turn for as long as it lasts, then the orb is back to thinking", () => {
+    jest.useFakeTimers();
+    let finish = () => {};
+    const view = render(
+      <ChatPresenceProvider>
+        <Reporter turn={{ working: true }} />
+        <Finisher
+          keep={(f) => {
+            finish = f;
+          }}
+        />
+        <Probe />
+      </ChatPresenceProvider>,
+    );
+    expect(orbOf(view)).toBe("thinking");
+
+    act(() => finish());
+    expect(orbOf(view)).toBe("finished");
+    act(() => jest.advanceTimersByTime(FINISH_MS - 1));
+    expect(orbOf(view)).toBe("finished");
+    act(() => jest.advanceTimersByTime(1));
+    expect(orbOf(view)).toBe("thinking");
+  });
+
+  test("plays away from Chat too, and rests after", () => {
+    jest.useFakeTimers();
+    let finish = () => {};
+    const view = render(
+      <ChatPresenceProvider>
+        <Finisher
+          keep={(f) => {
+            finish = f;
+          }}
+        />
+        <Probe />
+      </ChatPresenceProvider>,
+    );
+    expect(orbOf(view)).toBe("idle");
+    act(() => finish());
+    expect(orbOf(view)).toBe("finished");
+    act(() => jest.advanceTimersByTime(FINISH_MS));
+    expect(orbOf(view)).toBe("idle");
+  });
+
+  test("outside the shell there is nothing to report to", () => {
+    let finish = () => {};
+    render(
+      <Finisher
+        keep={(f) => {
+          finish = f;
+        }}
+      />,
+    );
+    expect(() => finish()).not.toThrow();
   });
 });
 

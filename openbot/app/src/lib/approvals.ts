@@ -101,6 +101,8 @@ export function waitingOnYou(data: ApprovalInboxData | undefined): {
   const questions = data?.questions ?? [];
   return { requests, questions, count: requests.length + questions.length };
 }
+/** How often the inbox is read again on its own, in ms. */
+export const INBOX_POLL_MS = 10_000;
 export const approvalInboxOptions = () =>
   queryOptions({
     queryKey: ["approvals"],
@@ -110,7 +112,7 @@ export const approvalInboxOptions = () =>
       });
       return response.json();
     },
-    refetchInterval: 10_000,
+    refetchInterval: INBOX_POLL_MS,
   });
 export const decideApproval = (id: string, decision: ApprovalDecision) =>
   client(`/api/approvals/${encodeURIComponent(id)}/decision`, {

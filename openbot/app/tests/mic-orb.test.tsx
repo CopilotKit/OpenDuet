@@ -11,9 +11,13 @@ import { cleanup, render } from "@testing-library/react";
 import { MicOrb } from "@/components/duet/mic-orb";
 import {
   drawMicOrb,
+  FINISH_HELD,
+  FINISH_S,
+  finishPhase,
   type OrbPose,
   oklch,
   palette,
+  RAYS,
   track,
 } from "@/components/duet/mic-orb-draw";
 
@@ -35,13 +39,14 @@ const REST: OrbPose = {
   key: 0,
   doneAge: -1,
   noticeAge: -1,
+  finishAge: -1,
   breath: 0,
 };
 
 /**
  * Just enough of a 2D context to run the drawing: it keeps the shadow blur through save and
- * restore, counts the strokes drawn with a glow, which is how a lit grille slot is drawn, and counts
- * the frames drawn, each of which starts by clearing the canvas.
+ * restore, counts the strokes drawn with a glow, which is how a lit grille slot is drawn, counts
+ * every stroke, and counts the frames drawn, each of which starts by clearing the canvas.
  */
 function fakeContext() {
   const stack: number[] = [];
@@ -49,6 +54,7 @@ function fakeContext() {
   const ctx = {
     shadowBlur: 0,
     litStrokes: 0,
+    strokes: 0,
     draws: 0,
     save() {
       stack.push(this.shadowBlur);
@@ -57,6 +63,7 @@ function fakeContext() {
       this.shadowBlur = stack.pop() ?? 0;
     },
     stroke() {
+      this.strokes++;
       if (this.shadowBlur > 0) this.litStrokes++;
     },
     clearRect() {
@@ -74,6 +81,15 @@ function fakeContext() {
     },
   });
 }
+
+/** Every stroke one frame draws: the grilles' slots, the rim, and a finish's rays and check. */
+const strokesOf = (pose: OrbPose) => {
+  const ctx = fakeContext();
+  drawMicOrb(ctx as unknown as CanvasRenderingContext2D, 60, pose, {
+    dark: false,
+  });
+  return ctx.strokes;
+};
 
 const litSlots = (pose: OrbPose) => {
   const ctx = fakeContext();
@@ -151,6 +167,41 @@ describe("the grilles", () => {
   });
 });
 
+describe("a finish", () => {
+  test("the eyes give way to a check while the rays fly, then the eyes come back", () => {
+    expect(finishPhase(-1)).toMatchObject({ check: 0, rays: -1, eyes: 1 });
+
+    const burst = finishPhase(0.4);
+    expect(burst.eyes).toBe(0);
+    expect(burst.check).toBe(1);
+    expect(burst.rays).toBeGreaterThan(0);
+    expect(burst.rays).toBeLessThan(1);
+
+    // Held: the check whole, the burst over.
+    expect(finishPhase(FINISH_HELD)).toMatchObject({
+      check: 1,
+      checkAlpha: 1,
+      rays: -1,
+      eyes: 0,
+    });
+
+    expect(finishPhase(FINISH_S)).toEqual(finishPhase(-1));
+  });
+
+  test("the check strokes on along its length", () => {
+    const early = finishPhase(0.12).check;
+    expect(early).toBeGreaterThan(0);
+    expect(early).toBeLessThan(finishPhase(0.24).check);
+  });
+
+  test("draws its rays and its check over the orb, and nothing once it is over", () => {
+    const rest = strokesOf(REST);
+    expect(strokesOf({ ...REST, finishAge: 0.4 })).toBe(rest + RAYS + 1);
+    expect(strokesOf({ ...REST, finishAge: FINISH_HELD })).toBe(rest + 1);
+    expect(strokesOf({ ...REST, finishAge: FINISH_S })).toBe(rest);
+  });
+});
+
 describe("<MicOrb>", () => {
   test("holds its footprint, hides from assistive tech, and draws on a canvas twice its size", () => {
     const view = render(<MicOrb size={40} state="listening" />);
@@ -192,6 +243,23 @@ describe("<MicOrb>", () => {
     }
   });
 
+  test("still, finished is the check without the burst", () => {
+    const strokes = (state?: "finished") => {
+      const ctx = fakeContext();
+      const getContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = (() =>
+        ctx) as unknown as typeof getContext;
+      try {
+        render(<MicOrb size={40} state={state} still />);
+        cleanup();
+        return ctx.strokes;
+      } finally {
+        HTMLCanvasElement.prototype.getContext = getContext;
+      }
+    };
+    expect(strokes("finished")).toBe(strokes() + 1);
+  });
+
   test("follows a change of state", () => {
     const view = render(<MicOrb size={40} />);
     expect(
@@ -201,5 +269,9 @@ describe("<MicOrb>", () => {
     expect(
       view.container.querySelector("[data-state]")?.getAttribute("data-state"),
     ).toBe("thinking");
+    view.rerender(<MicOrb size={40} state="finished" />);
+    expect(
+      view.container.querySelector("[data-state]")?.getAttribute("data-state"),
+    ).toBe("finished");
   });
 });
