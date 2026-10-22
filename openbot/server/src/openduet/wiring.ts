@@ -4,6 +4,7 @@ import type { AuditInitiator } from "../audit";
 import type { Database } from "../db/client";
 import { users } from "../db/schema";
 import { buildMorningBrief, type CallTool, openduetTools } from "./brief";
+import { replyTools } from "./replies";
 import type { Complete } from "./triage";
 
 /**
@@ -22,8 +23,8 @@ export function createOpenDuetTools(deps: {
   botId: string,
   initiator: AuditInitiator,
 ) => GrantedTool[] {
-  return (actorId, botId, initiator) =>
-    openduetTools({
+  return (actorId, botId, initiator) => [
+    ...openduetTools({
       actorId,
       botId,
       initiator,
@@ -43,5 +44,7 @@ export function createOpenDuetTools(deps: {
           },
           input,
         ),
-    });
+    }),
+    ...replyTools({ initiator }),
+  ];
 }

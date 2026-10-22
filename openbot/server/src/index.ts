@@ -1353,7 +1353,10 @@ const memorySweep = repeatAfterEach(async () => {
 // Follow-ups a Bot schedules for itself, on the shared work queue. See agents/wake-up.ts.
 const wakeUpStore = createWakeUpStore(database, { auditStore: bootAuditStore });
 
-/** OpenDuet's morning brief, read through the plugin store as the person. See openduet/wiring.ts. */
+/**
+ * OpenDuet's own tools: the morning brief, read through the plugin store as the person, and reply
+ * chips. See openduet/wiring.ts.
+ */
 const openDuetTools = createOpenDuetTools({
   database,
   callTool: (input) => pluginStore.callTool(input),

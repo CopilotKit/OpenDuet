@@ -563,3 +563,43 @@ export function toVisibleChatItems(
     return items;
   });
 }
+
+/**
+ * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`.
+ * Named here as `GENERATE_SANDBOXED_UI` is: the projection only needs the string.
+ */
+const SUGGEST_REPLIES = "suggest_replies";
+
+/**
+ * Reply chips moved to the end of their turn, under the Bot's last words in it.
+ *
+ * WHEREVER IN THE TURN THE BOT CALLED FOR THEM. A model that asks its question and then calls the
+ * tool puts the chips under the question by itself, but one that calls first and asks after is just
+ * as common, and drawn where the call sits its chips would land above the question they answer. A
+ * turn ends where the person next sends something, so the chips go just before that.
+ */
+export function repliesLast(
+  items: readonly VisibleChatItem[],
+): VisibleChatItem[] {
+  const ordered: VisibleChatItem[] = [];
+  let held: VisibleChatItem[] = [];
+  for (const item of items) {
+    if (
+      item.kind === "tool" &&
+      item.toolCall.function.name === SUGGEST_REPLIES
+    ) {
+      held.push(item);
+      continue;
+    }
+    if (
+      item.kind === "attachments" ||
+      (item.kind === "text" && item.role === "user")
+    ) {
+      ordered.push(...held);
+      held = [];
+    }
+    ordered.push(item);
+  }
+  ordered.push(...held);
+  return ordered;
+}
