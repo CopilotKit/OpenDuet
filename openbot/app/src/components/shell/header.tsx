@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { useChatOrb, useChatStep } from "./chat-presence";
 
 const DISC =
-  "grid shrink-0 place-items-center rounded-full bg-duet-card text-duet-ink shadow-duet-float transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95";
+  "duet-glass grid shrink-0 place-items-center rounded-full text-duet-ink shadow-duet-glass transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95";
 
 /** The person's initial, from their name, or their email when they have none. */
 export function initialOf(user: { name?: string | null; email: string }) {
@@ -108,7 +108,7 @@ function ChatStep() {
     <div aria-live="polite" className="flex max-w-full justify-center">
       <p
         aria-hidden={shown ? undefined : true}
-        className="flex h-6 max-w-full items-center rounded-full bg-duet-card px-2.5 font-medium text-[13px] text-duet-ink-2 leading-4 shadow-duet-card transition-[opacity,translate] duration-200 data-[shown=false]:opacity-0 data-[shown=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[shown=true]:ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:data-[shown=false]:-translate-y-1"
+        className="duet-glass flex h-6 max-w-full items-center rounded-full px-2.5 font-medium text-[13px] text-duet-ink-2 leading-4 shadow-duet-glass transition-[opacity,translate] duration-200 data-[shown=false]:opacity-0 data-[shown=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[shown=true]:ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:data-[shown=false]:-translate-y-1"
         data-shown={shown}
       >
         <span className="tool-line-running truncate">{held}</span>

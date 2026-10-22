@@ -133,6 +133,28 @@ export function ConversationView({
   const [queued, setQueued] = useState<readonly QueuedMessage[]>([]);
   const queuedRef = useRef<readonly QueuedMessage[]>(queued);
 
+  /*
+   * In the shell the composer floats over the conversation, frosted, rather than below it, so the
+   * thread can scroll under it. The transcript then has to end by the dock's height, or the last
+   * message would stop behind the composer. The dock grows and shrinks (a suggestion arrives, the
+   * draft wraps), so its height is measured and handed to CSS as `--duet-dock`: written straight on
+   * the element, because re-rendering the whole conversation to move a padding is the wrong price.
+   */
+  const root = useRef<HTMLDivElement>(null);
+  const dock = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = root.current;
+    const docked = dock.current;
+    if (!inShell || !frame || !docked || typeof ResizeObserver === "undefined")
+      return;
+    const measure = () =>
+      frame.style.setProperty("--duet-dock", `${docked.offsetHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(docked);
+    return () => observer.disconnect();
+  }, [inShell]);
+
   /**
    * Files the queue left behind AND the reason it did, forwarded to the composer so it can say so
    * rather than leaving somebody to notice on their own that a file they attached is not going to
@@ -488,7 +510,14 @@ export function ConversationView({
   }, [apply, disabled, inFlight, restoreFailedRun]);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div
+      className={
+        inShell
+          ? "relative flex min-h-0 flex-1 flex-col"
+          : "flex flex-col flex-1 min-h-0"
+      }
+      ref={root}
+    >
       <div className="flex flex-1 min-h-0">
         {/* What the transcript draws can send as the person. See `conversation-send.tsx`. */}
         <ConversationSendContext.Provider value={conversationSend}>
@@ -505,7 +534,7 @@ export function ConversationView({
             {...(inShell
               ? {
                   contentClassName:
-                    "max-w-none gap-[14px] px-4 pt-[100px] pb-6",
+                    "max-w-none gap-[14px] px-4 pt-[100px] pb-[calc(var(--duet-dock,0px)+24px)]",
                 }
               : {})}
             lead={lead}
@@ -525,9 +554,10 @@ export function ConversationView({
       <div
         className={
           inShell
-            ? "relative z-10 w-full shrink-0 px-4 pb-[10px] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-9 before:bg-[linear-gradient(transparent,var(--duet-surface))]"
+            ? "absolute inset-x-0 bottom-0 z-10 px-4 pb-[calc(var(--duet-tab-space,0px)+10px)]"
             : "max-w-2xl mx-auto w-full px-0 pb-4 shrink-0"
         }
+        ref={dock}
       >
         {/* Chat's Bot's newest suggestion; nothing in any other conversation. */}
         {inShell ? <ChatSuggestionCard /> : null}
@@ -539,6 +569,7 @@ export function ConversationView({
           {...(commands ? { commands } : {})}
           className="w-full mt-auto"
           compact
+          glass={inShell}
           voiceCall={voiceCall}
           disabled={disabled}
           droppedAttachments={droppedAttachments}

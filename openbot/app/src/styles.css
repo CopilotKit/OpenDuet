@@ -88,6 +88,16 @@ html {
     0 0 0 1px var(--duet-hair), 0 6px 18px -12px rgb(1 5 7 / 18%);
   --duet-shadow-raised:
     0 0 0 1px var(--duet-hair), 0 10px 26px -14px rgb(1 5 7 / 20%);
+  /*
+   * Glass: the chrome that floats over a screen (the tab bar, the composer, the header's discs)
+   * lets what scrolls under it show through, frosted. Translucent enough to read as a layer, opaque
+   * enough that text under it never competes with the controls on it. `--duet-veil` is the same
+   * material laid over a whole screen, for a sheet that the screen stays visible behind.
+   */
+  --duet-glass: rgb(255 255 255 / 66%);
+  --duet-veil: rgb(246 246 248 / 74%);
+  --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 80%);
+  --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
 }
 
 .dark {
@@ -153,6 +163,10 @@ html {
   --duet-shadow-card: 0 0 0 1px var(--duet-hair);
   --duet-shadow-raised:
     0 0 0 1px var(--duet-hair), 0 10px 26px -14px rgb(0 0 0 / 60%);
+  --duet-glass: rgb(28 28 31 / 62%);
+  --duet-veil: rgb(17 17 19 / 72%);
+  --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 8%);
+  --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
 }
 
 * {
@@ -250,6 +264,7 @@ body {
   --shadow-duet-float: var(--duet-shadow-float);
   --shadow-duet-card: var(--duet-shadow-card);
   --shadow-duet-raised: var(--duet-shadow-raised);
+  --shadow-duet-glass: var(--duet-shadow-glass);
 }
 
 /*
@@ -285,6 +300,29 @@ body {
   font-size: 15px;
   line-height: 18px;
   letter-spacing: -0.006em;
+}
+/*
+ * Frosted chrome over a scrolling screen. The blur is what makes the translucency readable: without
+ * it, a message passing under the composer would sit legibly behind its placeholder. A browser that
+ * cannot blur gets the opaque card instead, never a see-through bar.
+ */
+@utility duet-glass {
+  background-color: var(--duet-card);
+  @supports (backdrop-filter: blur(1px)) or
+    (-webkit-backdrop-filter: blur(1px)) {
+    background-color: var(--duet-glass);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    backdrop-filter: blur(22px) saturate(180%);
+  }
+}
+@utility duet-veil {
+  background-color: var(--duet-surface);
+  @supports (backdrop-filter: blur(1px)) or
+    (-webkit-backdrop-filter: blur(1px)) {
+    background-color: var(--duet-veil);
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+    backdrop-filter: blur(28px) saturate(160%);
+  }
 }
 @utility duet-face {
   font-feature-settings: "cv11", "ss03";

@@ -2,18 +2,14 @@ import type { ReactNode } from "react";
 
 /**
  * A tab's scrolling body: it runs under the floating header, starting where the film's thread does,
- * and fades out above the tab bar.
+ * and on under the frosted tab bar, ending far enough below it that the last row can scroll clear.
  */
 export function ScreenScroll({ children }: { children: ReactNode }) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-[100px] pb-8">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-[100px] pb-[calc(var(--duet-tab-space,0px)+32px)]">
         {children}
       </div>
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-[linear-gradient(transparent,var(--duet-surface))]"
-      />
     </div>
   );
 }
