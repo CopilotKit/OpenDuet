@@ -36,6 +36,26 @@ skills:
       - google-workspace/gmail_search_messages
       - google-workspace/calendar_list_events
 
+  # Chat's first-day offer sends this request as the person's own message (app/src/components/
+  # shell/first-day.tsx); the skill is what brings the mail and calendar tools to that run, and its
+  # instructions apply when somebody picks it from the / menu.
+  - slug: first-day
+    title: Get to know you
+    summary: Learn what you do from your recent mail and this week's calendar, and say how it can help.
+    instructions: >-
+      Read the person's recent mail with gmail_search_messages and this week's calendar with
+      calendar_list_events, opening a message with gmail_read_message only when its subject is not
+      enough. Then write two short parts. First, what you think they do: their work, the people and
+      companies they deal with most, and what is coming up, using only what the tools returned.
+      Second, three ways you can help, each one line and each tied to something you saw. End by
+      asking them to correct anything that is off. If mail or calendar is not connected, say which
+      one and that it can be connected on the Connections page, and never guess at what you could
+      not read.
+    tools:
+      - google-workspace/gmail_search_messages
+      - google-workspace/gmail_read_message
+      - google-workspace/calendar_list_events
+
   - slug: reply-to-an-email
     title: Reply to an email
     summary: Read a message and draft a reply that goes out only after you approve it.

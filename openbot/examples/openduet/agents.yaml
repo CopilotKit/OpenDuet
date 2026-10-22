@@ -28,6 +28,7 @@ agents:
     # turning an interview into a saved skill, both from inside a conversation.
     skills:
       - morning-brief
+      - first-day
       - reply-to-an-email
       - bot-creator
       - skill-creator
