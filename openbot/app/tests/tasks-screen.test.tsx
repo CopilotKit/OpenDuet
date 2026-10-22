@@ -22,8 +22,8 @@ import { settleReactWork } from "./settle-react-work";
 
 /**
  * The Tasks tab, top to bottom: what is waiting on the person, answered where it is shown; what
- * their Bots suggest, started or hidden from the row; and what the product's own Bot is working on
- * and has lined up. Empty sections are left out, except Suggested.
+ * their Bots suggest, started or hidden from the row; what the product's own Bot is working on and
+ * has lined up; and what it has done. Empty sections are left out, except Suggested.
  */
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3010" }));
@@ -498,8 +498,11 @@ test("Working on and Coming up list OpenDuet's work, with Stop and Cancel, and o
   ).toBe("/channel/chat-1");
   const upcoming = view.getByRole("region", { name: "Coming up" });
   expect(upcoming.textContent).toContain("Check Rosa replied");
-  // Finished work is Activity's, not a task.
-  expect(view.queryByText("Sorted the inbox")).toBeNull();
+  // Finished work is under Done, not Working on.
+  expect(working.textContent).not.toContain("Sorted the inbox");
+  expect(view.getByRole("region", { name: "Done" }).textContent).toContain(
+    "Sorted the inbox",
+  );
 
   fireEvent.click(
     within(working).getByRole("button", {
@@ -521,4 +524,92 @@ test("Working on and Coming up list OpenDuet's work, with Stop and Cancel, and o
       body: { id: "follow-1" },
     });
   });
+});
+
+test("Done lists finished work and answered actions at the foot, newest first, with nothing to press", async () => {
+  quiet();
+  activity = {
+    inProgress: [
+      item({
+        id: "now",
+        kind: "handoff",
+        title: "Draft the reply",
+        status: "running",
+        stoppable: true,
+      }),
+    ],
+    scheduled: [],
+    completed: [
+      item({
+        id: "done",
+        title: "Review the launch deck",
+        status: "done",
+        at: "2026-10-21T14:59:00Z",
+      }),
+      item({
+        id: "broke",
+        kind: "routine",
+        title: "Tidy inbox",
+        status: "failed",
+        at: "2026-10-21T16:00:00Z",
+      }),
+    ],
+  };
+  inbox = {
+    requests: [
+      {
+        id: "r",
+        status: "completed",
+        createdAt: "2026-10-21T14:58:00Z",
+        decidedAt: "2026-10-21T15:30:00Z",
+        decision: "allow_once",
+        action: {
+          botId: "openduet",
+          toolRef: "gmail/GMAIL_SEND_EMAIL",
+          effect: "write",
+          scope: "ana@example.com",
+          threadId: "t",
+          args: {},
+          target: {},
+          policy: { behaviour: "ask", source: "rule", reason: "Asked." },
+        },
+      },
+    ],
+    questions: [],
+  };
+  serving();
+  const view = draw();
+  const done = await view.findByRole("region", { name: "Done" });
+  const text = done.textContent ?? "";
+  expect(text).toContain("Follow-up · Done");
+  expect(text).toContain("Didn't finish");
+  expect(text).toContain("Allowed once by you");
+  // Newest first: the failed routine, then the allowed send, then the review.
+  const order = ["Tidy inbox", "Send email", "Review the launch deck"].map(
+    (title) => text.indexOf(title),
+  );
+  expect(order.every((at) => at >= 0)).toBe(true);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+  // Read-only, and the work under way is not in it.
+  expect(within(done).queryAllByRole("button")).toHaveLength(0);
+  expect(text).not.toContain("Draft the reply");
+  // At the foot of the screen, after Working on.
+  const regions = view
+    .getAllByRole("region")
+    .map((region) => region.getAttribute("aria-label"));
+  expect(regions.at(-1)).toBe("Done");
+  expect(regions.indexOf("Working on")).toBeLessThan(regions.indexOf("Done"));
+});
+
+test("with nothing finished, Done is left out", async () => {
+  quiet();
+  activity = {
+    inProgress: [item({ id: "now", status: "running" })],
+    scheduled: [],
+    completed: [],
+  };
+  serving();
+  const view = draw();
+  await view.findByRole("region", { name: "Working on" });
+  expect(view.queryByRole("region", { name: "Done" })).toBeNull();
 });

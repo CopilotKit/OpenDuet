@@ -29,7 +29,9 @@ export type DuetIconName =
   | "wrench"
   | "question"
   | "x"
-  | "stop";
+  | "stop"
+  | "page"
+  | "chevronLeft";
 
 const PATHS: Record<DuetIconName, ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h10" />,
@@ -123,6 +125,13 @@ const PATHS: Record<DuetIconName, ReactNode> = {
   ),
   x: <path d="M18 6 6 18M6 6l12 12" />,
   stop: <rect x="7" y="7" width="10" height="10" rx="1.5" />,
+  page: (
+    <>
+      <path d="M14.5 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7.5z" />
+      <path d="M14 2.5v4a1.5 1.5 0 0 0 1.5 1.5h4M8.5 13h7M8.5 17h5" />
+    </>
+  ),
+  chevronLeft: <path d="m15 18-6-6 6-6" />,
 };
 
 export function DuetIcon({

@@ -1,10 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment, type ReactNode } from "react";
 import type { DuetIconName } from "@/components/duet/icons";
 import { CardRow, DuetCard, Rule, type TileTone } from "@/components/duet/kit";
-import { primaryBot } from "@/lib/agents/primary-bot";
-import { agentListQueryOptions } from "@/lib/agents/queries";
 import {
   approvalPlace,
   clockTime,
@@ -12,20 +9,17 @@ import {
   describeApproval,
   personWasAsked,
 } from "@/lib/approval-view";
-import { approvalInboxOptions } from "@/lib/approvals";
-import {
-  type ActivityItem,
-  type ActivityKind,
-  botActivityQueryOptions,
-} from "@/lib/bot-lifecycle/queries";
+import type { ApprovalRequest } from "@/lib/approvals";
+import type { ActivityItem, ActivityKind } from "@/lib/bot-lifecycle/queries";
 import { cn } from "@/lib/utils";
-import { ScreenNotice } from "./chat-screen";
-import { ScreenScroll, ScreenTitle } from "./screen";
 
-/**
- * One line of the Activity tab, or of Working on and Coming up on Tasks, from whichever ledger it
- * came from.
+/*
+ * The rows Tasks draws for the product's own Bot's work: Working on, Coming up and Done, read from
+ * the ledgers OpenBot already keeps. This was the Activity tab; its "Handled for you" list is Done
+ * at the foot of Tasks now, and the tab is Pages.
  */
+
+/** One line of Working on, Coming up or Done on Tasks, from whichever ledger it came from. */
 export type ActivityRow = {
   id: string;
   icon: DuetIconName;
@@ -126,32 +120,14 @@ export function upcomingRow(item: ActivityItem): ActivityRow {
 }
 
 /**
- * The Activity tab: what the product's own Bot did for the person, in plain words. Read from the
- * ledgers OpenBot already keeps (routine and responsibility runs, delegated tasks, follow-ups) and
- * from the actions the person answered on Tasks. Nothing here is written for the screen. What the
- * Bot is doing now and has lined up is on Tasks.
+ * What a Bot did that the person allowed or refused: the actions it paused for an answer, once
+ * answered. Green when it went, red when they refused, amber when it was allowed and did not work.
  */
-export function ActivityScreen() {
-  const agents = useQuery(agentListQueryOptions());
-  const bot = primaryBot(agents.data);
-  const activity = useQuery({
-    ...botActivityQueryOptions(bot?.id ?? ""),
-    enabled: Boolean(bot),
-  });
-  const inbox = useQuery(approvalInboxOptions());
-
-  if (agents.isPending) return null;
-  if (!agents.data)
-    return (
-      <ScreenNotice alert>
-        Couldn't load your Bots. Reload the page.
-      </ScreenNotice>
-    );
-  if (!bot) return <ScreenNotice>There are no Bots yet.</ScreenNotice>;
-  const botId = bot.id;
-
-  // The actions this Bot paused for an answer, once answered: what the person allowed or refused.
-  const answered: ActivityRow[] = (inbox.data?.requests ?? [])
+export function answeredRows(
+  requests: readonly ApprovalRequest[],
+  botId: string,
+): ActivityRow[] {
+  return requests
     .filter(
       (request) =>
         request.action.botId === botId &&
@@ -180,40 +156,28 @@ export function ActivityScreen() {
         channelId: null,
       } satisfies ActivityRow;
     });
-
-  const handled = [
-    ...(activity.data?.completed ?? []).map(completedRow),
-    ...answered,
-  ]
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .slice(0, 25);
-
-  return (
-    <ScreenScroll>
-      <ScreenTitle title="Activity">What {bot.name} did for you.</ScreenTitle>
-      {activity.error ? (
-        <p className="type-sub mb-3 px-1 text-duet-red" role="alert">
-          Couldn't load what {bot.name} did. Reload the page.
-        </p>
-      ) : null}
-      {activity.isPending ? null : handled.length === 0 ? (
-        <DuetCard className="px-4 py-4">
-          <p className="type-row font-semibold">Nothing yet.</p>
-          <p className="type-sub mt-0.5 text-duet-ink-2">
-            What {bot.name} finishes for you shows up here: routines,
-            follow-ups, and the actions you allowed.
-          </p>
-        </DuetCard>
-      ) : (
-        <ActivityCard rows={handled} title="Handled for you" />
-      )}
-    </ScreenScroll>
-  );
 }
 
 /**
- * The film's "Handled for you" card: a heading, then one row per thing, hairlines between. Each row
- * carries its own time, since the things in one card did not all happen at once.
+ * What the product's own Bot finished for the person, newest first: its routines, follow-ups and
+ * delegated work from the ledgers OpenBot keeps, and the actions the person answered. Tasks lists
+ * them under Done.
+ */
+export function handledRows(
+  completed: readonly ActivityItem[],
+  requests: readonly ApprovalRequest[],
+  botId: string,
+  limit = 25,
+): ActivityRow[] {
+  return [...completed.map(completedRow), ...answeredRows(requests, botId)]
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, limit);
+}
+
+/**
+ * The film's "Handled for you" card, which Tasks uses for Working on, Coming up and Done: a heading,
+ * then one row per thing, hairlines between. Each row carries its own time, since the things in one
+ * card did not all happen at once.
  */
 export function ActivityCard({
   title,

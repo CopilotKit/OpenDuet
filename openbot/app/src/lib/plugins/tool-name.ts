@@ -102,6 +102,10 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Adding to your Tasks",
     done: "Added to your Tasks",
   },
+  make_page: {
+    running: "Putting it together",
+    done: "Put it together",
+  },
 };
 
 /** One of this deployment's own tools in words, or null for any other name. */

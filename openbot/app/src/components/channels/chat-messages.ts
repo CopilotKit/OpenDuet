@@ -565,41 +565,51 @@ export function toVisibleChatItems(
 }
 
 /**
- * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`.
- * Named here as `GENERATE_SANDBOXED_UI` is: the projection only needs the string.
+ * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`, and
+ * the pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`. Named here as
+ * `GENERATE_SANDBOXED_UI` is: the projection only needs the strings.
  */
 const SUGGEST_REPLIES = "suggest_replies";
+const MAKE_PAGE = "make_page";
 
 /**
- * Reply chips moved to the end of their turn, under the Bot's last words in it.
+ * Page cards and reply chips moved to the end of their turn, under the Bot's last words in it:
+ * the cards first, then the chips.
  *
  * WHEREVER IN THE TURN THE BOT CALLED FOR THEM. A model that asks its question and then calls the
  * tool puts the chips under the question by itself, but one that calls first and asks after is just
  * as common, and drawn where the call sits its chips would land above the question they answer. A
- * turn ends where the person next sends something, so the chips go just before that.
+ * page is the same: the Bot makes it, then says a line about it, and the card belongs under the
+ * line. A turn ends where the person next sends something, so both go just before that.
  */
 export function repliesLast(
   items: readonly VisibleChatItem[],
 ): VisibleChatItem[] {
   const ordered: VisibleChatItem[] = [];
-  let held: VisibleChatItem[] = [];
+  let pages: VisibleChatItem[] = [];
+  let replies: VisibleChatItem[] = [];
   for (const item of items) {
+    if (item.kind === "tool" && item.toolCall.function.name === MAKE_PAGE) {
+      pages.push(item);
+      continue;
+    }
     if (
       item.kind === "tool" &&
       item.toolCall.function.name === SUGGEST_REPLIES
     ) {
-      held.push(item);
+      replies.push(item);
       continue;
     }
     if (
       item.kind === "attachments" ||
       (item.kind === "text" && item.role === "user")
     ) {
-      ordered.push(...held);
-      held = [];
+      ordered.push(...pages, ...replies);
+      pages = [];
+      replies = [];
     }
     ordered.push(item);
   }
-  ordered.push(...held);
+  ordered.push(...pages, ...replies);
   return ordered;
 }

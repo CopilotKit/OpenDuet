@@ -1094,4 +1094,33 @@ describe("repliesLast", () => {
       ]),
     ).toEqual(["u1", "a1", "call-1"]);
   });
+
+  test("draws a page the Bot made under its line about it, and above any reply chips", () => {
+    const page = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "make_page", arguments: "{}" },
+    });
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Prep me for the studio visit." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-chips")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-chips", content: "Shown." },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "",
+          toolCalls: [page("call-page")],
+        },
+        { id: "t2", role: "tool", toolCallId: "call-page", content: "{}" },
+        { id: "a3", role: "assistant", content: "It's a 2-minute read." },
+        { id: "u2", role: "user", content: "Thanks." },
+      ]),
+    ).toEqual(["u1", "a3", "call-page", "call-chips", "u2"]);
+  });
 });

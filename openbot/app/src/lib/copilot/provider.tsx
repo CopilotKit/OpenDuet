@@ -13,6 +13,7 @@ import { GalleryTools } from "./gallery-tools";
 import { GENERATIVE_UI_DESIGN_SKILL } from "./generative-ui";
 import { HandoffTool } from "./handoff-tool";
 import { MorningBriefTool } from "./morning-brief-tool";
+import { PageCardTool } from "./page-card-tool";
 import { ReplyChipsTool } from "./reply-chips-tool";
 import { SandboxedTools } from "./sandboxed-tools";
 import { SkillTools } from "./skill-tools";
@@ -71,6 +72,8 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
         <MorningBriefTool />
         {/* The server's suggested replies, drawn as chips a tap sends. See reply-chips-tool.tsx. */}
         <ReplyChipsTool />
+        {/* What the Bot made, drawn as a card that opens it. See page-card-tool.tsx. */}
+        <PageCardTool />
         <EscalationTool />
         {/* Gallery tools are registered once; their handlers re-read the active Bot to avoid shadowing renderers. */}
         <GalleryTools />
