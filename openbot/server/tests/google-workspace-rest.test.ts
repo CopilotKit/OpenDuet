@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setSystemTime,
+  test,
+} from "bun:test";
 import { accessFor } from "../src/plugins/access";
 import { catalogueEntry } from "../src/plugins/catalogue";
 import { callTool, listTools } from "../src/plugins/google-workspace-rest";
@@ -754,46 +761,244 @@ describe("gmail_send_reply", () => {
 });
 
 describe("calendar_list_events", () => {
-  test("with no arguments it asks for the rest of today in UTC, in start order", async () => {
-    const calls = stubGoogle(() => ({ items: [] }));
-    const before = Date.now();
-    const result = await callTool(connection, "calendar_list_events", {});
-    const after = Date.now();
+  const CALENDAR_RESOURCE = "/calendar/v3/calendars/primary";
+  const EVENTS_PATH = `${CALENDAR_RESOURCE}/events`;
 
-    expect(calls).toHaveLength(1);
-    const url = calls[0].url;
-    expect(url.origin + url.pathname).toBe(
-      "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-    );
-    const timeMin = Date.parse(url.searchParams.get("timeMin") ?? "");
-    expect(timeMin).toBeGreaterThanOrEqual(before);
-    expect(timeMin).toBeLessThanOrEqual(after);
-    const start = new Date(timeMin);
-    expect(url.searchParams.get("timeMax")).toBe(
-      new Date(
-        Date.UTC(
-          start.getUTCFullYear(),
-          start.getUTCMonth(),
-          start.getUTCDate() + 1,
+  /**
+   * Calendar as Google answers it: the primary calendar's resource naming `timeZone` (or `calendar`,
+   * when given as a Response, verbatim), and its events filtered by Google's own bounds, timeMin
+   * against an event's end and timeMax against its start, so a window that is too short loses the
+   * event here as it would there.
+   */
+  function stubCalendar(
+    calendar: string | Response,
+    events: {
+      start: { dateTime?: string; date?: string };
+      end: { dateTime?: string; date?: string };
+      [field: string]: unknown;
+    }[] = [],
+  ): Seen[] {
+    return stubGoogle((call) => {
+      if (call.url.pathname === CALENDAR_RESOURCE) {
+        return typeof calendar === "string"
+          ? {
+              kind: "calendar#calendar",
+              id: "maya@marlowceramics.com",
+              summary: "maya@marlowceramics.com",
+              timeZone: calendar,
+            }
+          : calendar;
+      }
+      expect(call.url.pathname).toBe(EVENTS_PATH);
+      const min = Date.parse(call.url.searchParams.get("timeMin") ?? "");
+      const max = Date.parse(call.url.searchParams.get("timeMax") ?? "");
+      const at = (time: { dateTime?: string; date?: string }) =>
+        Date.parse(time.dateTime ?? `${time.date}T00:00:00Z`);
+      return {
+        items: events.filter(
+          (event) => at(event.end) > min && at(event.start) < max,
         ),
-      ).toISOString(),
+      };
+    });
+  }
+
+  /** The window the events request asked for, as UTC ISO. */
+  const windowOf = (calls: Seen[]) => {
+    const listing = calls.find((call) => call.url.pathname === EVENTS_PATH);
+    return {
+      timeMin: listing?.url.searchParams.get("timeMin"),
+      timeMax: listing?.url.searchParams.get("timeMax"),
+    };
+  };
+
+  /** Runs `body` with the clock reading `at`, and puts the clock back however it ends. */
+  async function at<T>(instant: string, body: () => Promise<T>): Promise<T> {
+    setSystemTime(new Date(instant));
+    try {
+      return await body();
+    } finally {
+      setSystemTime();
+    }
+  }
+
+  test("with no arguments it reads the calendar's zone, then asks for now until midnight there, in start order", async () => {
+    // 13:00 in California, when the UTC day has four hours left and the person's has eleven.
+    const calls = stubCalendar("America/Los_Angeles", [
+      {
+        id: "mugs",
+        start: { dateTime: "2026-10-22T17:30:00-07:00" },
+        end: { dateTime: "2026-10-22T18:00:00-07:00" },
+      },
+      {
+        id: "tomorrow",
+        start: { dateTime: "2026-10-23T09:00:00-07:00" },
+        end: { dateTime: "2026-10-23T09:30:00-07:00" },
+      },
+    ]);
+    const result = await at("2026-10-22T20:00:00Z", () =>
+      callTool(connection, "calendar_list_events", {}),
     );
-    expect(url.searchParams.get("singleEvents")).toBe("true");
-    expect(url.searchParams.get("orderBy")).toBe("startTime");
-    expect(url.searchParams.get("maxResults")).toBe("25");
-    expect(JSON.parse(result.text)).toEqual({ events: [] });
+
+    expect(calls.map((call) => call.url.origin + call.url.pathname)).toEqual([
+      "https://www.googleapis.com/calendar/v3/calendars/primary",
+      "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+    ]);
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+    expect(calls[0].authorization).toBe("Bearer test-token");
+    expect(windowOf(calls)).toEqual({
+      timeMin: "2026-10-22T20:00:00.000Z",
+      // Midnight in Los Angeles, not the 17:00 the UTC day ends at.
+      timeMax: "2026-10-23T07:00:00.000Z",
+    });
+    const params = calls[1].url.searchParams;
+    expect(params.get("singleEvents")).toBe("true");
+    expect(params.get("orderBy")).toBe("startTime");
+    expect(params.get("maxResults")).toBe("25");
+
+    const parsed = JSON.parse(result.text);
+    expect(parsed.timeZone).toBe("America/Los_Angeles");
+    expect(Object.keys(parsed)).not.toContain("note");
+    expect(parsed.events.map((event: { id: string }) => event.id)).toEqual([
+      "mugs",
+    ]);
   });
 
-  test("given bounds are sent as UTC ISO, and a missing end is the end of the start's day", async () => {
-    const calls = stubGoogle(() => ({ items: [] }));
-    await callTool(connection, "calendar_list_events", {
-      timeMin: "2026-10-23T09:00:00-07:00",
+  test("east of UTC, today ends at local midnight and does not run on into tomorrow morning", async () => {
+    // 20:00 in Tokyo, when the UTC day runs on until 09:00 tomorrow there.
+    const calls = stubCalendar("Asia/Tokyo", [
+      {
+        id: "dinner",
+        start: { dateTime: "2026-10-22T21:30:00+09:00" },
+        end: { dateTime: "2026-10-22T22:30:00+09:00" },
+      },
+      {
+        id: "tomorrow-standup",
+        start: { dateTime: "2026-10-23T08:00:00+09:00" },
+        end: { dateTime: "2026-10-23T08:15:00+09:00" },
+      },
+    ]);
+    const result = await at("2026-10-22T11:00:00Z", () =>
+      callTool(connection, "calendar_list_events", {}),
+    );
+
+    expect(windowOf(calls)).toEqual({
+      timeMin: "2026-10-22T11:00:00.000Z",
+      timeMax: "2026-10-22T15:00:00.000Z",
+    });
+    const parsed = JSON.parse(result.text);
+    expect(parsed.timeZone).toBe("Asia/Tokyo");
+    expect(parsed.events.map((event: { id: string }) => event.id)).toEqual([
+      "dinner",
+    ]);
+  });
+
+  test("on a day the clocks change, today is 23 or 25 hours long and still ends at midnight", async () => {
+    const cases = [
+      // Clocks go forward at 02:00 on 8 March: from 00:30 PST to midnight PDT.
+      [
+        "America/Los_Angeles",
+        "2026-03-08T00:30:00-08:00",
+        "2026-03-09T07:00:00.000Z",
+      ],
+      // Clocks go back at 02:00 on 1 November: from 00:30 PDT to midnight PST.
+      [
+        "America/Los_Angeles",
+        "2026-11-01T00:30:00-07:00",
+        "2026-11-02T08:00:00.000Z",
+      ],
+      // Europe's clocks go back on 25 October, east of UTC.
+      [
+        "Europe/Berlin",
+        "2026-10-25T00:30:00+02:00",
+        "2026-10-25T23:00:00.000Z",
+      ],
+      // Chile's go forward at midnight itself, so 5 September ends when they jump to 01:00 on the 6th.
+      [
+        "America/Santiago",
+        "2026-09-05T20:00:00-04:00",
+        "2026-09-06T04:00:00.000Z",
+      ],
+    ];
+    for (const [timeZone, timeMin, timeMax] of cases) {
+      const calls = stubCalendar(timeZone);
+      const result = await callTool(connection, "calendar_list_events", {
+        timeMin,
+      });
+      expect(windowOf(calls).timeMax).toBe(timeMax);
+      expect(JSON.parse(result.text).timeZone).toBe(timeZone);
+    }
+  });
+
+  test("a time zone that cannot be read falls back to the UTC day, and the result says so", async () => {
+    const lateEvening = {
+      id: "late",
+      start: { dateTime: "2026-10-22T17:30:00-07:00" },
+      end: { dateTime: "2026-10-22T18:00:00-07:00" },
+    };
+    for (const calendar of [
+      Response.json(
+        {
+          error: {
+            code: 403,
+            message: "Request had insufficient authentication scopes.",
+          },
+        },
+        { status: 403 },
+      ),
+      Response.json({ kind: "calendar#calendar", id: "primary" }),
+      Response.json({ kind: "calendar#calendar", timeZone: "Mars/Olympus" }),
+    ]) {
+      const calls = stubCalendar(calendar, [lateEvening]);
+      const result = await at("2026-10-22T20:00:00Z", () =>
+        callTool(connection, "calendar_list_events", {}),
+      );
+
+      expect(result.isError).toBe(false);
+      expect(windowOf(calls)).toEqual({
+        timeMin: "2026-10-22T20:00:00.000Z",
+        timeMax: "2026-10-23T00:00:00.000Z",
+      });
+      const parsed = JSON.parse(result.text);
+      expect(parsed.timeZone).toBe("UTC");
+      expect(parsed.note).toStartWith(
+        "Your calendar's time zone could not be read, so today was taken to end at midnight UTC.",
+      );
+      // The short day is the one the note warns of: the evening is outside it.
+      expect(parsed.events).toEqual([]);
+    }
+  });
+
+  test("the reason the zone could not be read is in the note", async () => {
+    stubCalendar(
+      Response.json({ kind: "calendar#calendar", timeZone: "Mars/Olympus" }),
+    );
+    const result = await callTool(connection, "calendar_list_events", {});
+    expect(JSON.parse(result.text).note).toContain(
+      '"Mars/Olympus" is not a time zone this server knows.',
+    );
+  });
+
+  test("a given timeMax is sent as given, without reading the zone", async () => {
+    const calls = stubCalendar("America/Los_Angeles", [
+      {
+        id: "e1",
+        start: { dateTime: "2026-10-22T17:30:00-07:00" },
+        end: { dateTime: "2026-10-22T18:00:00-07:00" },
+      },
+    ]);
+    const result = await callTool(connection, "calendar_list_events", {
+      timeMin: "2026-10-22T13:00:00-07:00",
+      timeMax: "2026-10-22T17:00:00-07:00",
       maxResults: 99,
     });
+
+    expect(calls.map((call) => call.url.pathname)).toEqual([EVENTS_PATH]);
     const params = calls[0].url.searchParams;
-    expect(params.get("timeMin")).toBe("2026-10-23T16:00:00.000Z");
-    expect(params.get("timeMax")).toBe("2026-10-24T00:00:00.000Z");
+    expect(params.get("timeMin")).toBe("2026-10-22T20:00:00.000Z");
+    expect(params.get("timeMax")).toBe("2026-10-23T00:00:00.000Z");
     expect(params.get("maxResults")).toBe("50");
+    // No default was applied, so there is no zone to name.
+    expect(JSON.parse(result.text)).toEqual({ events: [] });
   });
 
   test("bounds that do not parse, or that close before they open, are refused before the network", async () => {
@@ -812,32 +1017,33 @@ describe("calendar_list_events", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("events come back in the contract's shape", async () => {
-    stubGoogle(() => ({
-      items: [
-        {
-          id: "e1",
-          summary: "Glaze test review",
-          status: "confirmed",
-          location: "Glaze room",
-          start: { dateTime: "2026-10-22T10:00:00-07:00" },
-          end: { dateTime: "2026-10-22T10:45:00-07:00" },
-          organizer: { email: "maya@marlowceramics.com" },
-          attendees: [
-            { email: "maya@marlowceramics.com", self: true },
-            { email: "leo@marlowceramics.com" },
-          ],
-        },
-        {
-          id: "e2",
-          status: "tentative",
-          start: { date: "2026-10-22" },
-          end: { date: "2026-10-23" },
-        },
-      ],
-    }));
-    const result = await callTool(connection, "calendar_list_events", {});
+  test("events come back in the contract's shape, under the zone the default used", async () => {
+    stubCalendar("America/Los_Angeles", [
+      {
+        id: "e1",
+        summary: "Glaze test review",
+        status: "confirmed",
+        location: "Glaze room",
+        start: { dateTime: "2026-10-22T10:00:00-07:00" },
+        end: { dateTime: "2026-10-22T10:45:00-07:00" },
+        organizer: { email: "maya@marlowceramics.com" },
+        attendees: [
+          { email: "maya@marlowceramics.com", self: true },
+          { email: "leo@marlowceramics.com" },
+        ],
+      },
+      {
+        id: "e2",
+        status: "tentative",
+        start: { date: "2026-10-22" },
+        end: { date: "2026-10-23" },
+      },
+    ]);
+    const result = await at("2026-10-22T08:00:00-07:00", () =>
+      callTool(connection, "calendar_list_events", {}),
+    );
     expect(JSON.parse(result.text)).toEqual({
+      timeZone: "America/Los_Angeles",
       events: [
         {
           id: "e1",

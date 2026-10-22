@@ -344,6 +344,14 @@ function seedCalendar(now: number): FakeEvent[] {
       location: "Google Meet",
       guests: ["hello@makersmarket.org"],
     }),
+    /*
+     * Late in the studio's evening, after the UTC day has ended for anyone west of Greenwich: at
+     * 19:30 Pacific it is already 02:30 UTC tomorrow. A "today" that ends at midnight UTC rather than
+     * the person's own midnight loses this one, which is why it is here.
+     */
+    timed("eveningwheelclass", "Evening wheel class", [19, 30], [21, 0], {
+      location: "Marlow Ceramics, 41 Alder St",
+    }),
   ];
   return events.sort((a, b) => a.span[0] - b.span[0]);
 }
@@ -1049,6 +1057,16 @@ export function startFakeGoogle(
         );
       }
       return Response.json(resource(message, url));
+    }
+
+    // The calendar itself, which is where Google keeps the zone its owner's days are in.
+    if (method === "GET" && path === "/calendar/v3/calendars/primary") {
+      return Response.json({
+        kind: "calendar#calendar",
+        id: FAKE_ACCOUNT,
+        summary: FAKE_ACCOUNT,
+        timeZone: STUDIO_TIME_ZONE,
+      });
     }
 
     if (method === "GET" && path === "/calendar/v3/calendars/primary/events") {

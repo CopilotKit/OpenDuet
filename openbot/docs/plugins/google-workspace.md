@@ -103,7 +103,7 @@ models do.
 | `gmail_search_messages` | read   | Searches with Gmail's own syntax, by default `in:inbox newer_than:1d`, 25 at a time and at most 50. Each message has its sender, recipients, subject, date, snippet, labels, and the `List-Unsubscribe`, `Precedence` and `Auto-Submitted` headers when it has them. |
 | `gmail_read_message`    | read   | Reads one message by its Gmail id: the same fields, its `Message-ID`, and its text. The plain-text part is preferred, HTML is read as text when there is none, and the body is cut at 20,000 characters with a note saying so. |
 | `gmail_send_reply`      | write  | Sends a plain-text reply in an existing thread, as the person.                                                                                                                                       |
-| `calendar_list_events`  | read   | Lists events on the primary calendar in start order, recurring events expanded. By default from now to the end of the day in UTC, at most 50.                                                        |
+| `calendar_list_events`  | read   | Lists events on the primary calendar in start order, recurring events expanded. By default from now to midnight in the calendar's own time zone, at most 50.                                                        |
 
 The catalogue names the three reads and the one write explicitly, so any other tool name counts as a
 write.

@@ -159,7 +159,7 @@ const TOOLS: readonly McpTool[] = Object.freeze([
   {
     name: "calendar_list_events",
     description:
-      "List the events on your primary Google Calendar between two times, in start order, with recurring events expanded. Defaults to now until the end of the day (UTC). Returns JSON.",
+      "List the events on your primary Google Calendar between two times, in start order, with recurring events expanded. Defaults to now until midnight in your calendar's time zone. Returns JSON; when the default is used, it names that time zone.",
     inputSchema: {
       type: "object",
       properties: {
@@ -171,7 +171,7 @@ const TOOLS: readonly McpTool[] = Object.freeze([
         timeMax: {
           type: "string",
           description:
-            "The latest start time to include, as an ISO 8601 date-time. Defaults to the end of timeMin's day in UTC.",
+            "The latest start time to include, as an ISO 8601 date-time. Defaults to midnight at the end of timeMin's day in your calendar's time zone.",
         },
         maxResults: {
           type: "integer",
@@ -1094,19 +1094,30 @@ export async function callTool(
     }
     const timeMin = givenMin ?? new Date();
     /*
-     * The end of timeMin's day in UTC, which with no timeMin is the end of today. Tied to timeMin
-     * rather than to the clock, so asking for tomorrow morning does not default to a window that
-     * closed before it opened.
+     * With no timeMax, the end of timeMin's day where the person is: midnight in their calendar's
+     * time zone, which with no timeMin is the end of today. Tied to timeMin rather than to the clock,
+     * so asking for tomorrow morning does not default to a window that closed before it opened.
+     *
+     * Their day, not UTC's. At 13:00 in California the UTC day ends at 17:00, and everything on the
+     * calendar after that went missing from "today"; in Tokyo the UTC day runs on into tomorrow
+     * morning. A zone that cannot be read falls back to UTC's day, and the result says so rather
+     * than letting a short day pass for the whole of one.
      */
-    const timeMax =
-      givenMax ??
-      new Date(
-        Date.UTC(
-          timeMin.getUTCFullYear(),
-          timeMin.getUTCMonth(),
-          timeMin.getUTCDate() + 1,
-        ),
-      );
+    let zone: { timeZone: string; note?: string } | null = null;
+    let timeMax = givenMax;
+    if (timeMax === null) {
+      const read = await calendarTimeZone(connection);
+      if (read.ok) {
+        zone = { timeZone: read.timeZone };
+        timeMax = endOfDayIn(timeMin, read.timeZone);
+      } else {
+        zone = {
+          timeZone: "UTC",
+          note: `Your calendar's time zone could not be read, so today was taken to end at midnight UTC. ${read.why}`,
+        };
+        timeMax = endOfDayIn(timeMin, "UTC");
+      }
+    }
     if (timeMax.getTime() <= timeMin.getTime()) {
       return failure("timeMax must be later than timeMin.");
     }
@@ -1128,7 +1139,10 @@ export async function callTool(
     );
     if (!listed.ok) return failure(listed.message);
 
-    return asJson({ events: (listed.value.items ?? []).map(eventOf) });
+    return asJson({
+      ...zone,
+      events: (listed.value.items ?? []).map(eventOf),
+    });
   }
 
   return failure(
@@ -1167,4 +1181,96 @@ function eventOf(event: CalendarEvent) {
       .filter((email): email is string => typeof email === "string"),
     status: event.status ?? "confirmed",
   };
+}
+
+/**
+ * The person's time zone, an IANA name, as their primary calendar holds it.
+ *
+ * The calendar's rather than the server's or a browser's, because it is the zone Google Calendar
+ * shows the person their own days in. A name this runtime's `Intl` does not know is unreadable here,
+ * rather than a RangeError later.
+ */
+async function calendarTimeZone(
+  connection: Connection,
+): Promise<{ ok: true; timeZone: string } | { ok: false; why: string }> {
+  const read = await request<{ timeZone?: unknown }>(
+    connection,
+    "Google Calendar",
+    CALENDAR,
+  );
+  if (!read.ok) return { ok: false, why: read.message };
+  const { timeZone } = read.value;
+  if (typeof timeZone !== "string" || timeZone.trim() === "") {
+    return { ok: false, why: "Google Calendar did not name one." };
+  }
+  try {
+    wallClockIn(timeZone);
+  } catch {
+    return {
+      ok: false,
+      why: `"${timeZone.slice(0, 100)}" is not a time zone this server knows.`,
+    };
+  }
+  return { ok: true, timeZone };
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * A reader of `timeZone`'s clocks: the local date and time at an instant, to the second, written as
+ * the UTC milliseconds of those same digits. Throws a RangeError for a zone `Intl` does not know.
+ */
+function wallClockIn(timeZone: string): (at: number) => number {
+  const format = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  });
+  return (at) => {
+    const part: Record<string, number> = {};
+    for (const { type, value } of format.formatToParts(at)) {
+      part[type] = Number(value);
+    }
+    return Date.UTC(
+      part.year,
+      part.month - 1,
+      part.day,
+      part.hour,
+      part.minute,
+      part.second,
+    );
+  };
+}
+
+/**
+ * The first instant of the day after `instant`'s, in `timeZone`: that day's midnight, or, on a day
+ * whose midnight a change of offset skips, the moment the clocks jump past it.
+ *
+ * `Intl` gives a zone's offset at an instant but not the instant a local time falls on, so midnight
+ * is found from the offset. That is read twice, as date libraries do, because the offset in force at
+ * midnight is not known until midnight is: once at a first guess, and again at the instant that guess
+ * gives. On an ordinary day, DST days included, both land on midnight. Where the clocks change at
+ * midnight itself the two differ, and the earlier one that falls on the next day is its start.
+ */
+function endOfDayIn(instant: Date, timeZone: string): Date {
+  const wall = wallClockIn(timeZone);
+  /** The local date at `at`, as the UTC milliseconds of its midnight. */
+  const dateOf = (at: number) => Math.floor(wall(at) / DAY_MS) * DAY_MS;
+  /** How far the zone's clocks are ahead of UTC at `at`. */
+  const offsetAt = (at: number) => wall(at) - Math.floor(at / 1000) * 1000;
+
+  const today = dateOf(instant.getTime());
+  // Tomorrow's 00:00 in the zone's digits, read as though they were UTC.
+  const midnight = today + DAY_MS;
+  const first = midnight - offsetAt(midnight);
+  const second = midnight - offsetAt(first);
+  const tomorrow = [first, second].filter((at) => dateOf(at) > today);
+  return new Date(
+    tomorrow.length > 0 ? Math.min(...tomorrow) : Math.max(first, second),
+  );
 }

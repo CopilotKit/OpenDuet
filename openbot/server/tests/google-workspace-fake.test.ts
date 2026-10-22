@@ -1,4 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  setSystemTime,
+  test,
+} from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
@@ -500,6 +507,7 @@ describe("the adapter against the fake", () => {
       "Studio visit with Hearth & Co",
       "Pack the 120 mugs for Hearth & Co",
       "Makers Market vendor call",
+      "Evening wheel class",
     ]);
     const glaze = events.find(
       (event: { id: string }) => event.id === "glazetestreview",
@@ -516,14 +524,52 @@ describe("the adapter against the fake", () => {
     expect(events[0].start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  test("with no arguments the calendar answers with what is left of today", async () => {
+  test("with no arguments the calendar answers with what is left of today, in the studio's zone", async () => {
     const result = await callTool(connection, "calendar_list_events", {});
     expect(result.isError).toBe(false);
-    for (const event of JSON.parse(result.text).events) {
+    const parsed = JSON.parse(result.text);
+    // Read from the calendar, which is where the fake keeps the studio's zone, as Google does.
+    expect(parsed.timeZone).toBe("America/Los_Angeles");
+    expect(Object.keys(parsed)).not.toContain("note");
+    for (const event of parsed.events) {
       // Google's bound: an event is included while it has not yet ended.
       if (event.end.includes("T")) {
         expect(Date.parse(event.end)).toBeGreaterThan(Date.now() - 60_000);
       }
+    }
+  });
+
+  test("at 13:00 in the studio, the rest of today still holds the evening", async () => {
+    // 13:00 PDT, when the UTC day has four hours left and the studio's has eleven.
+    const oneInTheAfternoon = Date.parse("2026-10-22T20:00:00Z");
+    setSystemTime(new Date(oneInTheAfternoon));
+    const afternoon = startFakeGoogle({ now: () => oneInTheAfternoon });
+    try {
+      const { access_token } = await signIn(afternoon.url);
+      const result = await callTool(
+        { url: afternoon.url, token: access_token },
+        "calendar_list_events",
+        {},
+      );
+      expect(result.isError).toBe(false);
+      const parsed = JSON.parse(result.text);
+      expect(parsed.timeZone).toBe("America/Los_Angeles");
+      expect(
+        parsed.events.map((event: { summary: string }) => event.summary),
+      ).toEqual([
+        "Kiln 2 out of service",
+        "Lunch with Priya Shah: quarterly taxes",
+        "Studio visit with Hearth & Co",
+        // Everything from here on starts after 17:00 PDT, which is midnight UTC.
+        "Pack the 120 mugs for Hearth & Co",
+        "Makers Market vendor call",
+        "Evening wheel class",
+      ]);
+      const evening = parsed.events.at(-1);
+      expect(evening.start).toBe("2026-10-22T19:30:00-07:00");
+    } finally {
+      setSystemTime();
+      await afternoon.stop();
     }
   });
 });
