@@ -903,6 +903,102 @@ test("a first ready stale refresh still retries and renders a later stored messa
   ]);
 }, 3000);
 
+/*
+ * The store assembles a server-run reply from its events over about a second, and a read in that
+ * window returns the reply under its final id with pieces missing from the middle. Seen live after
+ * Allow once: "I repl … He's st oneell him?" until a reload.
+ */
+const assembling = {
+  id: "server-run-reply",
+  role: "assistant",
+  content: "I repl Sam. He's st oneell him?",
+} satisfies Message;
+const settled = {
+  id: "server-run-reply",
+  role: "assistant",
+  content:
+    "I replied to Sam. He's stuck on one more question, which one should I tell him?",
+} satisfies Message;
+
+test("a Bot reply read while the store is still assembling it is replaced by the settled text", async () => {
+  const view = await mounted();
+  let refreshReads = 0;
+  history = async () => {
+    refreshReads += 1;
+    return stored([initial, refreshReads === 1 ? assembling : settled]);
+  };
+
+  await announce(1, channel, { text: settled.content });
+  await view.findByText(settled.content, {}, { timeout: 3000 });
+
+  expect(view.queryByText(assembling.content)).toBeNull();
+  expect(currentAgent().messages).toEqual([initial, settled]);
+}, 5000);
+
+test("a reload while the store is still assembling a reply corrects it once the store settles", async () => {
+  let reads = 0;
+  const view = mounting(
+    async () => {
+      reads += 1;
+      return stored([initial, reads === 1 ? assembling : settled]);
+    },
+    [initial],
+    {
+      agentId: "refresh-bot",
+      at: "2026-09-10T12:00:00.000Z",
+      text: settled.content,
+    },
+  );
+
+  await view.findByText(settled.content, {}, { timeout: 3000 });
+
+  expect(view.queryByText(assembling.content)).toBeNull();
+  expect(currentAgent().messages).toEqual([initial, settled]);
+}, 5000);
+
+test("a reply this tab streamed is never replaced by a different stored copy of it", async () => {
+  const fullReply = {
+    id: "streamed-here",
+    role: "assistant",
+    content: "The whole reply, as it streamed here.",
+  } satisfies Message;
+  const relayed = {
+    id: "relayed-after",
+    role: "assistant",
+    content: "A relayed reply from another Bot",
+  } satisfies Message;
+  const view = mounting(async () => stored([initial]), [initial]);
+  await view.findByText(initial.content);
+  runEvents = (input) => [
+    { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+    { type: "TEXT_MESSAGE_START", messageId: fullReply.id, role: "assistant" },
+    {
+      type: "TEXT_MESSAGE_CONTENT",
+      messageId: fullReply.id,
+      delta: fullReply.content,
+    },
+    { type: "TEXT_MESSAGE_END", messageId: fullReply.id },
+    { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+  ];
+  const user = userEvent.setup({ document: view.container.ownerDocument });
+  await user.type(view.getByRole("textbox", { name: "Message" }), "Ask here");
+  await user.click(view.getByRole("button", { name: "Send message" }));
+  await view.findByText(fullReply.content);
+
+  history = async () =>
+    stored([
+      initial,
+      { ...fullReply, content: "The whole reply, as it" },
+      relayed,
+    ]);
+  await announce(1, channel, { agentId: "relay-bot", text: relayed.content });
+  await view.findByText(relayed.content);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  expect(view.getByText(fullReply.content)).toBeTruthy();
+  expect(view.queryByText("The whole reply, as it")).toBeNull();
+}, 5000);
+
 test("mixed history, exhausted failure, and recovery update the notice without duplicating messages", async () => {
   const view = await mounted();
   await act(async () => currentAgent().addMessage(local));
