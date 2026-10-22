@@ -15,7 +15,12 @@ export function AgentCard({
     return (
       <div className="flex h-[180px] w-[144px] flex-col overflow-hidden rounded-2xl border border-border bg-card p-3 transition-colors hover:border-ring dark:border-transparent">
         <div aria-hidden="true" className="flex shrink-0">
-          <AbstractAvatar name={agent.name} seed={agent.avatarSeed} size={36} />
+          <AbstractAvatar
+            id={agent.id}
+            name={agent.name}
+            seed={agent.avatarSeed}
+            size={36}
+          />
         </div>
         {/* Bottom-aligned, where the text sat on the earlier artwork card; the avatar holds the top. */}
         <div className="mt-auto flex min-w-0 flex-col gap-2">
@@ -36,7 +41,12 @@ export function AgentCard({
   return (
     <div className="relative flex h-[160px] w-full min-w-0 flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-card p-3 dark:border-transparent">
       <div aria-hidden="true" className="mb-1 flex shrink-0">
-        <AbstractAvatar name={agent.name} seed={agent.avatarSeed} size={28} />
+        <AbstractAvatar
+          id={agent.id}
+          name={agent.name}
+          seed={agent.avatarSeed}
+          size={28}
+        />
       </div>
       <div className="flex min-w-0 flex-col gap-2">
         <span

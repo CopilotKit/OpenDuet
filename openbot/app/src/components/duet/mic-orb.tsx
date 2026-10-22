@@ -170,21 +170,25 @@ const secondsSince = (start: number) => (performance.now() - start) / 1000;
  * when listening (pass `keystrokes`, any number that changes on each keystroke, to light them), works
  * with a light scanning the grilles when thinking, and lands with a ping and a smile when done.
  *
- * With reduced motion it is a still in the state's pose, redrawn only when the state changes.
+ * With reduced motion, or `still`, it is a still in the state's pose, drawn again only when the state
+ * or the theme changes. `still` is for an avatar: a portrait among other Bots' portraits, and cheap
+ * enough to repeat down a list.
  */
 export function MicOrb({
   className,
   keystrokes,
   size,
   state = "idle",
+  still = false,
 }: {
   className?: string;
   keystrokes?: number;
   size: number;
   state?: MicOrbState;
+  still?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const reduced = useReducedMotion() ?? false;
+  const reduced = (useReducedMotion() ?? false) || still;
   const clock = useRef<{ start: number; seed: number } | null>(null);
   clock.current ??= { start: performance.now(), seed: ++seeds * 7 };
   const motion = useRef<Motion | null>(null);
@@ -230,9 +234,16 @@ export function MicOrb({
       drawMicOrb(ctx, size, pose, { dark: canvas.closest(".dark") !== null });
     };
     if (reduced) {
-      // A composed still in the state's pose: eyes open, its look held, no ping.
-      draw(poseAt(settled(state), 1.6, seed, true));
-      return;
+      // A composed still in the state's pose: eyes open, its look held, no ping. Nothing draws it
+      // again on its own, so it is redrawn when the theme flips the root's `dark` class.
+      const paint = () => draw(poseAt(settled(state), 1.6, seed, true));
+      paint();
+      const theme = new MutationObserver(paint);
+      theme.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+      return () => theme.disconnect();
     }
     let frame = requestAnimationFrame(function loop() {
       draw(

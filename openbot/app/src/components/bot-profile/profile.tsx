@@ -78,7 +78,12 @@ export function BotProfile({
   return (
     <>
       <div className="mt-6 flex items-center gap-3">
-        <AbstractAvatar name={agent.name} seed={agent.avatarSeed} size={40} />
+        <AbstractAvatar
+          id={agent.id}
+          name={agent.name}
+          seed={agent.avatarSeed}
+          size={40}
+        />
         <div className="min-w-0">
           <p className="truncate font-medium">{agent.title}</p>
           <p className="line-clamp-2 text-muted-foreground text-sm">

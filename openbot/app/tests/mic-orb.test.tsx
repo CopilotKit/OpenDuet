@@ -40,7 +40,8 @@ const REST: OrbPose = {
 
 /**
  * Just enough of a 2D context to run the drawing: it keeps the shadow blur through save and
- * restore, and counts the strokes drawn with a glow, which is how a lit grille slot is drawn.
+ * restore, counts the strokes drawn with a glow, which is how a lit grille slot is drawn, and counts
+ * the frames drawn, each of which starts by clearing the canvas.
  */
 function fakeContext() {
   const stack: number[] = [];
@@ -48,6 +49,7 @@ function fakeContext() {
   const ctx = {
     shadowBlur: 0,
     litStrokes: 0,
+    draws: 0,
     save() {
       stack.push(this.shadowBlur);
     },
@@ -56,6 +58,9 @@ function fakeContext() {
     },
     stroke() {
       if (this.shadowBlur > 0) this.litStrokes++;
+    },
+    clearRect() {
+      this.draws++;
     },
     createLinearGradient: () => gradient,
     createRadialGradient: () => gradient,
@@ -156,6 +161,35 @@ describe("<MicOrb>", () => {
     const canvas = orb.querySelector("canvas") as HTMLCanvasElement;
     expect(canvas.style.width).toBe("80px");
     expect(canvas.style.left).toBe("-20px");
+  });
+
+  test("still, it draws once and again only when the theme changes, never on a frame loop", async () => {
+    const ctx = fakeContext();
+    let frames = 0;
+    const requestFrame = window.requestAnimationFrame;
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    window.requestAnimationFrame = (callback) => {
+      frames++;
+      return requestFrame(callback);
+    };
+    HTMLCanvasElement.prototype.getContext = (() =>
+      ctx) as unknown as typeof getContext;
+    try {
+      render(<MicOrb size={40} still />);
+      expect(ctx.draws).toBe(1);
+      document.documentElement.classList.add("dark");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(ctx.draws).toBe(2);
+      expect(frames).toBe(0);
+
+      cleanup();
+      render(<MicOrb size={40} />);
+      expect(frames).toBe(1);
+    } finally {
+      document.documentElement.classList.remove("dark");
+      window.requestAnimationFrame = requestFrame;
+      HTMLCanvasElement.prototype.getContext = getContext;
+    }
   });
 
   test("follows a change of state", () => {

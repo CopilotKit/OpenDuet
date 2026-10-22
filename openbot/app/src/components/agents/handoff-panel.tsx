@@ -114,6 +114,7 @@ export function HandoffPanel({ agentId }: { agentId: string }) {
               <Item size="sm">
                 <ItemMedia>
                   <AbstractAvatar
+                    id={candidate.id}
                     name={candidate.name}
                     seed={candidate.avatarSeed}
                     size={28}

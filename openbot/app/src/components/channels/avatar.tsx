@@ -1,5 +1,7 @@
 import Avatar from "boring-avatars";
 import { memo } from "react";
+import { MicOrb } from "@/components/duet/mic-orb";
+import { isTenantBot } from "@/lib/agents/primary-bot";
 import { cn } from "@/lib/utils";
 
 /**
@@ -11,6 +13,8 @@ import { cn } from "@/lib/utils";
  *
  * `typing` overlays a working indicator at the bottom-right — three bouncing dots, so a channel
  * whose agent is mid-turn reads as busy from the roster without moving the row's layout.
+ *
+ * The tenant's own Bot is the mic orb, still, as `AbstractAvatar` draws it.
  */
 export const ChannelAvatar = memo(function ChannelAvatar({
   participantIds,
@@ -23,7 +27,7 @@ export const ChannelAvatar = memo(function ChannelAvatar({
 }) {
   const avatar =
     participantIds.length === 1 ? (
-      <Avatar className="size-full" name={participantIds[0]} size={size} />
+      <Face id={participantIds[0]} size={size} />
     ) : (
       <GroupFaces participantIds={participantIds} size={size} />
     );
@@ -97,11 +101,19 @@ function GroupFaces({
               WebkitMaskComposite: "source-in",
             }}
           >
-            <Avatar className="size-full" name={id} size={diameter} />
+            <Face id={id} size={diameter} />
           </div>
         );
       })}
     </div>
+  );
+}
+
+function Face({ id, size }: { id: string; size: number }) {
+  return isTenantBot(id) ? (
+    <MicOrb size={size} still />
+  ) : (
+    <Avatar className="size-full" name={id} size={size} />
   );
 }
 
