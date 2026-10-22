@@ -922,6 +922,7 @@ export function ChannelChat({
         <div className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col">
           <VoiceCallWidget
             call={call}
+            agentId={runtimeAgentId}
             name={botName}
             avatarSeed={
               agentProfiles?.find((profile) => profile.id === runtimeAgentId)

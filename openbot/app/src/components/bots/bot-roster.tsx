@@ -153,6 +153,7 @@ function RosterRows({
             >
               <ItemMedia>
                 <AbstractAvatar
+                  id={agent.id}
                   name={agent.name}
                   seed={agent.avatarSeed}
                   size={28}

@@ -1,5 +1,7 @@
 # The name people see everywhere in the app: the sidebar, the sign-in page, the onboarding.
 # Change product_name to your own and restart; nothing else in the code names the product.
+# tenant.id is also the id of the product's own Bot in agents.yaml: the app draws that Bot as the mic
+# orb and its Chat tab is about it. Rename the two together.
 tenant:
   id: openduet
   product_name: OpenDuet

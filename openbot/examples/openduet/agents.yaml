@@ -2,6 +2,8 @@
 # model and the skills. Copy it, change it, and point TENANT_PACKAGE_DIR at your copy to make the
 # product your own. OpenBot's code underneath stays as it is, so OpenBot's fixes can still be brought in.
 agents:
+  # The product's own Bot, because its id is the tenant's id in brand.yaml. The app draws it as the
+  # mic orb, and every other Bot as a disc.
   - id: openduet
     name: OpenDuet
     title: Your proactive assistant
