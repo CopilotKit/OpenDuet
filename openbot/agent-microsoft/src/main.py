@@ -1,5 +1,6 @@
 """Microsoft Agent Framework as a Bot, through `agent-framework-ag-ui`, which Microsoft publishes."""
 
+import hashlib
 import hmac
 import os
 import sys
@@ -60,4 +61,16 @@ async def health():
     return {"ok": True, "harness": "microsoft-agent-framework"}
 
 
-add_agent_framework_fastapi_endpoint(app, agent, "/")
+def _authorization_scope(request: Request) -> str:
+    """The caller Agent Framework keeps this run's sessions and approval state under.
+
+    The middleware above has already refused any request without MANAGED_AGENT_TOKEN, and that
+    token belongs to the deployment rather than to a person: people sign in to the server, not
+    here. So every run that gets this far comes from one principal, named here by the credential
+    that let it in. A digest rather than the token, because the scope is kept as a key in memory.
+    """
+    offered = (request.headers.get(TOKEN_HEADER) or "").strip()
+    return "openbot-deployment:" + hashlib.sha256(offered.encode("utf-8")).hexdigest()
+
+
+add_agent_framework_fastapi_endpoint(app, agent, "/", authorization_scope_resolver=_authorization_scope)
