@@ -7,17 +7,26 @@ import { DuetIcon, type DuetIconName } from "./icons";
  * the white card, the icon tile, the hairline, the outcome pill, the topic label and the typing dots.
  */
 
-/** A white card with a hairline and a soft drop: every card in the thread, Tasks and Activity. */
+/**
+ * A white card with a hairline and a soft drop: every card in the thread, Tasks and Activity.
+ * `glass` is for a card that floats over a scrolling screen rather than sitting in it.
+ */
 export function DuetCard({
   className,
   raised = false,
+  glass = false,
   ...props
-}: ComponentProps<"div"> & { raised?: boolean }) {
+}: ComponentProps<"div"> & { raised?: boolean; glass?: boolean }) {
   return (
     <div
       className={cn(
-        "duet-face w-full overflow-hidden rounded-[22px] bg-duet-card text-duet-ink",
-        raised ? "shadow-duet-raised" : "shadow-duet-card",
+        "duet-face w-full overflow-hidden rounded-[22px] text-duet-ink",
+        glass
+          ? "duet-glass shadow-duet-glass"
+          : [
+              "bg-duet-card",
+              raised ? "shadow-duet-raised" : "shadow-duet-card",
+            ],
         className,
       )}
       {...props}

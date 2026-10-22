@@ -77,7 +77,7 @@ function SuggestionFor({ bot }: { bot: ChatBot }) {
     <DuetCard
       aria-label={`${bot.name} could take this on`}
       className="mb-2.5 px-4 py-3"
-      raised
+      glass
       role="region"
     >
       <p className="type-label font-semibold text-duet-violet">

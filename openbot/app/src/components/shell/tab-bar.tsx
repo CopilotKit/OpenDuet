@@ -37,7 +37,7 @@ export function TabBar({ current }: { current: ShellTab }) {
   return (
     <nav
       aria-label="Main"
-      className="duet-face relative z-20 mx-auto mb-[22px] flex h-16 w-[300px] max-w-[calc(100%-32px)] shrink-0 gap-0.5 rounded-[32px] bg-duet-card p-[5px] shadow-duet-float"
+      className="duet-face duet-glass absolute inset-x-0 bottom-[22px] z-20 mx-auto flex h-16 w-[300px] max-w-[calc(100%-32px)] gap-0.5 rounded-[32px] p-[5px] shadow-duet-glass"
     >
       {TABS.map((tab) => {
         const on = tab.id === current;

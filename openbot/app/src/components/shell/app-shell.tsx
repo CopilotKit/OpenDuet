@@ -36,7 +36,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         <AttentionNotifier />
         <SelfHostBanner />
         {tab ? (
-          <div className="duet-face relative mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col text-duet-ink">
+          /*
+           * The tab bar floats over the foot of every tab, frosted, so what scrolls reaches the
+           * bottom of the screen. `--duet-tab-space` is the height it covers there (64px and its
+           * 22px from the edge): a screen pads its end by it, and Chat docks its composer above it.
+           */
+          <div className="duet-face relative mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col text-duet-ink [--duet-tab-space:86px]">
             <ShellHeader
               floating
               menuOpen={menuOpen}

@@ -131,6 +131,11 @@ export type ComposerProps = {
    */
   editorClassName?: string;
   compact?: boolean;
+  /**
+   * Frosted rather than white, for a compact composer that floats over the conversation scrolling
+   * under it (Chat). Anywhere the composer sits below the conversation instead, white reads better.
+   */
+  glass?: boolean;
   voiceCall?: { active: boolean; supported: boolean; onStart(): void };
   /** Agents that `@` can address. Empty means the mention menu reports an empty channel. */
   agents?: readonly AgentOption[];
@@ -322,6 +327,7 @@ export function Composer({
   className,
   editorClassName,
   compact = false,
+  glass = false,
   voiceCall,
   agents = [],
   commands = PLACEHOLDER_COMMANDS,
@@ -1524,7 +1530,10 @@ export function Composer({
              * The film's composer: a white pill floating on a soft shadow, its controls on the
              * bottom line. No ring when it has the caret; the caret says so.
              */
-            "duet-face flex min-h-[54px] flex-col rounded-[27px] bg-duet-card p-[9px] shadow-duet-float",
+            "duet-face flex min-h-[54px] flex-col rounded-[27px] p-[9px]",
+            glass
+              ? "duet-glass shadow-duet-glass"
+              : "bg-duet-card shadow-duet-float",
             className,
           )}
           onSubmit={handleFormSubmit}
