@@ -1,7 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { ActivityScreen } from "@/components/shell/activity-screen";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-/** Activity: what the product's own Bot did, and what it does next. */
+/**
+ * `/activity` became Pages, and what Activity listed as handled for you is Done at the foot of
+ * Tasks. Notifications and links sent before still point here, so they land on Pages.
+ */
 export const Route = createFileRoute("/_authed/_app/activity")({
-  component: ActivityScreen,
+  beforeLoad: () => {
+    throw redirect({ to: "/pages", replace: true });
+  },
 });

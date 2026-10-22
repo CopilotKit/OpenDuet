@@ -30,6 +30,7 @@ import {
   stepFor,
   useReportChatPresence,
 } from "@/components/shell/chat-presence";
+import { PageSheetHost } from "@/components/duet/page-sheet";
 import { ChatSuggestionCard } from "@/components/shell/chat-suggestion";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { newId } from "../../lib/new-id";
@@ -549,6 +550,8 @@ export function ConversationView({
             restoring={restoring}
             {...(stopped ? { stopped } : {})}
           />
+          {/* A page the Bot made, opened from its card over this conversation. */}
+          <PageSheetHost />
         </ConversationSendContext.Provider>
       </div>
       <div

@@ -34,6 +34,7 @@ import { queryClient } from "@/query-client";
 import {
   ActivityCard,
   type ActivityRow,
+  handledRows,
   RowButton,
   upcomingRow,
   workingRow,
@@ -53,9 +54,9 @@ const SWIPE_TO_START = 96;
 
 /**
  * The Tasks tab: the person's to-do list, grouped by what each thing needs. Top to bottom, what
- * waits on the person, what their Bots suggest, what the product's own Bot is working on, and what
- * it has lined up. A section with nothing in it is left out, except Suggested, which is also where
- * background research is turned on.
+ * waits on the person, what their Bots suggest, what the product's own Bot is working on, what it
+ * has lined up, and what it has done. A section with nothing in it is left out, except Suggested,
+ * which is also where background research is turned on.
  */
 export function TasksScreen() {
   const agents = useQuery(agentListQueryOptions());
@@ -78,6 +79,7 @@ export function TasksScreen() {
         <NeedsYou agents={agents.data} />
         <Suggested agents={agents.data} bot={bot} />
         {bot ? <BotWork bot={bot} /> : null}
+        {bot ? <Done bot={bot} /> : null}
       </div>
     </ScreenScroll>
   );
@@ -594,4 +596,22 @@ function BotWork({ bot }: { bot: AgentProfile }) {
       ) : null}
     </>
   );
+}
+
+/**
+ * What the product's own Bot finished, at the foot of the list: its routines, follow-ups and
+ * delegated work, and the actions the person allowed or refused, newest first. The rows Activity's
+ * "Handled for you" had, read-only. Left out until there is something in it; a failure to load is
+ * said once, by Working on.
+ */
+function Done({ bot }: { bot: AgentProfile }) {
+  const activity = useQuery(botActivityQueryOptions(bot.id));
+  const inbox = useQuery(approvalInboxOptions());
+  if (activity.isPending || !activity.data) return null;
+  const rows = handledRows(
+    activity.data.completed,
+    inbox.data?.requests ?? [],
+    bot.id,
+  );
+  return rows.length ? <ActivityCard rows={rows} title="Done" /> : null;
 }

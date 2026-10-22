@@ -22,6 +22,7 @@ import { Route as AuthedAppBotRouteImport } from './routes/_authed/_app/bot'
 import { Route as AuthedAppCapabilitiesRouteImport } from './routes/_authed/_app/capabilities'
 import { Route as AuthedAppInboxRouteImport } from './routes/_authed/_app/inbox'
 import { Route as AuthedAppMemoryRouteImport } from './routes/_authed/_app/memory'
+import { Route as AuthedAppPagesRouteImport } from './routes/_authed/_app/pages'
 import { Route as AuthedAppReachabilityRouteImport } from './routes/_authed/_app/reachability'
 import { Route as AuthedAppResponsibilitiesRouteImport } from './routes/_authed/_app/responsibilities'
 import { Route as AuthedAppRoutinesRouteImport } from './routes/_authed/_app/routines'
@@ -58,6 +59,7 @@ import { Route as AuthedAppConnectionsIndexRouteImport } from './routes/_authed/
 import { Route as AuthedAppConnectionsKeyRouteImport } from './routes/_authed/_app/connections.$key'
 import { Route as AuthedAppGroupChannelIdRouteImport } from './routes/_authed/_app/group/$channelId'
 import { Route as AuthedAppGroupNewRouteImport } from './routes/_authed/_app/group/new'
+import { Route as AuthedAppPagesPageIdRouteImport } from './routes/_authed/_app/pages.$pageId'
 import { Route as AuthedAdminComponentsIndexRouteImport } from './routes/_authed/admin/components/index'
 import { Route as AuthedAdminComponentsNameRouteImport } from './routes/_authed/admin/components/$name'
 import { Route as AuthedAdminPluginsIndexRouteImport } from './routes/_authed/admin/plugins/index'
@@ -141,6 +143,11 @@ const AuthedAppInboxRoute = AuthedAppInboxRouteImport.update({
 const AuthedAppMemoryRoute = AuthedAppMemoryRouteImport.update({
   id: '/memory',
   path: '/memory',
+  getParentRoute: () => AuthedAppRoute,
+} as any)
+const AuthedAppPagesRoute = AuthedAppPagesRouteImport.update({
+  id: '/pages',
+  path: '/pages',
   getParentRoute: () => AuthedAppRoute,
 } as any)
 const AuthedAppReachabilityRoute = AuthedAppReachabilityRouteImport.update({
@@ -331,6 +338,11 @@ const AuthedAppGroupNewRoute = AuthedAppGroupNewRouteImport.update({
   path: '/group/new',
   getParentRoute: () => AuthedAppRoute,
 } as any)
+const AuthedAppPagesPageIdRoute = AuthedAppPagesPageIdRouteImport.update({
+  id: '/$pageId',
+  path: '/$pageId',
+  getParentRoute: () => AuthedAppPagesRoute,
+} as any)
 const AuthedAdminComponentsIndexRoute =
   AuthedAdminComponentsIndexRouteImport.update({
     id: '/components/',
@@ -468,6 +480,7 @@ export interface FileRoutesByFullPath {
   '/capabilities': typeof AuthedAppCapabilitiesRouteWithChildren
   '/inbox': typeof AuthedAppInboxRoute
   '/memory': typeof AuthedAppMemoryRoute
+  '/pages': typeof AuthedAppPagesRouteWithChildren
   '/reachability': typeof AuthedAppReachabilityRoute
   '/responsibilities': typeof AuthedAppResponsibilitiesRoute
   '/routines': typeof AuthedAppRoutinesRoute
@@ -500,6 +513,7 @@ export interface FileRoutesByFullPath {
   '/connections/$key': typeof AuthedAppConnectionsKeyRoute
   '/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/group/new': typeof AuthedAppGroupNewRoute
+  '/pages/$pageId': typeof AuthedAppPagesPageIdRoute
   '/admin/components/$name': typeof AuthedAdminComponentsNameRoute
   '/admin/plugins/$key': typeof AuthedAdminPluginsKeyRoute
   '/admin/plugins/arcade': typeof AuthedAdminPluginsArcadeRoute
@@ -535,6 +549,7 @@ export interface FileRoutesByTo {
   '/bot': typeof AuthedAppBotRoute
   '/inbox': typeof AuthedAppInboxRoute
   '/memory': typeof AuthedAppMemoryRoute
+  '/pages': typeof AuthedAppPagesRouteWithChildren
   '/reachability': typeof AuthedAppReachabilityRoute
   '/responsibilities': typeof AuthedAppResponsibilitiesRoute
   '/routines': typeof AuthedAppRoutinesRoute
@@ -567,6 +582,7 @@ export interface FileRoutesByTo {
   '/connections/$key': typeof AuthedAppConnectionsKeyRoute
   '/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/group/new': typeof AuthedAppGroupNewRoute
+  '/pages/$pageId': typeof AuthedAppPagesPageIdRoute
   '/admin/components/$name': typeof AuthedAdminComponentsNameRoute
   '/admin/plugins/$key': typeof AuthedAdminPluginsKeyRoute
   '/admin/plugins/arcade': typeof AuthedAdminPluginsArcadeRoute
@@ -607,6 +623,7 @@ export interface FileRoutesById {
   '/_authed/_app/capabilities': typeof AuthedAppCapabilitiesRouteWithChildren
   '/_authed/_app/inbox': typeof AuthedAppInboxRoute
   '/_authed/_app/memory': typeof AuthedAppMemoryRoute
+  '/_authed/_app/pages': typeof AuthedAppPagesRouteWithChildren
   '/_authed/_app/reachability': typeof AuthedAppReachabilityRoute
   '/_authed/_app/responsibilities': typeof AuthedAppResponsibilitiesRoute
   '/_authed/_app/routines': typeof AuthedAppRoutinesRoute
@@ -640,6 +657,7 @@ export interface FileRoutesById {
   '/_authed/_app/connections/$key': typeof AuthedAppConnectionsKeyRoute
   '/_authed/_app/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/_authed/_app/group/new': typeof AuthedAppGroupNewRoute
+  '/_authed/_app/pages/$pageId': typeof AuthedAppPagesPageIdRoute
   '/_authed/admin/components/$name': typeof AuthedAdminComponentsNameRoute
   '/_authed/admin/plugins/$key': typeof AuthedAdminPluginsKeyRoute
   '/_authed/admin/plugins/arcade': typeof AuthedAdminPluginsArcadeRoute
@@ -680,6 +698,7 @@ export interface FileRouteTypes {
     | '/capabilities'
     | '/inbox'
     | '/memory'
+    | '/pages'
     | '/reachability'
     | '/responsibilities'
     | '/routines'
@@ -712,6 +731,7 @@ export interface FileRouteTypes {
     | '/connections/$key'
     | '/group/$channelId'
     | '/group/new'
+    | '/pages/$pageId'
     | '/admin/components/$name'
     | '/admin/plugins/$key'
     | '/admin/plugins/arcade'
@@ -747,6 +767,7 @@ export interface FileRouteTypes {
     | '/bot'
     | '/inbox'
     | '/memory'
+    | '/pages'
     | '/reachability'
     | '/responsibilities'
     | '/routines'
@@ -779,6 +800,7 @@ export interface FileRouteTypes {
     | '/connections/$key'
     | '/group/$channelId'
     | '/group/new'
+    | '/pages/$pageId'
     | '/admin/components/$name'
     | '/admin/plugins/$key'
     | '/admin/plugins/arcade'
@@ -818,6 +840,7 @@ export interface FileRouteTypes {
     | '/_authed/_app/capabilities'
     | '/_authed/_app/inbox'
     | '/_authed/_app/memory'
+    | '/_authed/_app/pages'
     | '/_authed/_app/reachability'
     | '/_authed/_app/responsibilities'
     | '/_authed/_app/routines'
@@ -851,6 +874,7 @@ export interface FileRouteTypes {
     | '/_authed/_app/connections/$key'
     | '/_authed/_app/group/$channelId'
     | '/_authed/_app/group/new'
+    | '/_authed/_app/pages/$pageId'
     | '/_authed/admin/components/$name'
     | '/_authed/admin/plugins/$key'
     | '/_authed/admin/plugins/arcade'
@@ -974,6 +998,13 @@ declare module '@tanstack/react-router' {
       path: '/memory'
       fullPath: '/memory'
       preLoaderRoute: typeof AuthedAppMemoryRouteImport
+      parentRoute: typeof AuthedAppRoute
+    }
+    '/_authed/_app/pages': {
+      id: '/_authed/_app/pages'
+      path: '/pages'
+      fullPath: '/pages'
+      preLoaderRoute: typeof AuthedAppPagesRouteImport
       parentRoute: typeof AuthedAppRoute
     }
     '/_authed/_app/reachability': {
@@ -1228,6 +1259,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAppGroupNewRouteImport
       parentRoute: typeof AuthedAppRoute
     }
+    '/_authed/_app/pages/$pageId': {
+      id: '/_authed/_app/pages/$pageId'
+      path: '/$pageId'
+      fullPath: '/pages/$pageId'
+      preLoaderRoute: typeof AuthedAppPagesPageIdRouteImport
+      parentRoute: typeof AuthedAppPagesRoute
+    }
     '/_authed/admin/components/': {
       id: '/_authed/admin/components/'
       path: '/components'
@@ -1475,6 +1513,18 @@ const AuthedAppCapabilitiesRouteWithChildren =
     AuthedAppCapabilitiesRouteChildren,
   )
 
+interface AuthedAppPagesRouteChildren {
+  AuthedAppPagesPageIdRoute: typeof AuthedAppPagesPageIdRoute
+}
+
+const AuthedAppPagesRouteChildren: AuthedAppPagesRouteChildren = {
+  AuthedAppPagesPageIdRoute: AuthedAppPagesPageIdRoute,
+}
+
+const AuthedAppPagesRouteWithChildren = AuthedAppPagesRoute._addFileChildren(
+  AuthedAppPagesRouteChildren,
+)
+
 interface AuthedAppRouteChildren {
   AuthedAppActivityRoute: typeof AuthedAppActivityRoute
   AuthedAppApprovalsRoute: typeof AuthedAppApprovalsRoute
@@ -1482,6 +1532,7 @@ interface AuthedAppRouteChildren {
   AuthedAppCapabilitiesRoute: typeof AuthedAppCapabilitiesRouteWithChildren
   AuthedAppInboxRoute: typeof AuthedAppInboxRoute
   AuthedAppMemoryRoute: typeof AuthedAppMemoryRoute
+  AuthedAppPagesRoute: typeof AuthedAppPagesRouteWithChildren
   AuthedAppReachabilityRoute: typeof AuthedAppReachabilityRoute
   AuthedAppResponsibilitiesRoute: typeof AuthedAppResponsibilitiesRoute
   AuthedAppRoutinesRoute: typeof AuthedAppRoutinesRoute
@@ -1516,6 +1567,7 @@ const AuthedAppRouteChildren: AuthedAppRouteChildren = {
   AuthedAppCapabilitiesRoute: AuthedAppCapabilitiesRouteWithChildren,
   AuthedAppInboxRoute: AuthedAppInboxRoute,
   AuthedAppMemoryRoute: AuthedAppMemoryRoute,
+  AuthedAppPagesRoute: AuthedAppPagesRouteWithChildren,
   AuthedAppReachabilityRoute: AuthedAppReachabilityRoute,
   AuthedAppResponsibilitiesRoute: AuthedAppResponsibilitiesRoute,
   AuthedAppRoutinesRoute: AuthedAppRoutinesRoute,

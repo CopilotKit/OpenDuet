@@ -4,30 +4,33 @@ import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import { approvalInboxOptions, waitingOnYou } from "@/lib/approvals";
 import { cn } from "@/lib/utils";
 
-export type ShellTab = "chat" | "tasks" | "activity";
+export type ShellTab = "chat" | "tasks" | "pages";
 
 const TABS: {
   id: ShellTab;
-  to: "/" | "/tasks" | "/activity";
+  to: "/" | "/tasks" | "/pages";
   icon: DuetIconName;
   label: string;
 }[] = [
   { id: "chat", to: "/", icon: "chat", label: "Chat" },
   { id: "tasks", to: "/tasks", icon: "tasks", label: "Tasks" },
-  { id: "activity", to: "/activity", icon: "activity", label: "Activity" },
+  { id: "pages", to: "/pages", icon: "page", label: "Pages" },
 ];
 
-/** Which tab a path belongs to, or null for a screen opened from the menu. */
+/**
+ * Which tab a path belongs to, or null for a screen opened from the menu. A page open over the
+ * Pages list (`/pages/<id>`) is still the Pages tab.
+ */
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
   if (path === "/tasks") return "tasks";
-  if (path === "/activity") return "activity";
+  if (path === "/pages" || /^\/pages\/[^/]+$/.test(path)) return "pages";
   return null;
 }
 
 /**
- * The floating pill at the foot of the app: Chat, Tasks and Activity, the current one on a grey
+ * The floating pill at the foot of the app: Chat, Tasks and Pages, the current one on a grey
  * capsule. Tasks carries the number of things waiting on the person, counted from the same list its
  * "Needs you" section shows, so the badge and the screen never disagree.
  */
