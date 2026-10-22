@@ -24,7 +24,7 @@ Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit In
 
 <table><tr><td>
 
-![OpenDuet by CopilotKit. The open-source proactive agent. A notification card reads: Morning brief. 2 things need you, 5 can wait. Send your reply to Priya? Allow once, Always allow, Refuse.](./assets/banner.png)
+![OpenDuet by CopilotKit. The open-source proactive agent. A notification card from OpenDuet, marked with its blue mic orb, reads: Morning brief. 2 things need you, 5 can wait. Send your reply to Priya? Allow once, Always allow, Refuse.](./assets/banner.png)
 
 </td></tr></table>
 

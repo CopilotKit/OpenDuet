@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { ComponentProps } from "react";
-import { DuetIcon, KiteMark } from "@/components/duet/icons";
+import { DuetIcon } from "@/components/duet/icons";
+import { MicOrb } from "@/components/duet/mic-orb";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { appConfig } from "@/lib/generated/application-config";
 import { cn } from "@/lib/utils";
@@ -16,8 +17,8 @@ export function initialOf(user: { name?: string | null; email: string }) {
 }
 
 /**
- * The film's header: three discs over the content, the menu on the left, the mark in the centre
- * (back to Chat), the person's initial on the right (their settings).
+ * The film's header: the menu in a disc on the left, OpenDuet's mic orb in the centre (back to
+ * Chat), the person's initial in a disc on the right (their settings).
  *
  * `floating` lays it over a screen that scrolls under it, behind a fade, as on Chat, Inbox and
  * Activity. Otherwise it is a bar in the page's flow, for the screens the menu opens.
@@ -54,11 +55,11 @@ export function ShellHeader({
       </Disc>
       <Link
         aria-label={`${appConfig.brand.productName} chat`}
-        className={cn(DISC, "pointer-events-auto")}
+        className="pointer-events-auto grid shrink-0 place-items-center rounded-full transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
         style={{ width: centre, height: centre }}
         to="/"
       >
-        <KiteMark id="shell-mark" optical size={centre * 0.55} />
+        <MicOrb size={centre - 2} />
       </Link>
       <Link
         aria-label="Your settings"
