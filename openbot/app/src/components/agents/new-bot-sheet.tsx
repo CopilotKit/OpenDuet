@@ -9,7 +9,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { MotionConfig, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { HarnessMark } from "@/components/agents/harness-mark";
-import AgentOrb from "@/components/agents/orb/agent-orb";
+import { MicOrb } from "@/components/duet/mic-orb";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -319,8 +319,9 @@ function NewBotFlow({ onCreated }: { onCreated: (agentId: string) => void }) {
         <MotionConfig reducedMotion="user">
           {/* Shares its layout id with the orb on the created view, so it travels there. */}
           <motion.div className="w-fit" layoutId={ORB_LAYOUT_ID}>
-            <AgentOrb
-              size="40px"
+            <MicOrb
+              keystrokes={name.length}
+              size={40}
               state={busy ? "thinking" : named ? "listening" : "idle"}
             />
           </motion.div>
@@ -444,7 +445,7 @@ function CreatedView({ name }: { name: string }) {
           layoutId={ORB_LAYOUT_ID}
           transition={{ type: "spring", bounce: 0.25, duration: 0.7 }}
         >
-          <AgentOrb size="88px" state="done" />
+          <MicOrb size={88} state="done" />
         </motion.div>
         <motion.span
           animate={{ opacity: 1, scale: 1 }}

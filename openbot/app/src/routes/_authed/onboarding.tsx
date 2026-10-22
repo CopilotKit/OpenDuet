@@ -6,7 +6,7 @@ import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import * as React from "react";
 import useMeasure from "react-use-measure";
 import { HarnessMark } from "@/components/agents/harness-mark";
-import AgentOrb from "@/components/agents/orb/agent-orb";
+import { MicOrb } from "@/components/duet/mic-orb";
 import { Composer } from "@/components/channels/composer";
 import { DesktopIllustration } from "@/components/computer/desktop-illustration";
 import { ComputerPlaceholder } from "@/components/computer/placeholder";
@@ -47,7 +47,7 @@ function WelcomeStep() {
         className="flex flex-col items-center px-8 pt-16 pb-10"
         label="A message box where you hand off tasks to your Bots"
       >
-        <AgentOrb size="72px" />
+        <MicOrb size={72} />
         {/*
          * A POSTER OF A COMPOSER, AND THE FRAME AROUND IT IS WHAT MAKES IT ONE: `IllustrationFrame` is
          * `pointer-events-none` and `inert`. Nothing here is

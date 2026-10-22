@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from "motion/react";
-import AgentOrb from "@/components/agents/orb/agent-orb";
+import { MicOrb } from "@/components/duet/mic-orb";
 import { appConfig } from "@/lib/generated/application-config";
 
 /**
@@ -31,7 +31,7 @@ export function LaptopIllustration() {
             initial={reduceMotion ? false : { opacity: 0, filter: "blur(8px)" }}
             transition={{ delay: 1, duration: 0.6 }}
           >
-            <AgentOrb size="44px" />
+            <MicOrb size={44} />
             <span className="text-xs font-semibold tracking-tight">
               {appConfig.brand.productName}
             </span>
