@@ -4,6 +4,7 @@ import { AttentionNotifier } from "@/components/bot-profile/attention";
 import { SelfHostBanner } from "@/components/layout/self-host-banner";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
 import { ChatPresenceProvider } from "./chat-presence";
+import { FinishedForYou } from "./finished-for-you";
 import { ShellHeader } from "./header";
 import { MenuSheet } from "./menu-sheet";
 import { TabBar, tabForPath } from "./tab-bar";
@@ -34,6 +35,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <ChatPresenceProvider>
       <div className="flex h-svh flex-col overflow-hidden bg-duet-surface">
         <AttentionNotifier />
+        <FinishedForYou />
         <SelfHostBanner />
         {tab ? (
           /*

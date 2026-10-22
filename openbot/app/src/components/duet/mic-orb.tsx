@@ -5,6 +5,8 @@ import {
   blinkCurve,
   clamp,
   drawMicOrb,
+  FINISH_HELD,
+  FINISH_S,
   mulberry32,
   nodCurve,
   type OrbPose,
@@ -14,8 +16,21 @@ import {
   track,
 } from "./mic-orb-draw";
 
-/** What the orb is doing: resting, listening to you type, working, or landing a finished thing. */
-export type MicOrbState = "idle" | "listening" | "thinking" | "done";
+/**
+ * What the orb is doing: resting, listening to you type, working, or landing a finished thing.
+ * `finished` is a moment rather than a state: something the person allowed is done, and the orb
+ * plays a check with a burst of rays once, over whatever it was doing, which carries on under it.
+ * Hold it for `FINISH_MS`, then pass the state it was in before.
+ */
+export type MicOrbState =
+  | "idle"
+  | "listening"
+  | "thinking"
+  | "done"
+  | "finished";
+
+/** How long a finish plays: the check, its rays, and the eyes coming back. */
+export const FINISH_MS = FINISH_S * 1000;
 
 type Look = readonly [number, number];
 const LOOK_AT_YOU: Look = [0, 0.04];
@@ -28,6 +43,7 @@ const LOOKS: Record<MicOrbState, Look> = {
   listening: LOOK_DOWN,
   thinking: LOOK_UP,
   done: LOOK_AT_YOU,
+  finished: LOOK_AT_YOU,
 };
 /** Seconds between blinks, before each one's jitter. */
 const BLINK_EVERY = 4.2;
@@ -46,6 +62,7 @@ type Motion = {
   ay: Track;
   doneAt: number;
   noticedAt: number;
+  finishedAt: number;
   nods: number[];
   keys: number[];
 };
@@ -64,6 +81,7 @@ function settled(state: MicOrbState): Motion {
     ay: still(look[1]),
     doneAt: -1,
     noticedAt: -1,
+    finishedAt: state === "finished" ? 0 : -1,
     nods: [],
     keys: [],
   };
@@ -157,6 +175,8 @@ function poseAt(m: Motion, t: number, seed: number, reduced: boolean): OrbPose {
     key: Math.min(1, key),
     doneAge: m.doneAt < 0 ? -1 : t - m.doneAt,
     noticeAge: m.noticedAt < 0 ? -1 : t - m.noticedAt,
+    // Still, a finish is its check without the burst.
+    finishAge: m.finishedAt < 0 ? -1 : reduced ? FINISH_HELD : t - m.finishedAt,
     breath: Math.sin((Math.PI * 2 * t) / 5.5),
   };
 }
@@ -169,6 +189,8 @@ const secondsSince = (start: number) => (performance.now() - start) / 1000;
  * past it. It breathes and glances about when idle, opens its grilles and watches what you type
  * when listening (pass `keystrokes`, any number that changes on each keystroke, to light them), works
  * with a light scanning the grilles when thinking, and lands with a ping and a smile when done.
+ * Passed `finished`, its eyes give way to a check while short rays burst out round it, and then it
+ * is back as it was.
  *
  * With reduced motion, or `still`, it is a still in the state's pose, drawn again only when the state
  * or the theme changes. `still` is for an avatar: a portrait among other Bots' portraits, and cheap
@@ -195,14 +217,24 @@ export function MicOrb({
   const shown = useRef<MicOrbState | null>(null);
 
   // It starts at rest in its first state, except that a first "done" still lands. After that a
-  // change moves every track from where it is, so a change mid-motion never jumps.
+  // change moves every track from where it is, so a change mid-motion never jumps. A finish moves
+  // no track: it plays over the state it was in, and coming back to that state changes nothing.
   useEffect(() => {
-    if (shown.current === state || !clock.current) return;
+    if (!clock.current) return;
     const t = secondsSince(clock.current.start);
+    if (state === "finished") {
+      motion.current = {
+        ...(motion.current ?? settled("idle")),
+        finishedAt: t,
+      };
+      return;
+    }
+    if (shown.current === state) return;
+    const before = motion.current;
     motion.current =
       shown.current === null && state !== "done"
-        ? settled(state)
-        : enter(motion.current ?? settled("idle"), state, t);
+        ? { ...settled(state), finishedAt: before?.finishedAt ?? -1 }
+        : enter(before ?? settled("idle"), state, t);
     shown.current = state;
   }, [state]);
 
@@ -234,9 +266,14 @@ export function MicOrb({
       drawMicOrb(ctx, size, pose, { dark: canvas.closest(".dark") !== null });
     };
     if (reduced) {
-      // A composed still in the state's pose: eyes open, its look held, no ping. Nothing draws it
-      // again on its own, so it is redrawn when the theme flips the root's `dark` class.
-      const paint = () => draw(poseAt(settled(state), 1.6, seed, true));
+      // A composed still in the state's pose: eyes open, its look held, no ping; finished, the check
+      // in place of the eyes, with no burst, for as long as it is held. Nothing draws it again on its
+      // own, so it is redrawn when the theme flips the root's `dark` class.
+      const held =
+        state === "finished"
+          ? { ...settled(shown.current ?? "idle"), finishedAt: 0 }
+          : settled(state);
+      const paint = () => draw(poseAt(held, 1.6, seed, true));
       paint();
       const theme = new MutationObserver(paint);
       theme.observe(document.documentElement, {

@@ -1,7 +1,9 @@
 /**
  * The mic orb, OpenDuet's presence, drawn on a 2D canvas exactly as the launch film draws it: a
  * glass sphere of drifting colour, two eye-lights that look, blink and smile, and a lined grille on
- * each side like a microphone's. Only the Ocean colours are here; they are OpenDuet's.
+ * each side like a microphone's. Only the Ocean colours are here; they are OpenDuet's. One thing
+ * the film does not have: a finish, the check and the burst of rays the orb plays when something the
+ * person allowed is done.
  *
  * Every frame is a pure function of an `OrbPose`, so the component that animates it owns time and
  * this file owns only the picture.
@@ -216,9 +218,58 @@ export type OrbPose = {
   key: number;
   doneAge: number;
   noticeAge: number;
+  /** Seconds into a finish (a check and a burst of rays, `finishPhase`), or -1 when none is playing. */
+  finishAge: number;
   /** -1 to 1, a slow breath. */
   breath: number;
 };
+
+// ---------- the finish ----------
+
+/** How long a finish plays, in seconds, from the eyes giving way to the check until they are back. */
+export const FINISH_S = 1.2;
+/** A moment in a finish when the check is whole and the rays have gone: the finish as a still. */
+export const FINISH_HELD = 0.8;
+/** The short strokes that burst out round the orb when it finishes. */
+export const RAYS = 10;
+
+/** Where a finish is at one moment. Every part of it is a pure function of its age. */
+export type FinishPhase = {
+  /** How much of the check is drawn along its stroke, 0 to 1. */
+  check: number;
+  /** The check's opacity: whole while it holds, gone as the eyes come back. */
+  checkAlpha: number;
+  /** How far the rays have flown, 0 to 1, or -1 before they leave and once they have faded. */
+  rays: number;
+  /** The eye-lights' opacity: they give way to the check and come back after it. */
+  eyes: number;
+  /** The sphere's pop as the check lands, 0 to 1. */
+  pop: number;
+};
+
+const NO_FINISH: FinishPhase = {
+  check: 0,
+  checkAlpha: 0,
+  rays: -1,
+  eyes: 1,
+  pop: 0,
+};
+
+/**
+ * A finish `age` seconds in: the eyes fade as the sphere pops and the check strokes on, the rays
+ * burst outward and fade, the check holds, then fades as the eyes come back. -1 is no finish.
+ */
+export function finishPhase(age: number): FinishPhase {
+  if (!(age >= 0 && age < FINISH_S)) return NO_FINISH;
+  const back = smooth((age - 0.85) / 0.3);
+  return {
+    check: eout((age - 0.06) / 0.3),
+    checkAlpha: 1 - back,
+    rays: age >= 0.1 && age < 0.75 ? (age - 0.1) / 0.65 : -1,
+    eyes: age < 0.85 ? 1 - smooth(age / 0.12) : back,
+    pop: bump(age / 0.5),
+  };
+}
 
 // ---------- the orb's pieces ----------
 
@@ -353,6 +404,90 @@ function ping(ctx: Ctx, r0: number, age: number, pal: Palette, dark: boolean) {
   ctx.stroke();
 }
 
+/**
+ * The finish's burst: a ring of short strokes, one straight up, that fly out past the grilles,
+ * shortening and fading as they go. Every other one is longer, so the ring sparkles rather than ticks.
+ */
+function rays(ctx: Ctx, r0: number, u: number, pal: Palette, dark: boolean) {
+  if (!(u >= 0 && u < 1)) return;
+  const travel = eout(u);
+  const a = (1 - u) ** 1.4;
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.strokeStyle = rgba(
+    dark ? mix(pal.blue, WHITE, 0.25) : pal.violet,
+    a * (dark ? 0.9 : 0.8),
+  );
+  ctx.lineWidth = Math.max(1, r0 * 0.09 * (1 - 0.5 * u));
+  for (let i = 0; i < RAYS; i++) {
+    const angle = -PI / 2 + (TAU * i) / RAYS;
+    const length = r0 * (i % 2 === 0 ? 0.3 : 0.2) * (1 - 0.55 * u);
+    const inner = r0 * (1.3 + 0.32 * travel);
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    ctx.beginPath();
+    ctx.moveTo(dx * inner, dy * inner);
+    ctx.lineTo(dx * (inner + length), dy * (inner + length));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// The check's three points, as shares of the sphere's radius: in at the left, down to the elbow, up
+// to the right. Its two legs are about 0.37 and 0.75 of the radius long.
+const CHECK = [
+  [-0.38, 0.02],
+  [-0.12, 0.28],
+  [0.42, -0.26],
+] as const;
+
+/** The check, stroked on along its length to `drawn` (0 to 1), in the eye-lights' white. */
+function check(
+  ctx: Ctx,
+  R: number,
+  drawn: number,
+  alpha: number,
+  dark: boolean,
+) {
+  if (drawn <= 0 || alpha <= 0.003) return;
+  const [a, b, c] = CHECK.map(([x, y]) => [x * R, y * R] as const);
+  const first = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const second = Math.hypot(c[0] - b[0], c[1] - b[1]);
+  const along = drawn * (first + second);
+  ctx.save();
+  ctx.globalAlpha = clamp(alpha);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(1.6, R * 0.17);
+  ctx.strokeStyle = "rgba(255,255,255,.97)";
+  ctx.shadowColor = dark ? "rgba(8,6,20,.4)" : "rgba(20,16,33,.28)";
+  ctx.shadowBlur = Math.max(1, R * 0.07);
+  ctx.beginPath();
+  ctx.moveTo(a[0], a[1]);
+  if (along <= first) {
+    const u = along / first;
+    ctx.lineTo(lerp(a[0], b[0], u), lerp(a[1], b[1], u));
+  } else {
+    const u = (along - first) / second;
+    ctx.lineTo(b[0], b[1]);
+    ctx.lineTo(lerp(b[0], c[0], u), lerp(b[1], c[1], u));
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** The sphere's scale: it breathes, swells a little to listen and to land, and pops as a check lands. */
+function scaleOf(S: OrbPose, finish: FinishPhase) {
+  const L = clamp(S.listen, 0, 1.25);
+  return (
+    1 +
+    0.015 * S.breath * (1 - S.think) +
+    0.025 * L +
+    0.04 * S.done +
+    0.06 * finish.pop
+  );
+}
+
 function eyePath(ctx: Ctx, w: number, h: number, smile: number) {
   const rx = (w / 2) * (1 + 0.12 * smile);
   const ry = h / 2;
@@ -379,8 +514,8 @@ function sphere(
 ) {
   const na = S.noticeAge;
   const perk = na >= 0 && na < 1.6 ? Math.exp(-2.6 * na) * smooth(na / 0.1) : 0;
-  const L = clamp(S.listen, 0, 1.25);
-  const sc = 1 + 0.015 * S.breath * (1 - S.think) + 0.025 * L + 0.04 * S.done;
+  const finish = finishPhase(S.finishAge);
+  const sc = scaleOf(S, finish);
   ctx.save();
   ctx.translate(0, S.nod * R * 0.11);
   ctx.scale(sc, sc);
@@ -401,6 +536,7 @@ function sphere(
   const ew = Math.max(small ? 2.4 : 1.8, R * 0.16 * widen);
   const eh = Math.max(small ? 3.4 : 2.4, R * 0.3);
   for (const side of [-1, 1]) {
+    if (finish.eyes <= 0.003) break;
     const lon = side * 0.35;
     const lat = 0.05 + 0.04 * S.smile;
     const x = Math.sin(lon) * Math.cos(lat);
@@ -415,6 +551,7 @@ function sphere(
     const fy = Math.sqrt(clamp(1 - sy * sy, 0.2, 1));
     const h = Math.max(small ? 1.1 : 0.9, eh * open * fy);
     ctx.save();
+    ctx.globalAlpha = finish.eyes;
     ctx.translate(sx * R * 0.84, -sy * R * 0.84 + (eh - h) * 0.28);
     ctx.rotate(-roll);
     ctx.shadowColor = dark ? "rgba(8,6,20,.4)" : "rgba(20,16,33,.28)";
@@ -424,6 +561,7 @@ function sphere(
     ctx.fill();
     ctx.restore();
   }
+  check(ctx, R, finish.check, finish.checkAlpha, dark);
   ctx.restore();
 }
 
@@ -524,7 +662,8 @@ function grilles(ctx: Ctx, r: number, S: OrbPose, pal: Palette) {
 
 /**
  * The whole orb, centred on the context's origin, for a footprint of `size` CSS px (R = size / 2).
- * Its glow and the landing's ping spill past the footprint, so draw it on a canvas twice its size.
+ * Its glow, the landing's ping and a finish's rays spill past the footprint, so draw it on a canvas
+ * twice its size.
  */
 export function drawMicOrb(
   ctx: Ctx,
@@ -532,18 +671,23 @@ export function drawMicOrb(
   S: OrbPose,
   { dark }: { dark: boolean },
 ) {
+  const finish = finishPhase(S.finishAge);
   const pal = palette(
     0.9 + 0.14 * clamp(S.listen) + 0.08 * S.think + 0.12 * clamp(S.done),
     -6 * S.think,
   );
   const r = (size / 2) * 0.72;
-  const L = clamp(S.listen, 0, 1.25);
-  const sc = 1 + 0.015 * S.breath * (1 - S.think) + 0.025 * L + 0.04 * S.done;
+  const sc = scaleOf(S, finish);
   const glowAmt = clamp(
-    0.18 + 0.42 * clamp(S.listen) + 0.22 * S.think + 0.55 * S.done,
+    0.18 +
+      0.42 * clamp(S.listen) +
+      0.22 * S.think +
+      0.55 * S.done +
+      0.45 * finish.pop,
   );
   glow(ctx, r * sc, glowAmt * 0.85, mix(pal.blue, pal.violet, 0.4), dark);
   ping(ctx, r, S.doneAge, pal, dark);
+  rays(ctx, r, finish.rays, pal, dark);
   ctx.save();
   ctx.translate(0, S.nod * r * 0.11);
   ctx.rotate(S.tilt * 0.5);

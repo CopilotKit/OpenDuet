@@ -12,11 +12,12 @@ import {
 } from "react";
 import { toVisibleChatItems } from "@/components/channels/chat-messages";
 import { stepDetails } from "@/components/channels/tool-activity";
-import type { MicOrbState } from "@/components/duet/mic-orb";
+import { FINISH_MS, type MicOrbState } from "@/components/duet/mic-orb";
 
 /**
  * What Chat is doing, for the header's orb to show, as the film's phone header does: it thinks
- * while OpenDuet works, listens while the person types, and lands a finished answer.
+ * while OpenDuet works, listens while the person types, and lands a finished answer. And, on any
+ * screen, when something the person allowed the Bot to do is done, it plays a check.
  *
  * The shell owns the header and Chat sits inside it, so this is a context the shell provides and
  * Chat reports into, rather than anything global. Reports go through one context and the header
@@ -35,6 +36,8 @@ export type ChatPresence = {
   edits: number;
   /** Counts the turns that ended in an answer, rather than a failure or a Stop. */
   answers: number;
+  /** Counts the actions the person allowed that finished while the app was open (`useFinishedForYou`). */
+  finishes: number;
 };
 
 /** How long the orb holds "done": its glow springs up and settles away, and its nod plays out. */
@@ -46,6 +49,7 @@ const AT_REST: ChatPresence = {
   drafting: false,
   edits: 0,
   answers: 0,
+  finishes: 0,
 };
 
 const ReportContext = createContext<Dispatch<
@@ -73,12 +77,15 @@ export function ChatPresenceProvider({ children }: { children: ReactNode }) {
 
 /**
  * The orb's state for what Chat is doing. The Bot working outranks the person typing, since a
- * correction typed mid-answer waits for the turn to end; typing cuts a landing short.
+ * correction typed mid-answer waits for the turn to end; typing cuts a landing short. A finish
+ * outranks everything, on any screen: it is over in a moment, and the orb goes back to the rest.
  */
 export function orbStateFor(
   presence: ChatPresence,
   landing: boolean,
+  finishing = false,
 ): MicOrbState {
+  if (finishing) return "finished";
   if (!presence.chat) return "idle";
   if (presence.working) return "thinking";
   if (presence.drafting) return "listening";
@@ -197,7 +204,23 @@ export function useReportChatPresence(
   return report ? { onTextChange, onStop } : undefined;
 }
 
-/** The header orb's state and keystrokes, from what Chat last reported. */
+/**
+ * Count one finish for the header's orb to play, from anywhere inside the shell: what
+ * `FinishedForYou` reports each action the person allowed through. Outside the shell it does nothing.
+ */
+export function useReportFinish(): () => void {
+  const report = useContext(ReportContext);
+  return useCallback(
+    () =>
+      report?.((presence) => ({
+        ...presence,
+        finishes: presence.finishes + 1,
+      })),
+    [report],
+  );
+}
+
+/** The header orb's state and keystrokes, from what Chat and `useReportFinish` last reported. */
 export function useChatOrb(): { state: MicOrbState; keystrokes: number } {
   const presence = useContext(PresenceContext);
   // The answer whose landing has played out. Behind `answers` while the orb holds "done".
@@ -212,8 +235,20 @@ export function useChatOrb(): { state: MicOrbState; keystrokes: number } {
     const timer = setTimeout(() => setLanded(presence.answers), LANDING_MS);
     return () => clearTimeout(timer);
   }, [presence.answers, presence.chat, landed]);
+  // The finish whose check has played. Behind `finishes` while the orb holds "finished"; another
+  // finish while one plays holds it a little longer rather than playing twice.
+  const [finished, setFinished] = useState(presence.finishes);
+  useEffect(() => {
+    if (presence.finishes === finished) return;
+    const timer = setTimeout(() => setFinished(presence.finishes), FINISH_MS);
+    return () => clearTimeout(timer);
+  }, [presence.finishes, finished]);
   return {
-    state: orbStateFor(presence, presence.answers !== landed),
+    state: orbStateFor(
+      presence,
+      presence.answers !== landed,
+      presence.finishes !== finished,
+    ),
     keystrokes: presence.edits,
   };
 }
