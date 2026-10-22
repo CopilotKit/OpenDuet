@@ -6,6 +6,7 @@ import type { Database } from "../db/client";
 import { users } from "../db/schema";
 import { createProactiveStore } from "../proactive/store";
 import { buildMorningBrief, type CallTool, openduetTools } from "./brief";
+import { createPageStore, type PageStore, pageTools } from "./pages";
 import { replyTools } from "./replies";
 import { type TaskSink, taskDetail, taskTools } from "./tasks";
 import type { Complete } from "./triage";
@@ -26,6 +27,8 @@ export function createOpenDuetTools(deps: {
     ownerUserId: string,
     agentId: string,
   ) => Promise<{ id: string; threadId: string }>;
+  /** Where `make_page` saves. The same store answers /api/openduet/pages. */
+  pages?: PageStore;
 }): (
   actorId: string,
   botId: string,
@@ -77,6 +80,7 @@ export function createOpenDuetTools(deps: {
     }
     return added;
   };
+  const pages = deps.pages ?? createPageStore(deps.database);
   return (actorId, botId, initiator) => [
     ...openduetTools({
       actorId,
@@ -101,5 +105,9 @@ export function createOpenDuetTools(deps: {
     }),
     ...replyTools({ initiator }),
     ...taskTools({ actorId, botId, initiator, save }),
+    ...pageTools({
+      save: (input) => pages.save(actorId, botId, input),
+      initiator,
+    }),
   ];
 }

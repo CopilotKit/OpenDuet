@@ -33,6 +33,7 @@ describe("the suggest_replies tool", () => {
       "openduet/morning_brief",
       "openduet/suggest_replies",
       "openduet/add_tasks",
+      "openduet/make_page",
     ]);
   });
 
