@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { PendingApprovals } from "@/components/approvals/inline-approval";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
   Dialog,
@@ -1358,8 +1359,18 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
          *
          * What was called, shimmering until its result arrives, and then the server's own words
          * drawn the way a Bot's prose is drawn.
+         *
+         * WITH ITS APPROVAL CARD UNDER IT while the server holds the call for the person. A run of
+         * steps gets its cards beside the folded line (`ToolActivity`); a call alone in its turn
+         * keeps this line instead, and without the card here the request waited only in Tasks.
+         * A tool the app draws itself is left alone: its own renderer decides where a card goes.
          */}
-        {drawn ?? <ServerToolLine name={name} result={result} />}
+        {drawn ?? (
+          <>
+            <ServerToolLine name={name} result={result} />
+            <PendingApprovals toolCallIds={[toolCallId]} />
+          </>
+        )}
       </ToolRenderBoundary>
     </Arriving>
   );

@@ -9,6 +9,7 @@ import {
 import type { Message } from "@ag-ui/core";
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComposerDraft } from "@/components/channels/composer/draft";
@@ -73,6 +74,15 @@ function asked(
   ];
 }
 
+/**
+ * The app's query client, as `main.tsx` provides it. Until `ReplyChipsTool` registers its renderer,
+ * the call draws as a plain server line, and that line asks the approvals inbox whether the call is
+ * waiting on the person. Every request here answers 404, so nothing is.
+ */
+const queries = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
+
 function Chat({
   messages,
   sent,
@@ -81,16 +91,18 @@ function Chat({
   sent: ComposerDraft[];
 }) {
   return (
-    <CopilotKitProvider>
-      <ReplyChipsTool />
-      <ConversationView
-        messages={messages}
-        onSubmit={(draft) => {
-          sent.push(draft);
-        }}
-        queueWhileBusy
-      />
-    </CopilotKitProvider>
+    <QueryClientProvider client={queries}>
+      <CopilotKitProvider>
+        <ReplyChipsTool />
+        <ConversationView
+          messages={messages}
+          onSubmit={(draft) => {
+            sent.push(draft);
+          }}
+          queueWhileBusy
+        />
+      </CopilotKitProvider>
+    </QueryClientProvider>
   );
 }
 
