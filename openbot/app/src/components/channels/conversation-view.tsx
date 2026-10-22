@@ -30,6 +30,7 @@ import {
   stepFor,
   useReportChatPresence,
 } from "@/components/shell/chat-presence";
+import { ChatSuggestionCard } from "@/components/shell/chat-suggestion";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { newId } from "../../lib/new-id";
 
@@ -528,6 +529,8 @@ export function ConversationView({
             : "max-w-2xl mx-auto w-full px-0 pb-4 shrink-0"
         }
       >
+        {/* Chat's Bot's newest suggestion; nothing in any other conversation. */}
+        {inShell ? <ChatSuggestionCard /> : null}
         {notice}
         <Composer
           agents={agents}

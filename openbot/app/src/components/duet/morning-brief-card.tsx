@@ -11,6 +11,18 @@ export type BriefItem = {
   why: string;
   /** Where the row leads. A row with nowhere to go draws no chevron. */
   href?: string;
+  /** Something the person can do about this row from the card, such as handing it to the Bot. */
+  action?: BriefAction;
+};
+
+/** A small pill at the end of a row. `done` replaces the label once it has been pressed. */
+export type BriefAction = {
+  label: string;
+  /** What a screen reader hears, naming the row, since "Start" alone says nothing about which. */
+  name: string;
+  onPress: () => void;
+  done?: string;
+  disabled?: boolean;
 };
 
 /**
@@ -85,7 +97,9 @@ function BriefSection({
               title={item.title}
               tone={tone === "accent" ? "violet" : "neutral"}
               trailing={
-                item.href ? (
+                item.action ? (
+                  <RowAction action={item.action} />
+                ) : item.href ? (
                   <span className="text-duet-ink-3">
                     <DuetIcon name="chevronRight" size={18} stroke={2.2} />
                   </span>
@@ -115,5 +129,19 @@ function BriefSection({
         })}
       </ul>
     </section>
+  );
+}
+
+function RowAction({ action }: { action: BriefAction }) {
+  return (
+    <button
+      aria-label={action.done ?? action.name}
+      className="type-label h-8 shrink-0 rounded-full bg-duet-black px-3.5 font-semibold text-duet-on-black transition-[filter,transform,opacity] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.97] disabled:bg-duet-tile disabled:text-duet-ink-2 disabled:hover:brightness-100"
+      disabled={action.disabled || action.done !== undefined}
+      onClick={action.onPress}
+      type="button"
+    >
+      {action.done ?? action.label}
+    </button>
   );
 }
