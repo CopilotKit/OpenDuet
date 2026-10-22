@@ -12,6 +12,7 @@ import { EscalationTool } from "./escalation-tool";
 import { GalleryTools } from "./gallery-tools";
 import { GENERATIVE_UI_DESIGN_SKILL } from "./generative-ui";
 import { HandoffTool } from "./handoff-tool";
+import { MorningBriefTool } from "./morning-brief-tool";
 import { SandboxedTools } from "./sandboxed-tools";
 import { SkillTools } from "./skill-tools";
 
@@ -65,6 +66,8 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
           where the grant and the caps are. A hop that happens off-screen is the thing to avoid.
         */}
         <HandoffTool />
+        {/* The server's morning brief, drawn as the film's card. See morning-brief-tool.tsx. */}
+        <MorningBriefTool />
         <EscalationTool />
         {/* Gallery tools are registered once; their handlers re-read the active Bot to avoid shadowing renderers. */}
         <GalleryTools />

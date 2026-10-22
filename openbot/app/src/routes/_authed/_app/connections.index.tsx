@@ -1,4 +1,5 @@
 import {
+  IconBrandGmail,
   IconBrandGoogleDrive,
   IconBrandNotion,
   IconCheck,
@@ -180,6 +181,7 @@ const MARKS: ReadonlyMap<
   React.ComponentType<{ className?: string }>
 > = new Map([
   ["google-drive", IconBrandGoogleDrive],
+  ["google-workspace", IconBrandGmail],
   ["notion", IconBrandNotion],
 ]);
 

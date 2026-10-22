@@ -3,12 +3,15 @@ import {
   CATALOGUE,
   type CatalogueEntry,
   catalogueEntry,
+  catalogueFor,
   classifyTool,
   customUrlRefusal,
+  fakeGoogleOrigin,
   hostAdmissible,
   resolveServerUrl,
   serverCredentialKind,
 } from "../src/plugins/catalogue";
+import { shareTargetOf } from "../src/plugins/share-target";
 
 /**
  * The catalogue decides two things that are worth being sure about: which addresses this deployment
@@ -198,6 +201,259 @@ describe("Google Drive", () => {
     expect(classifyTool(drive, "copy_file", true)).toBe("write");
     expect(classifyTool(drive, "search_files", true)).toBe("read");
     expect(classifyTool(drive, "read_file_content", true)).toBe("read");
+  });
+});
+
+describe("Gmail and Google Calendar", () => {
+  const entry = catalogueEntry("google-workspace");
+
+  test("is one entry, reached at the bare Google API host over its REST transport", () => {
+    expect(entry).not.toBeNull();
+    expect(entry?.title).toBe("Gmail and Google Calendar");
+    expect(entry?.vendor).toBe("Google");
+    expect(entry?.summary).toBe("Mail and calendar of whoever is asking.");
+    expect(entry?.transport).toBe("google-workspace-rest");
+    /*
+     * The path is `/`, so the resolved url is the host itself and the adapter adds `/gmail/v1` or
+     * `/calendar/v3`. Either prefix as the path would leave it rewriting one into the other.
+     */
+    expect(entry?.path).toBe("/");
+    expect(resolveServerUrl("google-workspace")?.url).toBe(
+      "https://www.googleapis.com",
+    );
+    expect(hostAdmissible(entry!, "https://www.googleapis.com")).toBe(true);
+    expect(hostAdmissible(entry!, "https://gmail.googleapis.com")).toBe(false);
+    // The fake's address, which only the development override can make admissible.
+    expect(hostAdmissible(entry!, "http://127.0.0.1:4900")).toBe(false);
+  });
+
+  test("is reached as the person asking, at Google's own OAuth endpoints", () => {
+    if (entry?.auth.kind !== "user-oauth") throw new Error("wrong auth kind");
+    expect(entry.auth.authorizationUrl).toBe(
+      "https://accounts.google.com/o/oauth2/v2/auth",
+    );
+    expect(entry.auth.tokenUrl).toBe("https://oauth2.googleapis.com/token");
+    expect(entry.auth.revokeUrl).toBe("https://oauth2.googleapis.com/revoke");
+    // Without both, Google returns no refresh token on a reconnect.
+    expect(entry.auth.authorizationParams).toEqual({
+      access_type: "offline",
+      prompt: "consent",
+    });
+  });
+
+  test("asks to read mail, send mail and read the calendar, and nothing wider", () => {
+    expect(entry?.auth.kind === "user-oauth" ? entry.auth.scopes : []).toEqual([
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/calendar.readonly",
+    ]);
+  });
+
+  test("names its reads and its write explicitly", () => {
+    expect(entry?.readTools).toEqual([
+      "gmail_search_messages",
+      "gmail_read_message",
+      "calendar_list_events",
+    ]);
+    expect(entry?.writeTools).toEqual(["gmail_send_reply"]);
+  });
+
+  test("sending a reply is a write, and nothing can talk it down to a read", () => {
+    expect(classifyTool(entry, "gmail_send_reply", true)).toBe("write");
+    // A vendor-recorded effect may narrow and never widen.
+    expect(classifyTool(entry, "gmail_send_reply", true, "read")).toBe("write");
+    for (const name of [
+      "gmail_search_messages",
+      "gmail_read_message",
+      "calendar_list_events",
+    ]) {
+      expect(classifyTool(entry, name, true)).toBe("read");
+    }
+  });
+
+  test("a tool on neither list is a write, advertised or not", () => {
+    // Because the entry names its reads, an advertised tool nobody listed cannot classify as one.
+    expect(classifyTool(entry, "gmail_delete_message", true)).toBe("write");
+    expect(classifyTool(entry, "calendar_create_event", true)).toBe("write");
+    expect(classifyTool(entry, "gmail_search_messages", false)).toBe("write");
+  });
+
+  test("a reply is a send, so the private-share check asks about it too", () => {
+    /*
+     * Writes are the only calls that reach this check, so what matters is that the one write is
+     * recognised as a send and that its recipients and words reach it: the owner is asked about the
+     * right people and the right text.
+     */
+    const share = shareTargetOf("google-workspace", "gmail_send_reply", {
+      to: ["ana@hearthandco.com"],
+      subject: "Friday",
+      body: "Yes, Friday.",
+    });
+    expect(share).not.toBeNull();
+    expect(share?.audience.id).toBe("ana@hearthandco.com");
+    expect(share?.content).toContain("Yes, Friday.");
+  });
+});
+
+/*
+ * OPENDUET_FAKE_GOOGLE_URL points the Gmail and Calendar entry at scripts/fake-google instead of
+ * Google, for development and tests. Every address in the catalogue is a reviewed source contract
+ * and this one comes from the environment, so it is refused in production. Both halves are tested:
+ * that it works where it should, and that it is refused, with a warning, where it must not.
+ */
+describe("pointing Gmail and Calendar at a fake Google", () => {
+  const fake = "http://127.0.0.1:4900";
+  const google = "https://www.googleapis.com";
+  const entryIn = (entries: readonly CatalogueEntry[], key: string) => {
+    const found = entries.find((entry) => entry.key === key);
+    if (!found) throw new Error(`no ${key} entry`);
+    return found;
+  };
+
+  test("outside production, the entry's API host and OAuth endpoints are the fake's", () => {
+    const warnings: string[] = [];
+    const entries = catalogueFor(
+      { OPENDUET_FAKE_GOOGLE_URL: `${fake}/`, NODE_ENV: "development" },
+      (message) => warnings.push(message),
+    );
+    const workspace = entryIn(entries, "google-workspace");
+
+    expect(warnings).toEqual([]);
+    expect(workspace.host).toBe(fake);
+    expect(hostAdmissible(workspace, fake)).toBe(true);
+    // While it is active, the real Google is not where this entry's tokens go.
+    expect(hostAdmissible(workspace, google)).toBe(false);
+    if (workspace.auth.kind !== "user-oauth") throw new Error("wrong kind");
+    expect(workspace.auth.authorizationUrl).toBe(`${fake}/o/oauth2/v2/auth`);
+    expect(workspace.auth.tokenUrl).toBe(`${fake}/token`);
+    expect(workspace.auth.revokeUrl).toBe(`${fake}/revoke`);
+    // Only the addresses move. What is asked for, and how, is the reviewed entry's.
+    const reviewed = catalogueEntry("google-workspace");
+    if (reviewed?.auth.kind !== "user-oauth") throw new Error("wrong kind");
+    expect(workspace.auth.scopes).toEqual(reviewed.auth.scopes);
+    expect(workspace.auth.authorizationParams).toEqual(
+      reviewed.auth.authorizationParams,
+    );
+    expect(workspace.readTools).toEqual(reviewed.readTools);
+    expect(workspace.writeTools).toEqual(["gmail_send_reply"]);
+  });
+
+  test("an unset NODE_ENV is development, which is what a laptop has", () => {
+    expect(
+      fakeGoogleOrigin({ OPENDUET_FAKE_GOOGLE_URL: fake }, () => {
+        throw new Error("no warning expected");
+      }),
+    ).toBe(fake);
+  });
+
+  test("Google Drive stays on Google whatever the override says", () => {
+    const entries = catalogueFor({ OPENDUET_FAKE_GOOGLE_URL: fake }, () => {});
+    // The very same reviewed object, not a copy that happens to match today.
+    expect(entryIn(entries, "google-drive")).toBe(
+      catalogueEntry("google-drive")!,
+    );
+    expect(hostAdmissible(entryIn(entries, "google-drive"), fake)).toBe(false);
+  });
+
+  test("in production it is refused, said out loud, and Google is used", () => {
+    // With a trailing space too, which survives env files and dashboards alike.
+    for (const NODE_ENV of ["production", "production "]) {
+      const warnings: string[] = [];
+      const entries = catalogueFor(
+        { OPENDUET_FAKE_GOOGLE_URL: fake, NODE_ENV },
+        (message) => warnings.push(message),
+      );
+      const workspace = entryIn(entries, "google-workspace");
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("OPENDUET_FAKE_GOOGLE_URL");
+      expect(warnings[0]).toContain("production");
+      expect(workspace.host).toBe(google);
+      expect(hostAdmissible(workspace, fake)).toBe(false);
+      if (workspace.auth.kind !== "user-oauth") throw new Error("wrong kind");
+      expect(workspace.auth.tokenUrl).toBe(
+        "https://oauth2.googleapis.com/token",
+      );
+    }
+  });
+
+  test("unset, nothing changes and nothing is said", () => {
+    const warnings: string[] = [];
+    expect(catalogueFor({}, (message) => warnings.push(message))).toBe(
+      CATALOGUE,
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  test("anything but a bare http or https origin is refused with a warning", () => {
+    for (const value of [
+      "not a url",
+      "ftp://127.0.0.1:4900",
+      "http://127.0.0.1:4900/google",
+      "http://127.0.0.1:4900/?token=x",
+      "http://user:secret@127.0.0.1:4900",
+    ]) {
+      const warnings: string[] = [];
+      expect(
+        fakeGoogleOrigin({ OPENDUET_FAKE_GOOGLE_URL: value }, (message) =>
+          warnings.push(message),
+        ),
+      ).toBeNull();
+      expect(warnings).toHaveLength(1);
+      // The refusal must not repeat a credential somebody put in the address.
+      expect(warnings[0]).not.toContain("secret");
+    }
+  });
+
+  /*
+   * The two cases above call the function. These start a process with the variable set and import
+   * the catalogue as the server does, so they also prove the module's own CATALOGUE is built from
+   * the environment, which is the wiring a refactor could quietly drop.
+   */
+  const resolvedIn = (environment: Record<string, string>) => {
+    const script = [
+      'import { catalogueEntry, resolveServerUrl } from "./src/plugins/catalogue";',
+      'const entry = catalogueEntry("google-workspace");',
+      "console.log(JSON.stringify({",
+      '  workspace: resolveServerUrl("google-workspace")?.url,',
+      "  tokenUrl: entry?.auth.kind === 'user-oauth' ? entry.auth.tokenUrl : null,",
+      '  drive: resolveServerUrl("google-drive")?.url,',
+      "}));",
+    ].join("\n");
+    const result = Bun.spawnSync(["bun", "-e", script], {
+      cwd: `${import.meta.dir}/..`,
+      env: { ...process.env, ...environment },
+    });
+    expect(result.exitCode).toBe(0);
+    return {
+      resolved: JSON.parse(result.stdout.toString()) as Record<string, string>,
+      stderr: result.stderr.toString(),
+    };
+  };
+
+  test("a process started with it set, outside production, resolves to the fake", () => {
+    const { resolved } = resolvedIn({
+      OPENDUET_FAKE_GOOGLE_URL: fake,
+      NODE_ENV: "development",
+    });
+    expect(resolved).toEqual({
+      workspace: fake,
+      tokenUrl: `${fake}/token`,
+      drive: `${google}/drive/v3`,
+    });
+  });
+
+  test("a process started with it set in production resolves to Google and warns", () => {
+    const { resolved, stderr } = resolvedIn({
+      OPENDUET_FAKE_GOOGLE_URL: fake,
+      NODE_ENV: "production",
+    });
+    expect(resolved).toEqual({
+      workspace: google,
+      tokenUrl: "https://oauth2.googleapis.com/token",
+      drive: `${google}/drive/v3`,
+    });
+    expect(stderr).toContain("OPENDUET_FAKE_GOOGLE_URL is set and ignored");
   });
 });
 

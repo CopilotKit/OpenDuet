@@ -91,25 +91,28 @@ Each slice is usable end to end on its own and goes up as its own draft PR.
 
 ### Slice 2: Gmail and Calendar, triage, brief, approved reply
 
-- **Google connector.** Gmail and Google Calendar connect directly with Google OAuth, the same way OpenBot's Drive connector works:
-  - an administrator registers the OAuth client once;
-  - each person consents with their own account, and no administrator can connect an account for someone else;
-  - there is no third-party broker;
-  - read tools come first, and sending a reply is a write.
-- **Triage.** Each new message gets a verdict, `needs_you` or `can_wait`, and a one-line reason.
-  - Plain rules settle the obvious cases with no model call: bulk mail, `List-Unsubscribe`, `noreply` senders, receipts.
+- **Google connector.** One catalogue entry, `google-workspace`, for Gmail and Google Calendar.
+  - It uses direct Google OAuth, the way OpenBot's Drive connector does.
+  - An administrator registers the OAuth client once. Each person consents with their own account; no administrator can connect an account for someone else.
+  - There is no third-party broker.
+  - Its tools are `gmail_search_messages`, `gmail_read_message` and `calendar_list_events` (reads), and `gmail_send_reply` (a write).
+  - It is one entry rather than two because two entries sharing one OAuth client can revoke each other's grant, and the person would consent twice.
+- **Triage.** Each message gets a verdict, `needs_you` or `can_wait`, and a one-line reason (`openbot/server/src/openduet/triage.ts`).
+  - Plain rules settle the obvious cases with no model call: bulk mail, Promotions, Social and Forums, auto-replies, and answers to invitations.
   - The model decides the rest and must give a reason.
-  - Every verdict is stored with whatever decided it, so it can be audited and corrected.
-- **Morning brief.** A routine posts the brief in the OpenDuet channel:
-  - what needs you, each item with its reason;
-  - what can wait, as one line;
-  - today's calendar;
-  - what it could not check, and why.
-- **Approved reply.** OpenDuet drafts the reply. Sending it pauses for **Allow once / Always allow / Refuse**. The app's "Deny" is relabelled "Refuse" to match the README, the banner and the film.
+  - A model failure is never turned into a verdict.
+- **Morning brief.** `morning_brief` is a server tool every Bot holds (`openbot/server/src/openduet/brief.ts`).
+  - It reads Gmail and Calendar through the plugin store, as the person and under the Bot's grants, and sorts each message.
+  - It returns what needs you (each with its reason), what can wait, today's calendar, and what it could not check and why.
+  - A message it could not sort is listed under needs you, never hidden.
+  - The app draws the result as the film's brief card.
+  - Getting it every morning should be a routine (OpenBot's scheduled turns) whose instruction asks for the brief. That has not been verified end to end yet.
+  - Sorting happens when the brief is made, so nothing is stored beyond the conversation and the audit trail. Storing verdicts comes with slice 3, where corrections need them.
+- **Approved reply.** OpenDuet reads the whole message, drafts a reply, and sends it with `gmail_send_reply`. A send to anyone else always asks the owner first, through OpenBot's private-share check, and auto-review checks it again. The buttons read Refuse, Allow once and Always allow.
 - **Proof:**
-  - a labelled set of synthetic mail (`evals/triage/`), with precision and recall for `needs_you` reported in the PR;
+  - a labelled set of 60 invented emails (`evals/triage/`), with precision and recall for `needs_you` reported in the PR;
   - an end-to-end test against a fake Gmail: no send reaches it until a person answers, Refuse never sends, and Always allow sends the next one without asking;
-  - a short recording on a test Google account. Jerel's real inbox is never used without asking him first.
+  - a short recording against the fake Google server (`openbot/scripts/fake-google/`). No real Google account is connected without asking Jerel first.
 
 ### Later slices
 

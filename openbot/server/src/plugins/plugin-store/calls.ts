@@ -352,6 +352,7 @@ export function callMethods(context: StoreContext) {
         effect === "write" && options.privateShareCheck
           ? shareTargetOf(serverId, toolName, vendorArgs)
           : null;
+      let personAnswered = false;
       if (share && options.privateShareCheck) {
         const shareVerdict = await options.privateShareCheck({
           ownerUserId: input.actorId,
@@ -380,6 +381,7 @@ export function callMethods(context: StoreContext) {
             throw shareVerdict.suspension;
           throw new PluginRefusedError(shareVerdict.message, null);
         }
+        personAnswered = shareVerdict.byPerson === true;
       }
 
       /*
@@ -452,6 +454,8 @@ export function callMethods(context: StoreContext) {
         args: vendorArgs,
         target: { serverId, toolName, url: row.url, effect },
         continuation: currentApprovalContext(),
+        // Asked once: the share check just put this exact send in front of the person.
+        ...(personAnswered ? { personAnswered } : {}),
       });
       if (approval && "replay" in approval)
         return approval.replay as { text: string; isError: boolean };

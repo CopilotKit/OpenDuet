@@ -171,6 +171,9 @@ export function researchRoleFor(ref: string): ResearchRole | null {
   return researchRoleOfTool(ref.slice(0, slash), ref.slice(slash + 1));
 }
 
+/** Gmail and Google Calendar, as one entry. Named because the development override keys on it. */
+export const GOOGLE_WORKSPACE = "google-workspace";
+
 /** Exa's research and multi-step agent tools spend credits, so only the three that read are reads. */
 const EXA_READ_TOOLS = Object.freeze([
   "web_search_exa",
@@ -212,8 +215,11 @@ const FIRECRAWL_READ_TOOLS = Object.freeze([
  * the catalogue is where a deployment decides which Bots may do what, and a Bot that can schedule its
  * own future runs is a capability worth that same deliberate grant, even though there is no vendor on
  * the other end of it.
+ *
+ * This is the reviewed list. {@link CATALOGUE} is this list with the development override below
+ * applied, which outside development is this list unchanged.
  */
-export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
+const REVIEWED: readonly CatalogueEntry[] = Object.freeze([
   {
     key: "parallel",
     title: "Parallel Search",
@@ -354,6 +360,64 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
       "https://developers.google.com/workspace/guides/configure-mcp-servers",
   },
   {
+    key: GOOGLE_WORKSPACE,
+    title: "Gmail and Google Calendar",
+    vendor: "Google",
+    summary: "Mail and calendar of whoever is asking.",
+    /*
+     * ONE ENTRY FOR TWO PRODUCTS, on purpose, and not the "each is a further entry" the Drive entry
+     * above describes. That was about Google's MCP servers, one host per product. Over REST the two
+     * share what matters here, one OAuth client, and two entries on one client are worse than one:
+     * Google revokes a person's grant to a client as a whole, so disconnecting Calendar would
+     * quietly end Gmail's access too, and a person would consent twice to what reads to them as one
+     * question. A brief that says "you have a call at 3 and Ana is waiting on a ship date" needs
+     * both anyway.
+     */
+    /*
+     * The bare host, with `/` as the path, because the two APIs live under different prefixes on
+     * it: Gmail at `/gmail/v1` and Calendar at `/calendar/v3`. A path naming either one would leave
+     * the adapter rewriting it to reach the other. With `/`, the resolved url is the host itself,
+     * `hostAdmissible` compares exactly what it always has, and the two prefixes are constants in
+     * the adapter, which a caller cannot reach.
+     */
+    host: "https://www.googleapis.com",
+    path: "/",
+    transport: "google-workspace-rest",
+    auth: {
+      kind: "user-oauth",
+      authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      tokenUrl: "https://oauth2.googleapis.com/token",
+      revokeUrl: "https://oauth2.googleapis.com/revoke",
+      /*
+       * Read mail, send mail, read the calendar, and nothing wider. `gmail.send` can send but not
+       * read, trash or label; `gmail.modify` would be one string instead of two and would also let
+       * a Bot archive, label and trash mail. Calendar is read-only because nothing here writes to it.
+       */
+      scopes: Object.freeze([
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.readonly",
+      ]),
+      // Load bearing for Google, for the reasons given on the Drive entry.
+      authorizationParams: Object.freeze({
+        access_type: "offline",
+        prompt: "consent",
+      }),
+    },
+    /*
+     * BOTH LISTS, so a tool that is on neither is a write. The transport advertises exactly these
+     * four today; a fifth added to the adapter and forgotten here classifies as a write rather than
+     * slipping through as a read, which is the direction a missed entry should fail in.
+     */
+    readTools: Object.freeze([
+      "gmail_search_messages",
+      "gmail_read_message",
+      "calendar_list_events",
+    ]),
+    writeTools: Object.freeze(["gmail_send_reply"]),
+    docsUrl: "https://developers.google.com/workspace/gmail/api/guides",
+  },
+  {
     key: "notion",
     title: "Notion",
     vendor: "Notion",
@@ -436,6 +500,119 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
     docsUrl: "https://github.com/CopilotKit/OpenBot/blob/main/docs/routines.md",
   },
 ]);
+
+/** The environment variable that points {@link GOOGLE_WORKSPACE} at a stand-in for Google. */
+export const FAKE_GOOGLE_VARIABLE = "OPENDUET_FAKE_GOOGLE_URL";
+
+/**
+ * The origin of a stand-in for Google that this deployment may use instead of Google, or null.
+ *
+ * WHY THIS EXISTS. Gmail is a restricted scope: Google lets an unverified app consent only for the
+ * test users listed on its project, so trying this connector, demoing it, or testing it end to end
+ * otherwise needs a Cloud project, a consent screen and somebody's real mailbox. `scripts/fake-google`
+ * answers the same requests with an invented one, and this is how a local deployment is pointed at it.
+ *
+ * WHY IT IS REFUSED IN PRODUCTION. Every address in this file is a reviewed source contract, and
+ * this one is not: it comes from the environment. Where it points is where this deployment sends a
+ * client secret, people's authorization codes and refresh tokens, and people's replies. On a
+ * developer's machine that is the developer's own fake; on a deployed server it is a way to send all
+ * of that somewhere nobody reviewed. So it is honoured only when `NODE_ENV` is not `production`, and
+ * a production server that has it set says so on startup rather than quietly ignoring it. `NODE_ENV`
+ * is trimmed before it is compared, for the reason `isProduction` in `config.ts` gives: a trailing
+ * space survives an env file and a hosting dashboard alike.
+ *
+ * Only an http or https origin with nothing else in it is taken. The fake serves every route at its
+ * root, and a path, a query or a credential here would be one more thing to explain on a variable
+ * whose job is to be obvious.
+ */
+export function fakeGoogleOrigin(
+  environment: Readonly<Record<string, string | undefined>>,
+  warn: (message: string) => void = console.warn,
+): string | null {
+  const raw = environment[FAKE_GOOGLE_VARIABLE]?.trim();
+  if (!raw) return null;
+
+  if (environment.NODE_ENV?.trim() === "production") {
+    warn(
+      `${FAKE_GOOGLE_VARIABLE} is set and ignored: NODE_ENV is production, and a deployed server talks to Google itself. Gmail and Google Calendar use Google's own addresses.`,
+    );
+    return null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    warn(
+      `${FAKE_GOOGLE_VARIABLE} is not a URL, so it is ignored and Gmail and Google Calendar use Google's own addresses.`,
+    );
+    return null;
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    warn(
+      `${FAKE_GOOGLE_VARIABLE} must be an http or https origin with nothing after it, such as http://127.0.0.1:4900, so it is ignored and Gmail and Google Calendar use Google's own addresses.`,
+    );
+    return null;
+  }
+  return url.origin;
+}
+
+/**
+ * The catalogue as this process uses it: the reviewed list, with the Gmail and Calendar entry
+ * pointed at a fake Google when {@link fakeGoogleOrigin} allows one.
+ *
+ * Applied HERE, where an entry is resolved, rather than where Google is dialled, so every consumer
+ * agrees about it at once. `hostAdmissible` and `resolveServerUrl` admit the fake's origin because
+ * the entry names it, the stored row's url becomes the fake's when the server is enabled, and the
+ * connection flow sends people to the fake's consent page and redeems their codes at its token
+ * endpoint, because those addresses are the entry's too. Nothing downstream has a second switch to
+ * forget. And the reverse holds without the override: the fake's origin is just another address that
+ * no entry names, and is refused like one.
+ *
+ * Only {@link GOOGLE_WORKSPACE}. Drive shares the same Google host and the same kind of client, and
+ * stays on Google whatever this says, so turning the fake on cannot quietly redirect anything else.
+ */
+export function catalogueFor(
+  environment: Readonly<Record<string, string | undefined>>,
+  warn?: (message: string) => void,
+): readonly CatalogueEntry[] {
+  const origin = fakeGoogleOrigin(environment, warn);
+  if (origin === null) return REVIEWED;
+  return Object.freeze(
+    REVIEWED.map((entry) =>
+      entry.key === GOOGLE_WORKSPACE && entry.auth.kind === "user-oauth"
+        ? Object.freeze({
+            ...entry,
+            host: origin,
+            auth: Object.freeze({
+              ...entry.auth,
+              authorizationUrl: `${origin}/o/oauth2/v2/auth`,
+              tokenUrl: `${origin}/token`,
+              revokeUrl: `${origin}/revoke`,
+            }),
+          })
+        : entry,
+    ),
+  );
+}
+
+/**
+ * Resolved once, at startup, from this process's environment.
+ *
+ * Except under `bun test`, which sets `NODE_ENV=test` and also loads the developer's own `.env`. A
+ * laptop set up to demo against the fake would otherwise run the whole suite against the fake's
+ * addresses, and the suite's job is the reviewed catalogue. The override's own tests call
+ * {@link catalogueFor} directly, and import this module in a process started with the variable set.
+ */
+export const CATALOGUE: readonly CatalogueEntry[] =
+  process.env.NODE_ENV === "test" ? REVIEWED : catalogueFor(process.env);
 
 const BY_KEY = new Map(CATALOGUE.map((entry) => [entry.key, entry]));
 

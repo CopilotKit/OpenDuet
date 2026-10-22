@@ -52,21 +52,22 @@ Some of this works today through OpenBot, and some of it is being built now. See
 
 ## Status
 
-**Available today via OpenBot** means it works when you run this repository today, and the code comes from [OpenBot](https://github.com/CopilotKit/openbot), which OpenDuet is built on. **In progress** means it is new work for OpenDuet and does not work yet.
+**Available today** means OpenDuet added it and it works when you run this repository. **Available today via OpenBot** means it works today and the code comes from [OpenBot](https://github.com/CopilotKit/openbot), which OpenDuet is built on. **In progress** means it does not work yet.
 
 | Capability                   | What it means for you                                                                 | Status                      |
 | ---------------------------- | ------------------------------------------------------------------------------------- | --------------------------- |
 | A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away.         | Available today via OpenBot |
-| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. Messages to other people always ask. Every action is checked against policy and recorded. | Available today via OpenBot |
+| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Every action is checked against policy and recorded. | Available today via OpenBot |
 | Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. | Available today via OpenBot |
 | Memory                       | Threads and memory carry over through CopilotKit Intelligence.                        | Available today via OpenBot |
 | Skills                       | Reusable instructions you write once and call with `/`.                               | Available today via OpenBot |
+| Gmail and Google Calendar    | Each person connects their own account. OpenDuet reads mail and today's calendar, and sends a reply only after you answer. | Available today |
 | Connected apps               | Governed MCP connectors, including Google Drive and Notion.                           | Available today via OpenBot |
 | Scheduled work               | Routines: ask it to do something on a schedule and it runs as you.                    | Available today via OpenBot |
 | Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). | Available today via OpenBot |
-| Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages without being asked.          | In progress                 |
-| What needs you, what can wait | Sorts what comes in by how much it needs you.                                        | In progress                 |
-| Morning brief                | One message to start the day, built from what it watched and sorted.                  | In progress                 |
+| Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages as they arrive. Today it reads your mail when the brief is made. | In progress                 |
+| What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). Slack comes later. | Available today |
+| Morning brief                | Ask for it: what needs you and why, what can wait, today's calendar, and anything it could not check. Getting it on a schedule, through routines, is not yet verified. | Available today |
 | Sensitive-info check         | A check on every outgoing message. OpenBot today classifies each tool as a read or a write and redacts secrets from its audit trail. | In progress |
 | Phone inbox                  | One place on your phone for everything waiting on you.                                | In progress                 |
 
@@ -114,6 +115,18 @@ Once it is running, try the parts that work today:
 - Ask it to do something on a schedule. You will find it in `/routines`.
 
 The rest of the setup, including sign-in for a team, Slack and Teams, and deploying with Docker or Helm, is OpenBot's. See [openbot/docs](openbot/docs/README.md).
+
+### Connect Gmail and Google Calendar
+
+An administrator turns the connector on once: register an OAuth client in Google Cloud and paste it in at `/admin/plugins/google-workspace`, then grant its tools to the OpenDuet Bot. Each person then connects their own account under **Connections**. Connecting needs `OPENBOT_PUBLIC_URL`, the API's address that Google sends people back to; `.env.example` sets it to `http://localhost:3001` for running locally, and it must be the public address once deployed. [openbot/docs/plugins/google-workspace.md](openbot/docs/plugins/google-workspace.md) has the steps.
+
+To try it without a Google account, run the fake Google that ships for tests and demos, and point OpenDuet at it:
+
+```sh
+bun openbot/scripts/fake-google/server.ts --port 4900
+```
+
+and in `.env`, `OPENDUET_FAKE_GOOGLE_URL=http://127.0.0.1:4900`. It serves an invented inbox and calendar, and `curl http://127.0.0.1:4900/__fake/sent` shows anything OpenDuet sent. It is refused when `NODE_ENV=production`.
 
 ## Make it your own
 

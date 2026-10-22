@@ -1,4 +1,5 @@
 import {
+  IconBrandGmail,
   IconBrandGoogleDrive,
   IconBrandNotion,
   IconChevronRight,
@@ -61,11 +62,13 @@ export const Route = createFileRoute("/_authed/admin/plugins/")({
  * A vendor's own mark where there is one, and a plug where there is not.
  *
  * The fallback covers a server an administrator added by URL, which has no catalogue entry and so no
- * mark of its own — and it would cover a catalogue vendor Tabler ships no brand for. Only Drive is in
- * the catalogue today, and Tabler has it.
+ * mark of its own — and it would cover a catalogue vendor Tabler ships no brand for. Gmail and
+ * Google Calendar is one connector and Tabler has no mark for both, so it takes Gmail's: mail is what
+ * people connect it for.
  */
 const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   "google-drive": IconBrandGoogleDrive,
+  "google-workspace": IconBrandGmail,
   notion: IconBrandNotion,
 };
 

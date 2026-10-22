@@ -251,7 +251,7 @@ export const GALLERY: GalleryComponent[] = [
     title: "Approval",
     kind: "decision",
     description:
-      "Ask the person to approve or decline something, and WAIT for their answer. Use before doing anything you cannot undo, spending money, sending a message, changing a record. You are given their decision and any reason they typed.",
+      "Ask the person to approve or decline something only they can decide, and WAIT for their answer: a plan, a course of action, a step no tool you hold will pause for. Do NOT use it to confirm a call to a tool that sends a message, pays, signs, deletes or changes a record: that call stops by itself and shows the person the exact action with Refuse, Allow once and Always allow, so asking first would ask twice. You are given their decision and any reason they typed.",
     parameters: ApprovalCardProps,
     Component: ApprovalCard as GalleryComponent["Component"],
     preview: {
