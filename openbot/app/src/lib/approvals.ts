@@ -87,7 +87,8 @@ export type PersonQuestion = {
 
 /**
  * Everything waiting on the person: the actions still pending and the questions still open, newest
- * first. The Inbox lists exactly these and its tab badge counts exactly these, so the two agree.
+ * first. Tasks lists exactly these under Needs you and its tab badge counts exactly these, so the two
+ * agree.
  */
 export function waitingOnYou(data: ApprovalInboxData | undefined): {
   requests: ApprovalRequest[];

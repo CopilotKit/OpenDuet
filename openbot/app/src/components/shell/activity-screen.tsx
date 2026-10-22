@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment, type ReactNode } from "react";
 import type { DuetIconName } from "@/components/duet/icons";
@@ -14,19 +14,18 @@ import {
 } from "@/lib/approval-view";
 import { approvalInboxOptions } from "@/lib/approvals";
 import {
-  cancelFollowUpMutationOptions,
-  stopHandoffMutationOptions,
-} from "@/lib/bot-lifecycle/mutations";
-import {
   type ActivityItem,
   type ActivityKind,
   botActivityQueryOptions,
 } from "@/lib/bot-lifecycle/queries";
-import { queryClient } from "@/query-client";
+import { cn } from "@/lib/utils";
 import { ScreenNotice } from "./chat-screen";
 import { ScreenScroll, ScreenTitle } from "./screen";
 
-/** One line of the Activity tab, from whichever ledger it came from. */
+/**
+ * One line of the Activity tab, or of Working on and Coming up on Tasks, from whichever ledger it
+ * came from.
+ */
 export type ActivityRow = {
   id: string;
   icon: DuetIconName;
@@ -98,10 +97,39 @@ export function completedRow(item: ActivityItem): ActivityRow {
   };
 }
 
+/** Something under way: violet when it is waiting on the person, blue while the Bot works. */
+export function workingRow(item: ActivityItem): ActivityRow {
+  return {
+    id: item.id,
+    icon: item.needsYou ? "inbox" : KIND_ICON[item.kind],
+    tone: item.needsYou ? "violet" : "blue",
+    title: item.title,
+    detail: [KIND_WORD[item.kind], statusWord(item.status), item.detail]
+      .filter(Boolean)
+      .join(" · "),
+    at: item.at,
+    channelId: item.channelId,
+  };
+}
+
+/** Something lined up for later. Grey, since nothing has happened yet. */
+export function upcomingRow(item: ActivityItem): ActivityRow {
+  return {
+    id: item.id,
+    icon: KIND_ICON[item.kind],
+    tone: "neutral",
+    title: item.title,
+    detail: [KIND_WORD[item.kind], item.detail].filter(Boolean).join(" · "),
+    at: item.at,
+    channelId: item.channelId,
+  };
+}
+
 /**
  * The Activity tab: what the product's own Bot did for the person, in plain words. Read from the
  * ledgers OpenBot already keeps (routine and responsibility runs, delegated tasks, follow-ups) and
- * from the actions the person answered in the Inbox. Nothing here is written for the screen.
+ * from the actions the person answered on Tasks. Nothing here is written for the screen. What the
+ * Bot is doing now and has lined up is on Tasks.
  */
 export function ActivityScreen() {
   const agents = useQuery(agentListQueryOptions());
@@ -111,8 +139,6 @@ export function ActivityScreen() {
     enabled: Boolean(bot),
   });
   const inbox = useQuery(approvalInboxOptions());
-  const stop = useMutation(stopHandoffMutationOptions(queryClient));
-  const cancel = useMutation(cancelFollowUpMutationOptions(queryClient));
 
   if (agents.isPending) return null;
   if (!agents.data)
@@ -155,85 +181,31 @@ export function ActivityScreen() {
       } satisfies ActivityRow;
     });
 
-  const data = activity.data;
-  const working: ActivityRow[] = (data?.inProgress ?? []).map((item) => ({
-    id: item.id,
-    icon: item.needsYou ? "inbox" : KIND_ICON[item.kind],
-    tone: item.needsYou ? "violet" : "blue",
-    title: item.title,
-    detail: [KIND_WORD[item.kind], statusWord(item.status), item.detail]
-      .filter(Boolean)
-      .join(" · "),
-    at: item.at,
-    channelId: item.channelId,
-    control: item.stoppable ? (
-      <RowButton
-        busy={stop.isPending && stop.variables?.id === item.id}
-        label={`Stop ${item.title}`}
-        onClick={() => stop.mutate({ agentId: botId, id: item.id })}
-      >
-        Stop
-      </RowButton>
-    ) : undefined,
-  }));
-  const handled = [...(data?.completed ?? []).map(completedRow), ...answered]
+  const handled = [
+    ...(activity.data?.completed ?? []).map(completedRow),
+    ...answered,
+  ]
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 25);
-  const upcoming: ActivityRow[] = (data?.scheduled ?? []).map((item) => ({
-    id: item.id,
-    icon: KIND_ICON[item.kind],
-    tone: "neutral",
-    title: item.title,
-    detail: [KIND_WORD[item.kind], item.detail].filter(Boolean).join(" · "),
-    at: item.at,
-    channelId: item.channelId,
-    control: item.cancellable ? (
-      <RowButton
-        busy={cancel.isPending && cancel.variables?.id === item.id}
-        label={`Cancel ${item.title}`}
-        onClick={() => cancel.mutate({ agentId: botId, id: item.id })}
-      >
-        Cancel
-      </RowButton>
-    ) : undefined,
-  }));
-  const problem = activity.error ?? stop.error ?? cancel.error;
 
   return (
     <ScreenScroll>
-      <ScreenTitle title="Activity">
-        What {bot.name} did for you, and what it does next.
-      </ScreenTitle>
-      {problem ? (
+      <ScreenTitle title="Activity">What {bot.name} did for you.</ScreenTitle>
+      {activity.error ? (
         <p className="type-sub mb-3 px-1 text-duet-red" role="alert">
-          {activity.error
-            ? `Couldn't load what ${bot.name} did. Reload the page.`
-            : problem.message}
+          Couldn't load what {bot.name} did. Reload the page.
         </p>
       ) : null}
-      {activity.isPending ? null : working.length +
-          handled.length +
-          upcoming.length ===
-        0 ? (
+      {activity.isPending ? null : handled.length === 0 ? (
         <DuetCard className="px-4 py-4">
           <p className="type-row font-semibold">Nothing yet.</p>
           <p className="type-sub mt-0.5 text-duet-ink-2">
-            What {bot.name} does for you shows up here: routines it runs,
-            follow-ups it keeps, and the actions you allowed.
+            What {bot.name} finishes for you shows up here: routines,
+            follow-ups, and the actions you allowed.
           </p>
         </DuetCard>
       ) : (
-        <div className="flex flex-col gap-5">
-          {working.length ? (
-            <ActivityCard rows={working} title="Working on" />
-          ) : null}
-          {handled.length ? (
-            <ActivityCard rows={handled} title="Handled for you" />
-          ) : null}
-          {upcoming.length ? (
-            <ActivityCard rows={upcoming} showTime={false} title="Coming up" />
-          ) : null}
-        </div>
+        <ActivityCard rows={handled} title="Handled for you" />
       )}
     </ScreenScroll>
   );
@@ -281,50 +253,64 @@ function ActivityLine({
   showTime: boolean;
 }) {
   const when = showTime ? clockTime(row.at) : "";
-  const line = (
+  const time = when ? (
+    <span className="type-label shrink-0 self-start pt-0.5 font-medium text-duet-ink-3">
+      {when}
+    </span>
+  ) : undefined;
+  const line = (trailing: ReactNode) => (
     <CardRow
       detail={row.detail}
       icon={row.icon}
       title={row.title}
       tone={row.tone}
-      trailing={
-        row.control ??
-        (when ? (
-          <span className="type-label shrink-0 self-start pt-0.5 font-medium text-duet-ink-3">
-            {when}
-          </span>
-        ) : undefined)
-      }
+      trailing={trailing}
     />
   );
-  // A row with a control stays unlinked, so the button is not nested inside a link.
-  if (row.control || !row.channelId) return line;
-  return (
+  if (!row.channelId) return line(row.control ?? time);
+  const link = (
     <Link
-      className="block rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
+      className="block min-w-0 flex-1 rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
       params={{ channelId: row.channelId }}
       to="/channel/$channelId"
     >
-      {line}
+      {line(row.control ? undefined : time)}
     </Link>
+  );
+  if (!row.control) return link;
+  // The control sits beside the link rather than inside it, so a button is never nested in a link
+  // and the rest of the row still opens the conversation.
+  return (
+    <div className="flex items-center">
+      {link}
+      <div className="shrink-0 pr-4">{row.control}</div>
+    </div>
   );
 }
 
-function RowButton({
+/** A small pill on a row: Stop, Cancel, Hide, or Start in black as the one to press. */
+export function RowButton({
   children,
   label,
   busy,
   onClick,
+  primary = false,
 }: {
   children: ReactNode;
   label: string;
   busy: boolean;
   onClick: () => void;
+  primary?: boolean;
 }) {
   return (
     <button
       aria-label={label}
-      className="type-label h-8 shrink-0 rounded-full px-3 font-semibold text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile disabled:opacity-50"
+      className={cn(
+        "type-label h-8 shrink-0 rounded-full px-3 font-semibold disabled:opacity-50",
+        primary
+          ? "bg-duet-black text-duet-on-black hover:brightness-125"
+          : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
+      )}
       disabled={busy}
       onClick={onClick}
       type="button"

@@ -16,7 +16,7 @@ import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { createChannelMutationOptions } from "@/lib/channels/mutations";
-import { ongoingChannel } from "@/lib/channels/ongoing";
+import { ONGOING_SEARCH_LIMIT, ongoingChannel } from "@/lib/channels/ongoing";
 import {
   type AgentChannel,
   channelKeys,
@@ -25,9 +25,6 @@ import {
 import { routeMessage } from "@/lib/channels/route";
 import { startWithChosen } from "@/lib/channels/start";
 import { newId } from "@/lib/new-id";
-
-/** How far back to look for the conversation before deciding there is none: four pages of 50. */
-const SEARCH_LIMIT = 200;
 
 /**
  * The Chat tab: the person's one ongoing conversation with the product's own Bot.
@@ -47,7 +44,7 @@ export function ChatScreen() {
     !channel &&
     channels.hasNextPage &&
     !channels.isFetchNextPageError &&
-    (channels.data?.length ?? 0) < SEARCH_LIMIT;
+    (channels.data?.length ?? 0) < ONGOING_SEARCH_LIMIT;
   const { fetchNextPage, isFetchingNextPage } = channels;
 
   // The roster is paged; a person with many other conversations may have this one further back.

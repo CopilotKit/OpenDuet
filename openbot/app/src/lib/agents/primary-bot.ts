@@ -17,7 +17,7 @@ export function isTenantBot(
 }
 
 /**
- * The Bot the Chat, Inbox and Activity tabs are about.
+ * The Bot the Chat, Tasks and Activity tabs are about.
  *
  * The tenant's own Bot (see `isTenantBot`). A fork that renames its tenant without such a Bot falls
  * back to the deployment's default Bot, so the tabs never point at a Bot this deployment does not

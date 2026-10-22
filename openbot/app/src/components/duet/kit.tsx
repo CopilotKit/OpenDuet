@@ -7,7 +7,7 @@ import { DuetIcon, type DuetIconName } from "./icons";
  * the white card, the icon tile, the hairline, the outcome pill, the topic label and the typing dots.
  */
 
-/** A white card with a hairline and a soft drop: every card in the thread, Inbox and Activity. */
+/** A white card with a hairline and a soft drop: every card in the thread, Tasks and Activity. */
 export function DuetCard({
   className,
   raised = false,

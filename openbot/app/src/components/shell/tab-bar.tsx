@@ -4,16 +4,16 @@ import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import { approvalInboxOptions, waitingOnYou } from "@/lib/approvals";
 import { cn } from "@/lib/utils";
 
-export type ShellTab = "chat" | "inbox" | "activity";
+export type ShellTab = "chat" | "tasks" | "activity";
 
 const TABS: {
   id: ShellTab;
-  to: "/" | "/inbox" | "/activity";
+  to: "/" | "/tasks" | "/activity";
   icon: DuetIconName;
   label: string;
 }[] = [
   { id: "chat", to: "/", icon: "chat", label: "Chat" },
-  { id: "inbox", to: "/inbox", icon: "inbox", label: "Inbox" },
+  { id: "tasks", to: "/tasks", icon: "tasks", label: "Tasks" },
   { id: "activity", to: "/activity", icon: "activity", label: "Activity" },
 ];
 
@@ -21,15 +21,15 @@ const TABS: {
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
-  if (path === "/inbox") return "inbox";
+  if (path === "/tasks") return "tasks";
   if (path === "/activity") return "activity";
   return null;
 }
 
 /**
- * The floating pill at the foot of the app: Chat, Inbox and Activity, the current one on a grey
- * capsule. Inbox carries the number of things waiting on the person, counted from the same list the
- * Inbox shows, so the badge and the screen never disagree.
+ * The floating pill at the foot of the app: Chat, Tasks and Activity, the current one on a grey
+ * capsule. Tasks carries the number of things waiting on the person, counted from the same list its
+ * "Needs you" section shows, so the badge and the screen never disagree.
  */
 export function TabBar({ current }: { current: ShellTab }) {
   const inbox = useQuery(approvalInboxOptions());
@@ -41,7 +41,7 @@ export function TabBar({ current }: { current: ShellTab }) {
     >
       {TABS.map((tab) => {
         const on = tab.id === current;
-        const badge = tab.id === "inbox" && waiting > 0 ? waiting : 0;
+        const badge = tab.id === "tasks" && waiting > 0 ? waiting : 0;
         return (
           <Link
             // The router marks the current tab with aria-current; exact, or "/" would match all three.

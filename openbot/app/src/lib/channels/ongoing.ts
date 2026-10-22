@@ -1,5 +1,8 @@
 import type { ChannelSummary } from "./queries";
 
+/** How far back to look for the conversation before deciding there is none: four pages of 50. */
+export const ONGOING_SEARCH_LIMIT = 200;
+
 /**
  * The person's one ongoing conversation with a Bot: the most recently used channel that has only
  * that Bot in it and can still reply.

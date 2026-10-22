@@ -13,12 +13,13 @@ import type { ReactNode } from "react";
 import { MANAGE_STORAGE_KEY, MenuSheet } from "@/components/shell/menu-sheet";
 import { TabBar, tabForPath } from "@/components/shell/tab-bar";
 import { authKeys } from "@/lib/auth/queries";
+import { Route as InboxRoute } from "@/routes/_authed/_app/inbox";
 import { channelKeys } from "@/lib/channels/queries";
 import { deploymentKeys } from "@/lib/deployment/queries";
 import { settleReactWork } from "./settle-react-work";
 
 /**
- * The film's shell: the tab bar at the foot of Chat, Inbox and Activity, and the menu that opens on
+ * The film's shell: the tab bar at the foot of Chat, Tasks and Activity, and the menu that opens on
  * Chat and the conversations, with every page OpenBot's sidebar listed under Manage and Settings.
  */
 
@@ -90,35 +91,46 @@ const pending = (id: string) => ({
 
 test("the paths of the three tabs, and no tab for the pages the menu opens", () => {
   expect(tabForPath("/")).toBe("chat");
-  expect(tabForPath("/inbox")).toBe("inbox");
-  expect(tabForPath("/inbox/")).toBe("inbox");
+  expect(tabForPath("/tasks")).toBe("tasks");
+  expect(tabForPath("/tasks/")).toBe("tasks");
   expect(tabForPath("/activity")).toBe("activity");
   expect(tabForPath("/bots")).toBeNull();
   expect(tabForPath("/channel/abc")).toBeNull();
 });
 
-test("the tab bar draws Chat, Inbox and Activity, the current one marked", async () => {
+test("the tab bar draws Chat, Tasks and Activity, the current one marked", async () => {
   inbox = { requests: [], questions: [] };
   serving();
-  const view = draw(<TabBar current="inbox" />, undefined, "/inbox");
+  const view = draw(<TabBar current="tasks" />, undefined, "/tasks");
   const nav = await view.findByRole("navigation", { name: "Main" });
   const links = within(nav).getAllByRole("link");
   expect(links.map((link) => link.textContent)).toEqual([
     "Chat",
-    "Inbox",
+    "Tasks",
     "Activity",
   ]);
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
     "/",
-    "/inbox",
+    "/tasks",
     "/activity",
   ]);
   expect(within(nav).getByRole("link", { current: "page" }).textContent).toBe(
-    "Inbox",
+    "Tasks",
   );
 });
 
-test("the Inbox badge counts what the Inbox lists: pending actions and open questions", async () => {
+test("/inbox, where earlier notifications and links point, goes to Tasks", () => {
+  const beforeLoad = InboxRoute.options.beforeLoad as () => void;
+  let thrown: unknown;
+  try {
+    beforeLoad();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toMatchObject({ options: { to: "/tasks", replace: true } });
+});
+
+test("the Tasks badge counts what Needs you lists: pending actions and open questions", async () => {
   inbox = {
     requests: [
       pending("a"),
@@ -138,17 +150,18 @@ test("the Inbox badge counts what the Inbox lists: pending actions and open ques
   serving();
   const view = draw(<TabBar current="chat" />);
   expect(
-    await view.findByRole("link", { name: "Inbox, 3 waiting" }),
+    await view.findByRole("link", { name: "Tasks, 3 waiting" }),
   ).toBeTruthy();
+  expect(view.getByRole("link", { name: "Activity" })).toBeTruthy();
 });
 
-test("with nothing waiting the Inbox carries no badge", async () => {
+test("with nothing waiting Tasks carries no badge", async () => {
   inbox = { requests: [], questions: [] };
   serving();
   const view = draw(<TabBar current="chat" />);
   await view.findByRole("navigation", { name: "Main" });
   await waitFor(() =>
-    expect(view.getByRole("link", { name: "Inbox" })).toBeTruthy(),
+    expect(view.getByRole("link", { name: "Tasks" })).toBeTruthy(),
   );
 });
 

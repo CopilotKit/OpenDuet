@@ -10,7 +10,7 @@ import { TabBar, tabForPath } from "./tab-bar";
 
 /**
  * The signed-in app, as the launch film shows it: one column the width of a phone, centred on a
- * wide screen, with the header floating over it and Chat, Inbox and Activity at its foot.
+ * wide screen, with the header floating over it and Chat, Tasks and Activity at its foot.
  *
  * The pages the menu opens (Bots, Connections, Settings…) were built for a wide pane, so they keep
  * their width under the same header, without the tab bar.
