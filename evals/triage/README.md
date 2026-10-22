@@ -4,9 +4,9 @@ Measures how well OpenDuet sorts incoming mail into **needs you** and **can wait
 
 ## The set
 
-`emails.jsonl` holds 60 invented messages to Maya Okafor, who runs a small ceramics studio, on the morning of Thursday 22 October 2026.
+`emails.jsonl` holds 62 invented messages to Maya Okafor, who runs a small ceramics studio, on the morning of Thursday 22 October 2026.
 
-- 25 need her and 35 can wait.
+- 27 need her and 35 can wait.
 - Each has the label a careful assistant should give it and the reason a person would accept.
 - `build-set.py` writes the file, so edit that and re-run it: `python3 evals/triage/build-set.py`.
 
@@ -18,7 +18,11 @@ It includes the cases that go wrong in practice:
 - a message that tries to instruct the assistant;
 - a customer company's newsletter;
 - a thread where she is only copied but asked by name;
-- a request that says there is no rush.
+- a request that says there is no rush;
+- a security report sent to her team's security@ Google Group, which arrives with list headers and in Gmail's Forums tab;
+- a vendor's direct "rotate your access tokens" notice sent through a mailing service, with an unsubscribe header, in Updates.
+
+The last two were settled as "can wait" by the list headers alone in a real brief, before any model read them. The rules now act on those headers only where Gmail has also filed the message under Promotions or Social.
 
 No real mail is used.
 
@@ -29,7 +33,7 @@ bun --env-file=openbot/.env evals/triage/run.ts               # rules, then the 
 bun --env-file=openbot/.env evals/triage/run.ts --rules-only  # rules alone, no model calls
 ```
 
-The provider is `BOT_PROVIDER` (`openai` or `anthropic`) and the model is `TRIAGE_EVAL_MODEL`, then `BOT_MODEL`, then the tenant package's default. Results go to `results-<model>.md` (or `results-rules-only.md`), with every verdict and its reason. Committed runs: `gpt-5.6-terra` (precision 96.2%, recall 100% for needs you) and `claude-sonnet-5-5` (100% and 100% on the 59 it decided; one call hit the model helper's 10-second limit, which a brief shows under needs you rather than hiding).
+The provider is `BOT_PROVIDER` (`openai` or `anthropic`) and the model is `TRIAGE_EVAL_MODEL`, then `BOT_MODEL`, then the tenant package's default. Results go to `results-<model>.md` (or `results-rules-only.md`), with every verdict and its reason. Committed runs: `claude-sonnet-5-5` on all 62 (precision 100%, recall 100% for needs you, 12 decided by rules), and `gpt-5.6-terra` on the earlier 60, before the two group and vendor cases (precision 96.2%, recall 100%).
 
 ## What the numbers mean, and what they don't
 

@@ -27,22 +27,70 @@ function message(overrides: Partial<TriageMessage> = {}): TriageMessage {
 }
 
 describe("rules", () => {
-  test("bulk mail can wait without a model call", () => {
+  test("bulk mail Gmail filed as marketing or social can wait without a model call", () => {
     expect(
-      ruleVerdict(message({ headers: { "list-unsubscribe": "<mailto:x>" } })),
+      ruleVerdict(
+        message({
+          headers: { "list-unsubscribe": "<mailto:x>" },
+          labels: ["INBOX", "CATEGORY_PROMOTIONS"],
+        }),
+      ),
     ).toMatchObject({ verdict: "can_wait", decidedBy: "rule:bulk" });
     expect(
-      ruleVerdict(message({ headers: { Precedence: "bulk" } }))?.decidedBy,
+      ruleVerdict(
+        message({
+          headers: { Precedence: "bulk" },
+          labels: ["INBOX", "CATEGORY_SOCIAL"],
+        }),
+      )?.decidedBy,
     ).toBe("rule:bulk");
   });
 
-  test("Promotions, Social and Forums can wait; Updates is left to the model", () => {
+  test("list headers alone settle nothing: a security report to a team's Google Group goes to the model", () => {
+    // The shape a Google Group gives every message it delivers, and the tab Gmail files it under.
+    const toGroup = message({
+      from: "Ravi Iyer <ravi@researcher.example>",
+      to: ["security@marlowceramics.com"],
+      subject: "Critical: order form exposes customer emails",
+      headers: {
+        "List-Id": "<security.marlowceramics.com>",
+        "List-Unsubscribe":
+          "<mailto:googlegroups-manage+unsubscribe@googlegroups.com>",
+        Precedence: "list",
+        "Mailing-list": "list security@marlowceramics.com",
+      },
+      labels: ["INBOX", "CATEGORY_FORUMS"],
+    });
+    expect(ruleVerdict(toGroup)).toBe(null);
+  });
+
+  test("a vendor's direct notice sent through a mailing service goes to the model", () => {
+    expect(
+      ruleVerdict(
+        message({
+          from: "Square <security@squareup.example>",
+          subject: "Urgent: rotate your access token",
+          headers: { "List-Unsubscribe": "<https://squareup.example/unsub>" },
+          labels: ["INBOX", "CATEGORY_UPDATES"],
+        }),
+      ),
+    ).toBe(null);
+  });
+
+  test("Promotions and Social can wait; Updates and Forums are left to the model", () => {
     expect(
       ruleVerdict(message({ labels: ["INBOX", "CATEGORY_SOCIAL"] }))?.decidedBy,
     ).toBe("rule:category");
     expect(
+      ruleVerdict(message({ labels: ["INBOX", "CATEGORY_PROMOTIONS"] }))
+        ?.decidedBy,
+    ).toBe("rule:category");
+    expect(
       ruleVerdict(message({ labels: ["INBOX", "CATEGORY_UPDATES"] })),
     ).toBe(null);
+    expect(ruleVerdict(message({ labels: ["INBOX", "CATEGORY_FORUMS"] }))).toBe(
+      null,
+    );
   });
 
   test("an out-of-office can wait, but auto-generated alerts go to the model", () => {
@@ -93,6 +141,30 @@ describe("prompt", () => {
       prompt.indexOf("<<<MESSAGE"),
     );
   });
+
+  test("names the group a message came through instead of saying it is not for them", () => {
+    const prompt = triagePrompt(
+      message({
+        to: ["security@marlowceramics.com"],
+        headers: { "list-id": "<security.marlowceramics.com>" },
+      }),
+      PERSON,
+      NOW,
+    );
+    expect(prompt).toContain(
+      "(Maya Okafor gets this through the group or list <security.marlowceramics.com>, as one of its members.)",
+    );
+    expect(prompt).not.toContain("is not named as a recipient");
+  });
+
+  test("still says so when a message names neither them nor a group", () => {
+    const prompt = triagePrompt(
+      message({ to: ["sam@marlowceramics.com"] }),
+      PERSON,
+      NOW,
+    );
+    expect(prompt).toContain("(Maya Okafor is not named as a recipient.)");
+  });
 });
 
 describe("answers", () => {
@@ -119,7 +191,10 @@ describe("triage", () => {
   test("rules decide first and the model is not called", async () => {
     let calls = 0;
     const result = await triage(
-      message({ headers: { "List-Unsubscribe": "<mailto:x>" } }),
+      message({
+        headers: { "List-Unsubscribe": "<mailto:x>" },
+        labels: ["INBOX", "CATEGORY_PROMOTIONS"],
+      }),
       PERSON,
       {
         complete: async () => {

@@ -285,6 +285,7 @@ describe("gmail_search_messages", () => {
       "List-Unsubscribe",
       "Precedence",
       "Auto-Submitted",
+      "List-Id",
       "Message-ID",
     ]);
   });
@@ -368,6 +369,21 @@ describe("gmail_search_messages", () => {
         },
       ],
       resultSizeEstimate: 2,
+    });
+  });
+
+  test("the group a message came through reaches triage, so mail to a team's security@ is not read as someone else's", async () => {
+    stubGoogle((call) =>
+      call.url.pathname.endsWith("/messages")
+        ? { messages: [{ id: "g1" }] }
+        : metadata("g1", {
+            To: "security@marlowceramics.com",
+            "list-id": "<security.marlowceramics.com>",
+          }),
+    );
+    const result = await callTool(connection, "gmail_search_messages", {});
+    expect(JSON.parse(result.text).messages[0].headers).toEqual({
+      "List-Id": "<security.marlowceramics.com>",
     });
   });
 
