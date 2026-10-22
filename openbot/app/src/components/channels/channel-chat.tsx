@@ -68,6 +68,15 @@ const JOIN_DEADLINE_MS = 1500;
  */
 const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
 
+/** When a Bot's announced turn is read for, while the store may not have it yet. */
+const CATCH_UP_DELAYS_MS = [0, 750, 1500];
+/**
+ * When it is read again after a read that changed the transcript, until a read changes nothing. The
+ * store has settled a server-run reply within about a second of announcing it; the last wait covers
+ * a slower store.
+ */
+const SETTLE_DELAYS_MS = [750, 1500, 3000];
+
 type ChannelActivitySignature = {
   agentId: string;
   at: string;
@@ -124,16 +133,29 @@ export function channelHistoryNotice({
  * Insert missing durable messages before their next shared ID, keeping local content and order.
  * A shorter read can still contain missing turns after unreadable rows are filtered out. Without a
  * following shared anchor, append the missing tail: the store cannot place it among local-only rows.
- * Return the original array when nothing was added so refreshes can wait for the store to catch up.
+ *
+ * A message the transcript took from the store (`fromStore`) is the store's to correct: when a later
+ * read holds it with different content, the later read wins. The store assembles a reply the server
+ * ran (after Allow once, a routine, a handoff) from that run's events over about a second, and a
+ * read in that window returns the reply under its final id with pieces missing from the middle. A
+ * message this tab streamed itself is never replaced: there the local copy is the whole one and the
+ * store's may still lag it.
+ *
+ * Return the original array when nothing was added or corrected so refreshes can wait for the store
+ * to catch up.
  */
-function mergeStoredMessages(local: Message[], stored: Message[]): Message[] {
+function mergeStoredMessages(
+  local: Message[],
+  stored: Message[],
+  fromStore: ReadonlySet<string>,
+): Message[] {
   const localIds = new Set(local.map((message) => message.id));
-  const seenStored = new Set<string>();
+  const seenStored = new Map<string, Message>();
   const before = new Map<string, Message[]>();
   let pending: Message[] = [];
   for (const message of stored) {
     if (seenStored.has(message.id)) continue;
-    seenStored.add(message.id);
+    seenStored.set(message.id, message);
     if (localIds.has(message.id)) {
       if (pending.length > 0) before.set(message.id, pending);
       pending = [];
@@ -141,11 +163,46 @@ function mergeStoredMessages(local: Message[], stored: Message[]): Message[] {
       pending.push(message);
     }
   }
-  if (before.size === 0 && pending.length === 0) return local;
+  let corrected = false;
+  const current = local.map((message) => {
+    const newer = fromStore.has(message.id)
+      ? seenStored.get(message.id)
+      : undefined;
+    if (!newer || sameContent(newer, message)) return message;
+    corrected = true;
+    return newer;
+  });
+  if (before.size === 0 && pending.length === 0 && !corrected) return local;
   return [
-    ...local.flatMap((message) => [...(before.get(message.id) ?? []), message]),
+    ...current.flatMap((message) => [
+      ...(before.get(message.id) ?? []),
+      message,
+    ]),
     ...pending,
   ];
+}
+
+/** Whether two copies of a message say the same thing: its text or parts, and any tool calls. */
+function sameContent(left: Message, right: Message): boolean {
+  const said = (message: Message) =>
+    JSON.stringify([
+      message.role,
+      "content" in message ? message.content : null,
+      "toolCalls" in message ? message.toolCalls : null,
+    ]);
+  return said(left) === said(right);
+}
+
+/** Note the ids a merge added from the store, so a later read may correct them. */
+function rememberFromStore(
+  fromStore: Set<string>,
+  before: readonly Message[],
+  after: readonly Message[],
+) {
+  const had = new Set(before.map((message) => message.id));
+  for (const message of after) {
+    if (!had.has(message.id)) fromStore.add(message.id);
+  }
 }
 
 /**
@@ -340,6 +397,8 @@ export function ChannelChat({
   const [historyReadFailed, setHistoryReadFailed] = useState(false);
   // Mount reads and Bot refreshes share one ordering: only the newest read owns the notice.
   const historyReadVersion = useRef(0);
+  /** Messages the transcript took from the store, which a later read may correct; see the merge. */
+  const fromStore = useRef(new Set<string>());
   useEffect(() => {
     if (isReady) openReadyGate.current();
   }, [isReady]);
@@ -375,8 +434,15 @@ export function ChannelChat({
         if (isCurrent) {
           // The gateway snapshot can lag the store. Keep its valid local rows even when the
           // corresponding stored row is unreadable, while restoring other readable additions.
-          const messages = mergeStoredMessages(agent.messages, stored.messages);
-          if (messages !== agent.messages) agent.setMessages(messages);
+          const messages = mergeStoredMessages(
+            agent.messages,
+            stored.messages,
+            fromStore.current,
+          );
+          if (messages !== agent.messages) {
+            rememberFromStore(fromStore.current, agent.messages, messages);
+            agent.setMessages(messages);
+          }
         }
         /*
          * Said on screen rather than only counted. A turn the history store holds and this app cannot
@@ -419,7 +485,11 @@ export function ChannelChat({
    * preserving current content and local-only messages in both the transcript and the next run.
    *
    * Retried briefly, because the roster is patched when the turn is on record with the runner and
-   * the platform's read of the thread can be a beat behind it.
+   * the platform's read of the thread can be a beat behind it. And read again after a read that
+   * changed the transcript, until one changes nothing: the store assembles the turn from its run's
+   * events over about a second, so the first read that has it can hold it with pieces missing. Each
+   * later read corrects it (see `mergeStoredMessages`), and the one that changes nothing is the
+   * store having settled.
    */
   useEffect(() => {
     const authoredActivity = (): ChannelActivitySignature | null => {
@@ -455,7 +525,12 @@ export function ChannelChat({
         !cancelled && version === historyReadVersion.current;
       void (async () => {
         let sawReady = false;
-        for (const delayMs of [0, 750, 1500]) {
+        // The waits still to come: catching up, then, once a read changes something, settling.
+        const waits = [...CATCH_UP_DELAYS_MS];
+        let settling = false;
+        while (waits.length > 0) {
+          const delayMs = waits.shift() ?? 0;
+          const lastCatchUp = !settling && waits.length === 0;
           if (delayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
@@ -468,7 +543,7 @@ export function ChannelChat({
           if (stored.availability === "unavailable") {
             // Only an exhausted refresh with no successful read is a failure to announce. Keep the
             // last known ready notice when the store already answered this refresh cycle.
-            if (delayMs === 1500 && !sawReady) {
+            if (lastCatchUp && !sawReady) {
               setHistoryAvailability("unavailable");
               setHistoryReadFailed(true);
             }
@@ -483,10 +558,19 @@ export function ChannelChat({
           const messages = mergeStoredMessages(
             current.messages,
             stored.messages,
+            fromStore.current,
           );
-          if (messages === current.messages) continue;
+          if (messages === current.messages) {
+            // After a change, a read with nothing new is the store having settled.
+            if (settling) return;
+            continue;
+          }
+          rememberFromStore(fromStore.current, current.messages, messages);
           current.setMessages(messages);
-          return;
+          if (!settling) {
+            settling = true;
+            waits.splice(0, waits.length, ...SETTLE_DELAYS_MS);
+          }
         }
       })();
     };
