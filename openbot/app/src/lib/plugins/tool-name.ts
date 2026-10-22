@@ -97,6 +97,11 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Reading your mail and calendar",
     done: "Read your mail and calendar",
   },
+  // server/src/openduet/tasks.ts. Drawn as a plain line, so without these it read "add_tasks".
+  add_tasks: {
+    running: "Adding to your Tasks",
+    done: "Added to your Tasks",
+  },
 };
 
 /** One of this deployment's own tools in words, or null for any other name. */

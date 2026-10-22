@@ -1362,6 +1362,8 @@ const openDuetTools = createOpenDuetTools({
   callTool: (input) => pluginStore.callTool(input),
   complete: chooseSkills,
   model: runtimeModel.defaultModel,
+  directChannel: async (ownerUserId, agentId) =>
+    channelStore.direct(await actorFor(ownerUserId), agentId),
 });
 
 const loadToolsForActor =
