@@ -13,6 +13,7 @@ import {
   resolveSuggestionMutationOptions,
 } from "@/lib/proactive";
 import { cn } from "@/lib/utils";
+import { SwipeToAnswer } from "./swipe-to-answer";
 
 /** How long "Started" stays above the composer before the card makes room again. */
 export const STARTED_MS = 4000;
@@ -41,7 +42,8 @@ export function ChatSuggestionProvider({
  * The newest step Chat's Bot suggested from its background research, with Start and Hide, just
  * above the composer. Start runs it as a task the person asked for, in the conversation the
  * research belongs to; Hide dismisses it. Both are the same actions Tasks offers, so a suggestion
- * answered here is answered there too. Nothing is drawn outside Chat, or when there is nothing new.
+ * answered here is answered there too. On a touch screen the card also slides off: right to start
+ * it, left to hide it. Nothing is drawn outside Chat, or when there is nothing new.
  */
 export function ChatSuggestionCard() {
   const bot = useContext(ChatBotContext);
@@ -61,10 +63,11 @@ function SuggestionFor({ bot }: { bot: ChatBot }) {
     return () => clearTimeout(timer);
   }, [started]);
 
+  // A pill of the dock's glass, like the status under the header's orb: Chat scrolls under it.
   if (started)
     return (
       <p
-        className="type-label px-1 pb-2 font-semibold text-duet-green"
+        className="duet-glass mb-2.5 flex min-h-7 w-fit max-w-full items-center rounded-full px-3 py-1 font-semibold text-[13px] text-duet-green leading-4 shadow-duet-glass"
         role="status"
       >
         Started. {bot.name} is on it.
@@ -73,55 +76,63 @@ function SuggestionFor({ bot }: { bot: ChatBot }) {
   const suggestion = suggestions.data?.find((item) => item.agentId === bot.id);
   if (!suggestion) return null;
   const busy = act.isPending && act.variables?.id === suggestion.id;
+  // One path for the buttons and the drag. `comeBack` puts a card the drag sent off back in place
+  // when the answer fails, so the error below is there to read.
+  const answer = (action: "start" | "dismiss", comeBack?: () => void) =>
+    act.mutate(
+      { id: suggestion.id, action },
+      {
+        onSuccess: () => {
+          if (action === "start") setStarted(true);
+        },
+        onError: () => comeBack?.(),
+      },
+    );
   return (
-    <DuetCard
-      aria-label={`${bot.name} could take this on`}
-      className="mb-2.5 px-4 py-3"
-      glass
-      role="region"
+    // Keyed so that the next suggestion arrives at rest, not where the last one was sent.
+    <SwipeToAnswer
+      disabled={busy}
+      key={suggestion.id}
+      onHide={(comeBack) => answer("dismiss", comeBack)}
+      onStart={(comeBack) => answer("start", comeBack)}
     >
-      <p className="type-label font-semibold text-duet-violet">
-        {bot.name} could take this on
-      </p>
-      <p className="type-row mt-0.5 font-semibold [overflow-wrap:anywhere]">
-        {suggestion.title}
-      </p>
-      {suggestion.detail ? (
-        <p className="type-sub line-clamp-2 text-duet-ink-2 [overflow-wrap:anywhere]">
-          {suggestion.detail}
+      <DuetCard
+        aria-label={`${bot.name} could take this on`}
+        className="px-4 py-3"
+        glass
+        role="region"
+      >
+        <p className="type-label font-semibold text-duet-violet">
+          {bot.name} could take this on
         </p>
-      ) : null}
-      {suggestion.sourceApp ? (
-        <p className="type-label mt-0.5 text-duet-ink-3">
-          From {suggestion.sourceApp}
+        <p className="type-row mt-0.5 font-semibold [overflow-wrap:anywhere]">
+          {suggestion.title}
         </p>
-      ) : null}
-      {act.error && act.variables?.id === suggestion.id ? (
-        <p className="type-label mt-1 text-duet-red" role="alert">
-          {act.error.message}
-        </p>
-      ) : null}
-      <div className="mt-2.5 flex gap-2">
-        <SmallPill
-          disabled={busy}
-          onClick={() => act.mutate({ id: suggestion.id, action: "dismiss" })}
-        >
-          Hide
-        </SmallPill>
-        <SmallPill
-          disabled={busy}
-          onClick={() =>
-            act.mutate(
-              { id: suggestion.id, action: "start" },
-              { onSuccess: () => setStarted(true) },
-            )
-          }
-          primary
-        >
-          Start
-        </SmallPill>
-      </div>
-    </DuetCard>
+        {suggestion.detail ? (
+          <p className="type-sub line-clamp-2 text-duet-ink-2 [overflow-wrap:anywhere]">
+            {suggestion.detail}
+          </p>
+        ) : null}
+        {suggestion.sourceApp ? (
+          <p className="type-label mt-0.5 text-duet-ink-3">
+            From {suggestion.sourceApp}
+          </p>
+        ) : null}
+        {act.error && act.variables?.id === suggestion.id ? (
+          <p className="type-label mt-1 text-duet-red" role="alert">
+            {act.error.message}
+          </p>
+        ) : null}
+        <div className="mt-2.5 flex gap-2">
+          <SmallPill disabled={busy} onClick={() => answer("dismiss")}>
+            Hide
+          </SmallPill>
+          <SmallPill disabled={busy} onClick={() => answer("start")} primary>
+            Start
+          </SmallPill>
+        </div>
+      </DuetCard>
+    </SwipeToAnswer>
   );
 }
 
