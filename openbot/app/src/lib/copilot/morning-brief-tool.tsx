@@ -1,5 +1,7 @@
 import { useRenderTool } from "@copilotkit/react-core/v2";
+import { useState } from "react";
 import { z } from "zod";
+import { useConversationSend } from "@/components/channels/conversation-send";
 import { ToolLine } from "@/components/channels/tool-line";
 import {
   type BriefItem,
@@ -146,8 +148,48 @@ export function MorningBriefTool() {
             refused
           />
         );
-      return <MorningBriefCard {...briefCard(brief)} />;
+      return <StartableBrief brief={brief} />;
     },
   });
   return null;
+}
+
+/**
+ * What Start sends for a row that needs the person: their own words, in the thread, asking the Bot
+ * to take it on. A reply that goes out still stops for Allow once like any other.
+ */
+export function startRequest(item: Brief["needsYou"][number]): string {
+  return item.subject
+    ? `Take care of ${item.from}'s email: ${item.subject}`
+    : `Take care of ${item.from}'s email.`;
+}
+
+/**
+ * The brief with Start on each row that needs the person. Start sends through the conversation it is
+ * drawn in, as a typed message would, so it waits its turn behind an answer in flight. Outside a
+ * conversation there is nowhere to send, and the rows draw no button.
+ */
+export function StartableBrief({ brief }: { brief: Brief }) {
+  const conversation = useConversationSend();
+  const [started, setStarted] = useState<ReadonlySet<string>>(new Set());
+  const card = briefCard(brief);
+  const needsYou = conversation
+    ? card.needsYou.map((row, index) => {
+        const item = brief.needsYou[index];
+        if (!item) return row;
+        return {
+          ...row,
+          action: {
+            label: "Start",
+            name: `Start: ${row.title}`,
+            ...(started.has(row.id) ? { done: "Started" } : {}),
+            onPress: () => {
+              if (conversation.send(startRequest(item)))
+                setStarted((current) => new Set(current).add(row.id));
+            },
+          },
+        };
+      })
+    : card.needsYou;
+  return <MorningBriefCard {...card} needsYou={needsYou} />;
 }

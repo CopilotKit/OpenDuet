@@ -4,12 +4,19 @@ import {
   beforeAll,
   describe,
   expect,
+  mock,
   test,
 } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { MorningBriefCard } from "@/components/duet/morning-brief-card";
-import { briefCard, readBrief } from "@/lib/copilot/morning-brief-tool";
+import { ConversationSendContext } from "@/components/channels/conversation-send";
+import {
+  briefCard,
+  readBrief,
+  StartableBrief,
+  startRequest,
+} from "@/lib/copilot/morning-brief-tool";
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost/" }));
 afterEach(() => cleanup());
@@ -135,5 +142,70 @@ describe("the card", () => {
     ).toBeTruthy();
     // An empty brief because Gmail is missing must not read as a quiet morning.
     expect(view.queryByText(/Nothing new needs you/)).toBe(null);
+  });
+});
+
+describe("Start on what needs her", () => {
+  const brief = () => {
+    const parsed = readBrief(JSON.stringify(BRIEF));
+    if (!parsed) throw new Error("no brief");
+    return parsed;
+  };
+
+  test("asks the Bot, in her words, to take the email on", () => {
+    const first = brief().needsYou[0];
+    if (!first) throw new Error("no row");
+    expect(startRequest(first)).toBe(
+      "Take care of Ana Pereira's email: Friday ship date?",
+    );
+    expect(startRequest({ ...first, subject: "" })).toBe(
+      "Take care of Ana Pereira's email.",
+    );
+  });
+
+  test("sends through the conversation and then reads Started", () => {
+    const send = mock((_text: string) => true);
+    const view = render(
+      <ConversationSendContext.Provider
+        value={{ send, isLatestTurn: () => true }}
+      >
+        <StartableBrief brief={brief()} />
+      </ConversationSendContext.Provider>,
+    );
+    fireEvent.click(
+      view.getByRole("button", {
+        name: "Start: Ana Pereira · Friday ship date?",
+      }),
+    );
+    expect(send).toHaveBeenCalledWith(
+      "Take care of Ana Pereira's email: Friday ship date?",
+    );
+    const done = view.getByRole("button", {
+      name: "Started",
+    }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true);
+  });
+
+  test("a conversation that can't take it now leaves the row as it was", () => {
+    const view = render(
+      <ConversationSendContext.Provider
+        value={{ send: () => false, isLatestTurn: () => true }}
+      >
+        <StartableBrief brief={brief()} />
+      </ConversationSendContext.Provider>,
+    );
+    const start = view.getByRole("button", {
+      name: "Start: Ana Pereira · Friday ship date?",
+    });
+    fireEvent.click(start);
+    expect(view.queryByRole("button", { name: "Started" })).toBe(null);
+  });
+
+  test("outside a conversation the brief has nothing to press", () => {
+    const view = render(<StartableBrief brief={brief()} />);
+    expect(view.queryByRole("button")).toBe(null);
+    expect(
+      view.getByText("Ana needs the Friday date confirmed today."),
+    ).toBeTruthy();
   });
 });

@@ -8,6 +8,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ConversationView } from "@/components/channels/conversation-view";
+import { ChatSuggestionProvider } from "@/components/shell/chat-suggestion";
 import { FIRST_DAY_REQUEST, FirstDay } from "@/components/shell/first-day";
 import {
   seedMessage,
@@ -80,7 +81,7 @@ export function ChatScreen() {
     return (
       <OngoingChat
         channel={channel}
-        botId={bot.id}
+        bot={bot}
         key={channel.id}
         topic={channels.data.find((row) => row.id === channel.id)?.summary}
       />
@@ -91,22 +92,24 @@ export function ChatScreen() {
 
 function OngoingChat({
   channel,
-  botId,
+  bot,
   topic,
 }: {
   channel: AgentChannel;
-  botId: string;
+  bot: AgentProfile;
   topic: string | null | undefined;
 }) {
   // Open on screen is read, as it is on the conversation's own page.
   useMarkOpenChannelRead(channel.id);
   return (
-    <ChannelChat
-      channel={channel}
-      inShell
-      runtimeAgentId={botId}
-      topic={topic ?? null}
-    />
+    <ChatSuggestionProvider bot={{ id: bot.id, name: bot.name }}>
+      <ChannelChat
+        channel={channel}
+        inShell
+        runtimeAgentId={bot.id}
+        topic={topic ?? null}
+      />
+    </ChatSuggestionProvider>
   );
 }
 
