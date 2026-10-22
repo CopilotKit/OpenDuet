@@ -5,9 +5,10 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ConversationView } from "@/components/channels/conversation-view";
+import { useCheckInNotifications } from "@/components/shell/check-in-notifier";
 import { ChatSuggestionProvider } from "@/components/shell/chat-suggestion";
 import {
   DraftWatch,
@@ -21,6 +22,8 @@ import {
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { botAttentionQueryOptions } from "@/lib/bot-lifecycle/queries";
+import { CheckInArrivalContext } from "@/lib/channels/check-in";
 import { frameFirstDay } from "@/lib/channels/first-day";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { createChannelMutationOptions } from "@/lib/channels/mutations";
@@ -107,14 +110,27 @@ function OngoingChat({
 }) {
   // Open on screen is read, as it is on the conversation's own page.
   useMarkOpenChannelRead(channel.id);
+  // A check-in that arrives while the person is elsewhere is worth a notification, unless muted.
+  const attention = useQuery(botAttentionQueryOptions());
+  const checkInArrived = useCheckInNotifications({
+    name: bot.name,
+    muted:
+      attention.data?.find((row) => row.agentId === bot.id)?.notify === "none",
+  });
+  const chatBot = useMemo(
+    () => ({ id: bot.id, name: bot.name }),
+    [bot.id, bot.name],
+  );
   return (
-    <ChatSuggestionProvider bot={{ id: bot.id, name: bot.name }}>
-      <ChannelChat
-        channel={channel}
-        inShell
-        runtimeAgentId={bot.id}
-        topic={topic ?? null}
-      />
+    <ChatSuggestionProvider bot={chatBot}>
+      <CheckInArrivalContext.Provider value={checkInArrived}>
+        <ChannelChat
+          channel={channel}
+          inShell
+          runtimeAgentId={bot.id}
+          topic={topic ?? null}
+        />
+      </CheckInArrivalContext.Provider>
     </ChatSuggestionProvider>
   );
 }

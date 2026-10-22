@@ -164,6 +164,11 @@ describe("this deployment's own tools", () => {
     expect(readToolName("add_tasks", false).label).toBe("Added to your Tasks");
   });
 
+  test("a check-in offering a task reads as words while the card is on its way", () => {
+    expect(readToolName("offer_task", true).label).toBe("Adding a task");
+    expect(readToolName("offer_task", false).label).toBe("Added a task");
+  });
+
   test("any other bare name is left exactly as it is", () => {
     expect(readToolName("run_command", true)).toEqual({ label: "run_command" });
   });

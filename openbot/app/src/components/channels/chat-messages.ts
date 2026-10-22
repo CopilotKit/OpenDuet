@@ -565,22 +565,25 @@ export function toVisibleChatItems(
 }
 
 /**
- * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`, and
- * the pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`. Named here as
+ * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`, the
+ * pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`, and the tasks a
+ * check-in offers (server/src/openduet/offers.ts), drawn by `offer-task-tool.tsx`. Named here as
  * `GENERATE_SANDBOXED_UI` is: the projection only needs the strings.
  */
 const SUGGEST_REPLIES = "suggest_replies";
 const MAKE_PAGE = "make_page";
+const OFFER_TASK = "offer_task";
 
 /**
- * Page cards and reply chips moved to the end of their turn, under the Bot's last words in it:
- * the cards first, then the chips.
+ * Page cards, offered tasks and reply chips moved to the end of their turn, under the Bot's last
+ * words in it: the cards first, in the order they were made, then the chips.
  *
  * WHEREVER IN THE TURN THE BOT CALLED FOR THEM. A model that asks its question and then calls the
  * tool puts the chips under the question by itself, but one that calls first and asks after is just
  * as common, and drawn where the call sits its chips would land above the question they answer. A
  * page is the same: the Bot makes it, then says a line about it, and the card belongs under the
- * line. A turn ends where the person next sends something, so both go just before that.
+ * line, and a check-in's tasks under the sentence that says what it found. A turn ends where the
+ * person next sends something, so they all go just before that.
  */
 export function repliesLast(
   items: readonly VisibleChatItem[],
@@ -589,7 +592,11 @@ export function repliesLast(
   let pages: VisibleChatItem[] = [];
   let replies: VisibleChatItem[] = [];
   for (const item of items) {
-    if (item.kind === "tool" && item.toolCall.function.name === MAKE_PAGE) {
+    if (
+      item.kind === "tool" &&
+      (item.toolCall.function.name === MAKE_PAGE ||
+        item.toolCall.function.name === OFFER_TASK)
+    ) {
       pages.push(item);
       continue;
     }

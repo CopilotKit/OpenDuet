@@ -1123,4 +1123,27 @@ describe("repliesLast", () => {
       ]),
     ).toEqual(["u1", "a3", "call-page", "call-chips", "u2"]);
   });
+
+  test("draws a check-in's offered tasks under the Bot's words, in the order offered", () => {
+    const offer = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "offer_task", arguments: "{}" },
+    });
+    expect(
+      ids([
+        { id: "check-in", role: "user", content: "(a framed check-in)" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [offer("call-1"), offer("call-2")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: "{}" },
+        { id: "t2", role: "tool", toolCallId: "call-2", content: "{}" },
+        { id: "a2", role: "assistant", content: "Two things came in." },
+        { id: "u2", role: "user", content: "Thanks." },
+      ]),
+    ).toEqual(["check-in", "a2", "call-1", "call-2", "u2"]);
+  });
 });

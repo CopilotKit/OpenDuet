@@ -24,6 +24,8 @@ export type ProactiveSuggestion = {
   detail: string;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** Open until the person starts it or hides it, from any card that shows it. */
+  status?: "open" | "started" | "dismissed";
   createdAt: string;
 };
 
@@ -49,6 +51,21 @@ export const proactiveSuggestionsQueryOptions = () =>
         fallback: "Could not load suggestions",
       }),
     refetchInterval: 30_000,
+  });
+
+/**
+ * One suggestion, whatever became of it: how a card in Chat knows it was started or hidden. Under
+ * the list's key, so starting or hiding it anywhere refreshes both.
+ */
+export const proactiveSuggestionQueryOptions = (id: string) =>
+  queryOptions({
+    queryKey: [...proactiveKeys.suggestions, id] as const,
+    queryFn: (): Promise<ProactiveSuggestion> =>
+      client(
+        `/api/proactive/suggestions/${encodeURIComponent(id)}`,
+        "suggestion",
+        { fallback: "Could not load this suggestion" },
+      ),
   });
 
 export const createProactiveSetting = (input: {
@@ -113,8 +130,11 @@ export const createProactiveSettingMutationOptions = (
     onSuccess: settleProactive(queryClient),
   });
 
-/** How often research runs when one button turns it on: every four hours, as when OpenBot does. */
-export const DEFAULT_RESEARCH_INTERVAL_MINUTES = 240;
+/**
+ * How often research checks in when one button turns it on: every hour. A check-in reads only what
+ * is new since the last one and usually ends with nothing to say, so an hour costs little.
+ */
+export const DEFAULT_RESEARCH_INTERVAL_MINUTES = 60;
 
 /**
  * Turn a Bot's background research on from one button.

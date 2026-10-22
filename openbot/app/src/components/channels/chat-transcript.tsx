@@ -17,6 +17,7 @@ import { motion, useReducedMotion } from "motion/react";
 import {
   memo,
   type ReactNode,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -53,6 +54,11 @@ import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
 import { readFirstDay } from "@/lib/channels/first-day";
+import {
+  type CheckIn,
+  CheckInArrivalContext,
+  readCheckIn,
+} from "@/lib/channels/check-in";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { queryClient } from "@/query-client";
 import { splitChatOrigin } from "./chat-origin";
@@ -626,6 +632,36 @@ function FirstDayGreeting({ delay }: { delay: number }) {
 /** The plan arrives a beat after the welcome, as a second message would. */
 const FIRST_DAY_PLAN_DELAY_SECONDS = 0.4;
 
+/** "10:32 AM" in the reader's own clock and locale, or null for a time that cannot be read. */
+export function checkInTime(checkedAt: string | null): string | null {
+  if (!checkedAt) return null;
+  const at = new Date(checkedAt);
+  return Number.isNaN(at.getTime())
+    ? null
+    : at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * A check-in the Bot started, drawn as the quiet line it is: what it looked at, and when.
+ *
+ * The message here is a frame addressed to the model (`shared/check-in.ts`), with what research
+ * found under it as JSON. Nobody typed it, so it is never the person's bubble, and none of it is for
+ * them to read: the Bot says what it found in its own message under this line, and the cards it
+ * offers follow. Chat is told it was drawn, to notify a person who is not looking.
+ */
+function CheckInLine({ checkIn }: { checkIn: CheckIn }) {
+  const arrived = useContext(CheckInArrivalContext);
+  useEffect(() => {
+    arrived?.(checkIn);
+  }, [arrived, checkIn]);
+  const time = checkInTime(checkIn.checkedAt);
+  return (
+    <p className="type-label w-full text-center text-duet-ink-3">
+      Checked your mail and calendar{time ? ` · ${time}` : ""}
+    </p>
+  );
+}
+
 /** `manual/requested` reads as "manual"; anything else keeps its event type beside the source. */
 function describeTrigger(trigger: string): string {
   const [source, type] = trigger.split("/", 2);
@@ -718,6 +754,19 @@ const TranscriptMessage = memo(function TranscriptMessage({
   // Chat's first message, sent for the person rather than by them: the Bot's greeting goes here.
   if (isUser && readFirstDay(text) !== null) {
     return <FirstDayGreeting delay={delay} />;
+  }
+  // A check-in the Bot started itself: a quiet line, and its own words follow.
+  const checkIn = isUser ? readCheckIn(text) : null;
+  if (checkIn !== null) {
+    return (
+      <MessageRow align="start">
+        <MessageContent>
+          <Arriving delay={delay}>
+            <CheckInLine checkIn={checkIn} />
+          </Arriving>
+        </MessageContent>
+      </MessageRow>
+    );
   }
   const align = isUser ? "end" : "start";
   // Slack/Teams turns carry a model-facing participant line; show a marker instead of the line.
@@ -1516,7 +1565,10 @@ export function isPersonSentMessage(
   role: "user" | "assistant",
   text: string,
 ): boolean {
-  return role === "user" && readFiring(text) === null;
+  // A check-in is the same: the Bot started it, and it must not scroll the person's place away.
+  return (
+    role === "user" && readFiring(text) === null && readCheckIn(text) === null
+  );
 }
 
 /**
