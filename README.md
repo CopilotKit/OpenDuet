@@ -65,9 +65,12 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 | Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). | Available today |
 | Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages as they arrive. Today it reads your mail when the brief is made. | In progress     |
 | What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). Slack comes later. | Available today |
-| Morning brief                | Ask for it: what needs you and why, what can wait, today's calendar, and anything it could not check. Getting it on a schedule, through routines, is not yet verified. | Available today |
+| Morning brief                | Ask for it: what needs you and why, what can wait, today's calendar, and anything it could not check. **Start** on a row that needs you hands that email to OpenDuet. Getting the brief on a schedule, through routines, is not yet verified. | Available today |
+| Tasks                        | One tab for what needs you, answered right there, what OpenDuet suggests from its background research, and what it is working on. Its newest suggestion also waits above Chat's composer, with **Start** and **Hide**. | Available today |
+| Gets to know you             | On your first day it speaks first: it greets you, reads your recent mail and this week's calendar, says what it thinks you do and three ways it can help, and asks you to correct it. | Available today |
+| Answers in a tap             | When it asks you to choose, the likely answers appear as replies you can tap.         | Available today |
+| Say it instead               | Tap the voice button in Chat and say everything you need to do. It is written down and sent as your message. Needs a speech-to-text provider on the server (`TRANSCRIPTION_*`). | Available today |
 | Sensitive-info check         | A check on every outgoing message. OpenBot today classifies each tool as a read or a write and redacts secrets from its audit trail. | In progress |
-| Phone inbox                  | One place on your phone for everything waiting on you.                                | In progress     |
 
 ## Quick start
 
