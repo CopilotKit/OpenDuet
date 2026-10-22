@@ -159,6 +159,11 @@ describe("this deployment's own tools", () => {
     });
   });
 
+  test("putting tasks on the Tasks tab reads as words, while it runs and after", () => {
+    expect(readToolName("add_tasks", true).label).toBe("Adding to your Tasks");
+    expect(readToolName("add_tasks", false).label).toBe("Added to your Tasks");
+  });
+
   test("any other bare name is left exactly as it is", () => {
     expect(readToolName("run_command", true)).toEqual({ label: "run_command" });
   });

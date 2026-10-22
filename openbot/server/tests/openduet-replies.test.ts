@@ -27,10 +27,12 @@ describe("the suggest_replies tool", () => {
       callTool: async () => ({ text: "", isError: true }),
       complete: async () => "",
       model: "test",
+      directChannel: async () => ({ id: "", threadId: "" }),
     })("dev-local-user", "openduet", INITIATOR);
     expect(held.map((granted) => granted.ref)).toEqual([
       "openduet/morning_brief",
       "openduet/suggest_replies",
+      "openduet/add_tasks",
     ]);
   });
 
