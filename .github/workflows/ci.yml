@@ -723,6 +723,10 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     needs: [static, deployables, mobile, computer-browser, chart, test, startup, python-harness, build, migrations, image, component-dockerfiles]
+    # Nothing is checked out here, so the workflow's default `openbot` folder does not exist.
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - name: Require every check
         env:

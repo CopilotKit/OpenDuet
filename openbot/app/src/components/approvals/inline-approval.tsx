@@ -5,6 +5,7 @@ import {
   approvalInboxOptions,
   decideApproval,
 } from "@/lib/approvals";
+import { personWasAsked } from "@/lib/approval-view";
 import { ApprovalCard } from "./approval-card";
 
 /**
@@ -37,7 +38,7 @@ export function InlineApproval({
     : undefined;
   if (!request) return <>{fallback}</>;
   if (request.status !== "pending") {
-    if (!request.action.policy || !request.decision) return <>{fallback}</>;
+    if (!personWasAsked(request) || !request.decision) return <>{fallback}</>;
     return (
       <div className="space-y-2">
         <ApprovalCard compact request={request} />

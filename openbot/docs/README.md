@@ -12,6 +12,7 @@ Start with the root [README](../README.md), then use these references:
 - Plugins, one connector per page — what an administrator registers, what each person consents to, and what the failures mean:
   - [Composio](plugins/composio.md): the broker, and so the one page here that is a catalogue of apps rather than a single connector.
   - [Google Drive](plugins/google-drive.md)
+  - [Gmail and Google Calendar](plugins/google-workspace.md): including the fake Google for trying it without an account.
   - [Notion](plugins/notion.md)
 - [Deployment](deployment.md): the container, what is in the image, minimum sizes, and the platform notes.
 - [Kubernetes](../charts/openbot/README.md): the Helm chart, what a cluster needs before it, and the values that differ per cloud.

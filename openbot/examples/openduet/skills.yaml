@@ -20,6 +20,38 @@
 # Refs are `<serverId>/<toolName>`, the same form a grant is written in. `google-drive` and `notion`
 # are catalogue connectors; a server an administrator adds by URL uses the id it was given.
 skills:
+  # OpenDuet's own two. The brief is a server tool (server/src/openduet/brief.ts) that every Bot
+  # holds; it reads only the Gmail and Calendar tools the Bot was granted, so these tool refs are what
+  # an administrator grants on /admin/plugins/google-workspace for the brief to have anything to read.
+  - slug: morning-brief
+    title: Morning brief
+    summary: What needs you today, what can wait, and today's calendar, from your mail and calendar.
+    instructions: >-
+      Call morning_brief. The app shows its result as a card, so do not list the items again. Then
+      say, in at most two short sentences, the single most important thing and offer one concrete
+      next step, such as drafting a reply to the person who is waiting. If the brief lists a source
+      it could not check, say what is missing and that it can be connected on the Connections page;
+      never describe a source it could not check as quiet.
+    tools:
+      - google-workspace/gmail_search_messages
+      - google-workspace/calendar_list_events
+
+  - slug: reply-to-an-email
+    title: Reply to an email
+    summary: Read a message and draft a reply that goes out only after you approve it.
+    instructions: >-
+      Find the message the person means, and if more than one could be it, pick the one that matches
+      what they said rather than the newest. Read it whole with gmail_read_message before drafting
+      anything. Write a short reply in the person's voice that answers what was asked and nothing
+      more. Then call gmail_send_reply to the sender, in the same thread, straight away: do not ask
+      the person to confirm the draft first. The send itself pauses and shows them the exact
+      message with Refuse, Allow once and Always allow, which is where they decide; asking before it
+      would ask twice. Never say a reply was sent until the tool says so, and if they refuse, say
+      plainly that it was not sent.
+    tools:
+      - google-workspace/gmail_read_message
+      - google-workspace/gmail_send_reply
+
   - slug: research-public-web
     title: Research the public web
     summary: Search current public sources and write a cited brief.

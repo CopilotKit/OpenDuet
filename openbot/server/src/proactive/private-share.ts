@@ -60,7 +60,16 @@ export type PrivateShareInput = {
 };
 
 export type PrivateShareVerdict =
-  | { status: "allowed"; reason: string }
+  | {
+      status: "allowed";
+      reason: string;
+      /**
+       * The person answered for this send themselves: an Always allow for this audience, or Allow
+       * once for this exact content in this conversation. The gate uses it to skip a second review of
+       * the same send; it does not lift any rule.
+       */
+      byPerson?: true;
+    }
   | { status: "denied"; message: string }
   | {
       status: "pending";
@@ -127,7 +136,11 @@ export function createPrivateShareCheck(deps: {
           rule.scope === scope,
       )
     )
-      return { status: "allowed", reason: "You always allow this." };
+      return {
+        status: "allowed",
+        reason: "You always allow this.",
+        byPerson: true,
+      };
 
     const continuation = input.continuation ?? currentApprovalContext();
     if (!continuation)
@@ -166,7 +179,12 @@ export function createPrivateShareCheck(deps: {
         record.decidedAt &&
         now().getTime() - record.decidedAt.getTime() < ONCE_WINDOW_MS,
     );
-    if (recent) return { status: "allowed", reason: "You allowed this share." };
+    if (recent)
+      return {
+        status: "allowed",
+        reason: "You allowed this share.",
+        byPerson: true,
+      };
 
     const request = await deps.approvals.open(action);
     if (request.status === "denied")

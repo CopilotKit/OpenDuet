@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import {
   approvalOutcome,
+  approvalPlace,
   clockTime,
   decisionReceipt,
   describeApproval,
+  personWasAsked,
 } from "@/lib/approval-view";
 import type { ApprovalRequest } from "@/lib/approvals";
 
@@ -104,4 +106,47 @@ test("a time today is a clock time; an earlier one is a date", () => {
     /20/,
   );
   expect(clockTime("not a date", now)).toBe("");
+});
+
+test("a send the private-share check asks about reads as the email it is", () => {
+  const view = describeApproval({
+    action: {
+      toolRef: "openbot/share_private_information",
+      args: {
+        audience: "google-workspace: ana@hearthandco.example",
+        recipients: 0,
+        contentDigest: "9f2c",
+        preview:
+          "Hi Ana, our kiln is down until Monday. Could we ship on Tuesday?\nShip date for your mugs",
+      },
+    },
+  } as never);
+  expect(view).toEqual({
+    title: "Send email",
+    app: "Gmail",
+    kind: "mail",
+    fields: [{ label: "To", value: "ana@hearthandco.example" }],
+    body: "Hi Ana, our kiln is down until Monday. Could we ship on Tuesday?\nShip date for your mugs",
+  });
+});
+
+test("a send put to the person by the share check counts as asked, and reads its place without the marker", () => {
+  const share = {
+    action: {
+      toolRef: "openbot/share_private_information",
+      scope: "external:ana@hearthandco.example",
+      args: {},
+    },
+  } as never;
+  expect(personWasAsked(share)).toBe(true);
+  expect(approvalPlace(share)).toBe("ana@hearthandco.example");
+  expect(
+    personWasAsked({
+      action: {
+        toolRef: "google-workspace/gmail_send_reply",
+        scope: "x",
+        args: {},
+      },
+    } as never),
+  ).toBe(false);
 });

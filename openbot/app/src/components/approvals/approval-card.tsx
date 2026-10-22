@@ -3,6 +3,7 @@ import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import { DuetCard, OutcomePill, Rule, Tile } from "@/components/duet/kit";
 import {
   approvalOutcome,
+  approvalPlace,
   clockTime,
   decisionReceipt,
   describeApproval,
@@ -76,7 +77,7 @@ export function ApprovalCard({
   const handOff = request.action.policy?.behaviour === "hand_off";
   const outcome = approvalOutcome(request);
   const receipt = waiting ? null : decisionReceipt(request);
-  const caption = [botName, view.app, request.action.scope]
+  const caption = [botName, view.app, approvalPlace(request)]
     .filter(Boolean)
     .join(" · ");
 

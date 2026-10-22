@@ -6,9 +6,11 @@ import { CardRow, DuetCard, Rule, type TileTone } from "@/components/duet/kit";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import {
+  approvalPlace,
   clockTime,
   decisionReceipt,
   describeApproval,
+  personWasAsked,
 } from "@/lib/approval-view";
 import { approvalInboxOptions } from "@/lib/approvals";
 import {
@@ -128,7 +130,9 @@ export function ActivityScreen() {
       (request) =>
         request.action.botId === botId &&
         request.status !== "pending" &&
-        request.action.policy &&
+        // A send to other people is always put to the person, by the share check rather than a
+        // policy verdict, so it counts as asked too.
+        personWasAsked(request) &&
         request.decision,
     )
     .map((request) => {
@@ -142,7 +146,7 @@ export function ActivityScreen() {
         detail: [
           decisionReceipt(request),
           failed ? "Didn't work" : null,
-          request.action.scope,
+          approvalPlace(request),
         ]
           .filter(Boolean)
           .join(" · "),

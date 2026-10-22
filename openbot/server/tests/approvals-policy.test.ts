@@ -942,3 +942,36 @@ describe("host commands", () => {
     await expect(call).resolves.toEqual({ stdout: "" });
   });
 });
+
+describe("a send the person already answered", () => {
+  test("is not put to auto-review again, but a rule that asks still asks", async () => {
+    const calls: string[] = [];
+    const reviewer = model(
+      {
+        verdict: "needs_approval",
+        preApproved: false,
+        safety: "none",
+        reason: "Would ask.",
+      },
+      calls,
+    );
+    const answered = await decideAction({
+      ...base,
+      autoReview: true,
+      candidate: { ...candidate(), personAnswered: true },
+      model: reviewer,
+    });
+    expect(calls).toHaveLength(0);
+    expect(answered.behaviour).not.toBe("ask");
+
+    const ruled = await decideAction({
+      ...base,
+      autoReview: true,
+      personal: [rule("ask")],
+      candidate: { ...candidate(), personAnswered: true },
+      model: reviewer,
+    });
+    expect(ruled.behaviour).toBe("ask");
+    expect(calls).toHaveLength(0);
+  });
+});

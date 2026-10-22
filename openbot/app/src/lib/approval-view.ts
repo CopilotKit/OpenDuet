@@ -47,10 +47,71 @@ const display = (value: unknown): string | null => {
   return null;
 };
 
+/** The ref the server's private-share check asks under (server/src/proactive/private-share.ts). */
+const PRIVATE_SHARE = "openbot/share_private_information";
+
+/** Apps a send can name as `<server id>: <recipients>`, in the words a person knows them by. */
+const SENDING_APPS: Record<
+  string,
+  { app: string; kind: ApprovalView["kind"] }
+> = {
+  "google-workspace": { app: "Gmail", kind: "mail" },
+  gmail: { app: "Gmail", kind: "mail" },
+};
+
+/**
+ * A send to other people, as the private-share check asks about it.
+ *
+ * The check asks before the send itself, so its request carries the audience as `<server id>:
+ * <recipients>` and a preview of what goes out, not the tool's own arguments. Read as the message
+ * it is: the app, who it goes to, and what it says. The content digest is how the server matches a
+ * later send to this answer; it means nothing to the person and is left out.
+ */
+function describeShare(args: Record<string, unknown>): ApprovalView {
+  const audience = display(args.audience) ?? "";
+  const split = audience.indexOf(": ");
+  const server = split > 0 ? audience.slice(0, split) : "";
+  const to = split > 0 ? audience.slice(split + 2) : audience;
+  const known = SENDING_APPS[server];
+  return {
+    title: known?.kind === "mail" ? "Send email" : "Send a message",
+    app: known?.app ?? (server ? sentence(words(server)) : null),
+    kind: known?.kind ?? "other",
+    fields: to ? [{ label: "To", value: to }] : [],
+    body: display(args.preview),
+  };
+}
+
+/**
+ * Where an action happens, as a person reads it. The scope is the server's matching key, and for a
+ * send to other people it carries the share check's `external:` marker, which is plumbing.
+ */
+export function approvalPlace(
+  request: Pick<ApprovalRequest, "action">,
+): string {
+  return request.action.scope.replace(/^external:/, "");
+}
+
+/** Whether the person was asked about this request, rather than a saved rule deciding it. */
+export function personWasAsked(
+  request: Pick<ApprovalRequest, "action">,
+): boolean {
+  return (
+    Boolean(request.action.policy) || request.action.toolRef === PRIVATE_SHARE
+  );
+}
+
 export function describeApproval(
   request: Pick<ApprovalRequest, "action">,
 ): ApprovalView {
   const { toolRef, args } = request.action;
+  if (
+    toolRef === PRIVATE_SHARE &&
+    args &&
+    typeof args === "object" &&
+    !Array.isArray(args)
+  )
+    return describeShare(args as Record<string, unknown>);
   const segments = toolRef.split("/").filter(Boolean);
   const name = segments.at(-1) ?? toolRef;
   const prefix = segments.length > 1 ? segments[0] : null;

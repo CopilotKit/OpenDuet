@@ -251,6 +251,7 @@ import { createRoutineRunner } from "./routines/runner";
 import { createRoutineStore } from "./routines/store";
 import { createIntentRouter } from "./routing/classify";
 import { createModelCompleter } from "./routing/model";
+import { createOpenDuetTools } from "./openduet/wiring";
 import { reportIntelligenceEntitlement } from "./intelligence-entitlement-check";
 import { createSelfHostBanner } from "./self-host-banner";
 import { createTeamBots } from "./team-bots/team-bots";
@@ -1352,9 +1353,18 @@ const memorySweep = repeatAfterEach(async () => {
 // Follow-ups a Bot schedules for itself, on the shared work queue. See agents/wake-up.ts.
 const wakeUpStore = createWakeUpStore(database, { auditStore: bootAuditStore });
 
+/** OpenDuet's morning brief, read through the plugin store as the person. See openduet/wiring.ts. */
+const openDuetTools = createOpenDuetTools({
+  database,
+  callTool: (input) => pluginStore.callTool(input),
+  complete: chooseSkills,
+  model: runtimeModel.defaultModel,
+});
+
 const loadToolsForActor =
   (actorId: string, initiator: AuditInitiator = PERSON_INITIATOR) =>
   async (botId: string) => [
+    ...openDuetTools(actorId, botId, initiator),
     ...wakeUpTools({
       store: wakeUpStore,
       ownerUserId: actorId,

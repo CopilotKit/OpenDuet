@@ -313,7 +313,7 @@ export async function decideAction(input: {
       reason: "A rule hands this kind of action to the person.",
     };
   const review =
-    (input.autoReview && reviewable(candidate)) ||
+    (input.autoReview && reviewable(candidate) && !candidate.personAnswered) ||
     matched?.rule.behaviour === "pre_approved"
       ? await reviewAction({
           model: input.model,

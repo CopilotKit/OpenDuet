@@ -65,6 +65,12 @@ export type ApprovalCandidate = {
   args: unknown;
   target?: unknown;
   continuation?: ApprovalContinuation;
+  /**
+   * The person already answered for this exact action, through the check that asks before a send to
+   * other people. Auto-review then has nothing to add, so it is skipped and the person is asked once.
+   * Rules, the safety floor and "ask before every change" still apply. Not part of the digest.
+   */
+  personAnswered?: boolean;
 };
 export type ApprovalAction = ApprovalCandidate & {
   runId: string;
