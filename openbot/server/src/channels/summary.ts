@@ -8,6 +8,7 @@
  * event, so a missed sweep costs two seconds where a missed event would cost the name entirely.
  */
 import { and, asc, eq, isNull, notExists, sql } from "drizzle-orm";
+import { readFirstDay } from "@openbot/shared/first-day";
 import { readFiring } from "@openbot/shared/routine-firing";
 import type { Database } from "../db/client";
 import {
@@ -301,9 +302,10 @@ async function openingOf(
   const rawAsked = textOf(question.content);
   if (!rawAsked) return null;
   // A channel a routine opened has the firing frame wrapped around its first message, not a
-  // person's words. Unwrapped before it can become the title, same as the transcript unwraps it
-  // before it can become what a person reads.
-  const asked = readFiring(rawAsked) ?? rawAsked;
+  // person's words, and Chat's first day has the first-day frame around the request it sent for
+  // them. Unwrapped before either can become the title, same as the transcript unwraps them
+  // before they can become what a person reads.
+  const asked = readFirstDay(rawAsked) ?? readFiring(rawAsked) ?? rawAsked;
   const replied = answer ? textOf(answer.content) : "";
 
   return oneLine(

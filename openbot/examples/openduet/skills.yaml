@@ -36,9 +36,9 @@ skills:
       - google-workspace/gmail_search_messages
       - google-workspace/calendar_list_events
 
-  # Chat's first-day offer sends this request as the person's own message (app/src/components/
-  # shell/first-day.tsx); the skill is what brings the mail and calendar tools to that run, and its
-  # instructions apply when somebody picks it from the / menu.
+  # On the first day Chat sends this request by itself, framed so the Bot does not greet them twice
+  # (app/src/components/shell/first-day.tsx, shared/first-day.ts); the skill is what brings the mail
+  # and calendar tools to that run, and its instructions apply when somebody picks it from the / menu.
   - slug: first-day
     title: Get to know you
     summary: Learn what you do from your recent mail and this week's calendar, and say how it can help.

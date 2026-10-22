@@ -253,6 +253,16 @@ export function useChatOrb(): { state: MicOrbState; keystrokes: number } {
   };
 }
 
+/**
+ * Whether Chat's composer has something typed in it, from what Chat last reported.
+ *
+ * It reads the context every keystroke changes, so a caller re-renders on each one: read it in a
+ * small leaf, as Chat's first day does, rather than in a component with a screen under it.
+ */
+export function useChatDrafting(): boolean {
+  return useContext(PresenceContext).drafting;
+}
+
 /** What the pill under the orb says, from what Chat last reported. Null hides it. */
 export function useChatStep(): string | null {
   return useContext(StepContext);

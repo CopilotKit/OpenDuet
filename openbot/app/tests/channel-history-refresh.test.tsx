@@ -8,6 +8,10 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { z } from "zod";
 import { ChannelChat } from "@/components/channels/channel-chat";
+import { FIRST_DAY_PLAN } from "@/components/channels/first-day-greeting";
+import { stashFirstMessage } from "@/components/channels/transcript-messages";
+import { authKeys } from "@/lib/auth/queries";
+import { frameFirstDay } from "@/lib/channels/first-day";
 import {
   type AgentChannel,
   type ChannelPage,
@@ -430,6 +434,32 @@ test("a finished run without new assistant text does not report a prior assistan
         activity.text === priorReply.content,
     ),
   ).toHaveLength(1);
+});
+
+test("Chat's first-day message reaches the Bot framed, is drawn as its greeting, and previews as the request", async () => {
+  const request = "Get to know me. Look through my recent mail.";
+  queryClient.setQueryData(authKeys.currentUser(), {
+    id: "first-day-person",
+    email: "maya@example.com",
+    name: "Maya Chen",
+    role: "user",
+    onboarding: null,
+  });
+  stashFirstMessage(channel.id, frameFirstDay(request));
+  const view = mounting(async () => stored([]), []);
+
+  await waitFor(() => expect(runRequests).toHaveLength(1));
+  // The model is told it is the first day; the person sees the Bot greet them, not the frame.
+  expect(runRequests[0]?.input.messages.at(-1)).toMatchObject({
+    role: "user",
+    content: frameFirstDay(request),
+  });
+  expect(await view.findByText(FIRST_DAY_PLAN)).toBeTruthy();
+  expect(view.getByText(/^Welcome, Maya\./)).toBeTruthy();
+  await waitFor(() =>
+    expect(activityRequests.some((a) => a.agentId === null)).toBe(true),
+  );
+  expect(activityRequests.find((a) => a.agentId === null)?.text).toBe(request);
 });
 
 test("a finished run with new assistant text still reports that assistant text as activity", async () => {

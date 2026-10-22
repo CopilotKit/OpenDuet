@@ -5,17 +5,23 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ConversationView } from "@/components/channels/conversation-view";
 import { ChatSuggestionProvider } from "@/components/shell/chat-suggestion";
-import { FIRST_DAY_REQUEST, FirstDay } from "@/components/shell/first-day";
+import {
+  DraftWatch,
+  FIRST_DAY_REQUEST,
+  useFirstDayGreeting,
+} from "@/components/shell/first-day";
 import {
   seedMessage,
   stashFirstMessage,
 } from "@/components/channels/transcript-messages";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
+import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { frameFirstDay } from "@/lib/channels/first-day";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { createChannelMutationOptions } from "@/lib/channels/mutations";
 import { ONGOING_SEARCH_LIMIT, ongoingChannel } from "@/lib/channels/ongoing";
@@ -71,9 +77,9 @@ export function ChatScreen() {
       </ScreenNotice>
     );
   /*
-   * A conversation that has never had a message still opens on the first-day offer: one made only to
-   * hold the Bot's background research, say. The first message then goes into it rather than into a
-   * second conversation.
+   * A conversation that has never had a message is still the first day: one made only to hold the
+   * Bot's background research, say. The greeting then goes into it rather than into a second
+   * conversation.
    */
   if (channel && !started && channel.lastMessageAt === null)
     return <FirstMessage bot={bot} existing={channel} onStarted={setStarted} />;
@@ -114,9 +120,14 @@ function OngoingChat({
 }
 
 /**
- * No conversation yet. The first message creates the channel, recorded as a choice of this Bot the
- * way picking it anywhere else is, and the chat takes over in place. Until then Chat offers to start
- * by getting to know the person, which sends that request as their first message.
+ * No conversation yet, or one that has never had a message: the first day. The first message creates
+ * the channel, recorded as a choice of this Bot the way picking it anywhere else is, and the chat
+ * takes over in place.
+ *
+ * The Bot speaks first. Chat sends the first-day request itself, framed so the model knows nobody
+ * typed it, and the transcript draws the Bot's greeting where it sits. The composer stays usable
+ * throughout: a message the person sends, or starts typing, before the greeting goes wins, and no
+ * greeting is sent.
  */
 function FirstMessage({
   bot,
@@ -130,11 +141,17 @@ function FirstMessage({
 }) {
   const queryClient = useQueryClient();
   const createChannel = useMutation(createChannelMutationOptions(queryClient));
+  const me = useQuery(currentUserQueryOptions());
   const [sent, setSent] = useState<Message | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** A first message has gone from this screen: the greeting, or the person's own. */
+  const begun = useRef(false);
+  /** The person has typed into the composer. */
+  const typed = useRef(false);
 
-  /** Sends the first message, from the composer or from "Get to know me". Throws when it fails. */
+  /** Sends the first message, from the composer or as the greeting. Throws when it fails. */
   const start = async (text: string) => {
+    begun.current = true;
     setError(null);
     setSent(seedMessage(text, newId()));
     try {
@@ -161,34 +178,32 @@ function FirstMessage({
     }
   };
 
+  useFirstDayGreeting({
+    // Whose first day, with which Bot. Waits for the account; one that failed to load still greets.
+    claimKey: me.isPending ? null : `${me.data?.id ?? "unknown"}:${bot.id}`,
+    clear: () => !begun.current && !typed.current,
+    greet: () => start(frameFirstDay(FIRST_DAY_REQUEST)),
+  });
+
   return (
-    <ConversationView
-      inShell
-      lead={
-        sent ? null : (
-          <FirstDay
-            busy={createChannel.isPending}
-            name={bot.name}
-            onStart={() => {
-              // The notice above the composer says what went wrong; there is no draft to keep.
-              start(FIRST_DAY_REQUEST).catch(() => {});
-            }}
-          />
-        )
-      }
-      messages={sent ? [sent] : []}
-      notice={
-        error ? (
-          <p className="type-label pb-2 text-duet-red" role="alert">
-            {error}
-          </p>
-        ) : null
-      }
-      // The composer keeps the draft for another try when this throws.
-      onSubmit={(draft) => start(draft.text)}
-      pending={createChannel.isPending}
-      placeholder={`Message ${bot.name}`}
-    />
+    <>
+      <DraftWatch into={typed} />
+      <ConversationView
+        inShell
+        messages={sent ? [sent] : []}
+        notice={
+          error ? (
+            <p className="type-label pb-2 text-duet-red" role="alert">
+              {error}
+            </p>
+          ) : null
+        }
+        // The composer keeps the draft for another try when this throws.
+        onSubmit={(draft) => start(draft.text)}
+        pending={createChannel.isPending}
+        placeholder={`Message ${bot.name}`}
+      />
+    </>
   );
 }
 

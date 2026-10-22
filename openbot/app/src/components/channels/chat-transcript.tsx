@@ -12,6 +12,7 @@ import {
   IconFile,
   IconX,
 } from "@tabler/icons-react";
+import { useQuery } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import {
   memo,
@@ -51,7 +52,15 @@ import { TypingDots } from "@/components/duet/kit";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
+import { readFirstDay } from "@/lib/channels/first-day";
+import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { queryClient } from "@/query-client";
 import { splitChatOrigin } from "./chat-origin";
+import {
+  FIRST_DAY_PLAN,
+  firstDayWelcome,
+  firstNameOf,
+} from "./first-day-greeting";
 import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 import { readToolName } from "@/lib/plugins/tool-name";
@@ -578,6 +587,45 @@ function RoutineFiring({ instruction }: { instruction: string }) {
   );
 }
 
+/**
+ * The Bot's greeting on the person's first day, drawn where the message Chat sent for them sits.
+ *
+ * That message is a request wrapped in a frame addressed to the model (`shared/first-day.ts`), and
+ * nobody typed it, so drawing it as the person's bubble would put words in their mouth. What goes
+ * here instead is the Bot speaking first, in its own bubbles: a welcome, then what it is doing while
+ * the run underneath it does it. The request itself is not shown; the plan says it in the Bot's
+ * words.
+ *
+ * The name is read from the signed-in account through the app's one query client, the way the voice
+ * widget reads it, because the transcript is drawn on screens with no provider of its own.
+ */
+function FirstDayGreeting({ delay }: { delay: number }) {
+  const { data: me } = useQuery(currentUserQueryOptions(), queryClient);
+  return (
+    <MessageRow align="start">
+      <MessageContent>
+        <Arriving delay={delay}>
+          <Bubble align="start" className={AGENT_BUBBLE} variant="secondary">
+            <BubbleContent className={BUBBLE_CONTENT}>
+              {firstDayWelcome(firstNameOf(me?.name))}
+            </BubbleContent>
+          </Bubble>
+        </Arriving>
+        <Arriving delay={delay + FIRST_DAY_PLAN_DELAY_SECONDS}>
+          <Bubble align="start" className={AGENT_BUBBLE} variant="secondary">
+            <BubbleContent className={BUBBLE_CONTENT}>
+              {FIRST_DAY_PLAN}
+            </BubbleContent>
+          </Bubble>
+        </Arriving>
+      </MessageContent>
+    </MessageRow>
+  );
+}
+
+/** The plan arrives a beat after the welcome, as a second message would. */
+const FIRST_DAY_PLAN_DELAY_SECONDS = 0.4;
+
 /** `manual/requested` reads as "manual"; anything else keeps its event type beside the source. */
 function describeTrigger(trigger: string): string {
   const [source, type] = trigger.split("/", 2);
@@ -666,6 +714,10 @@ const TranscriptMessage = memo(function TranscriptMessage({
         </MessageContent>
       </MessageRow>
     );
+  }
+  // Chat's first message, sent for the person rather than by them: the Bot's greeting goes here.
+  if (isUser && readFirstDay(text) !== null) {
+    return <FirstDayGreeting delay={delay} />;
   }
   const align = isUser ? "end" : "start";
   // Slack/Teams turns carry a model-facing participant line; show a marker instead of the line.
