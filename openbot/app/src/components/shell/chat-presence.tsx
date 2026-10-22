@@ -1,3 +1,4 @@
+import type { Message } from "@ag-ui/core";
 import {
   createContext,
   type Dispatch,
@@ -9,6 +10,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { toVisibleChatItems } from "@/components/channels/chat-messages";
+import { stepDetails } from "@/components/channels/tool-activity";
 import type { MicOrbState } from "@/components/duet/mic-orb";
 
 /**
@@ -17,7 +20,9 @@ import type { MicOrbState } from "@/components/duet/mic-orb";
  *
  * The shell owns the header and Chat sits inside it, so this is a context the shell provides and
  * Chat reports into, rather than anything global. Reports go through one context and the header
- * reads another, so a keystroke re-renders the orb and nothing else on the screen.
+ * reads another, so a keystroke re-renders the orb and nothing else on the screen. The step under
+ * the orb travels on a pair of its own for the same reason: a keystroke does not reach the pill,
+ * and a new step does not reach the orb.
  */
 export type ChatPresence = {
   /** Chat is on screen and reporting. Everywhere else the orb rests. */
@@ -47,14 +52,21 @@ const ReportContext = createContext<Dispatch<
   SetStateAction<ChatPresence>
 > | null>(null);
 const PresenceContext = createContext<ChatPresence>(AT_REST);
+const StepReportContext = createContext<Dispatch<
+  SetStateAction<string | null>
+> | null>(null);
+const StepContext = createContext<string | null>(null);
 
 export function ChatPresenceProvider({ children }: { children: ReactNode }) {
   const [presence, setPresence] = useState(AT_REST);
+  const [step, setStep] = useState<string | null>(null);
   return (
     <ReportContext.Provider value={setPresence}>
-      <PresenceContext.Provider value={presence}>
-        {children}
-      </PresenceContext.Provider>
+      <StepReportContext.Provider value={setStep}>
+        <PresenceContext.Provider value={presence}>
+          <StepContext.Provider value={step}>{children}</StepContext.Provider>
+        </PresenceContext.Provider>
+      </StepReportContext.Provider>
     </ReportContext.Provider>
   );
 }
@@ -73,21 +85,60 @@ export function orbStateFor(
   return landing ? "done" : "idle";
 }
 
+/** What the pill under the orb says while the Bot works and no step of its own is running. */
+export const THINKING = "Thinking it through…";
+
+/**
+ * What the Bot is doing right now, in a line for the pill under the orb, or null when it has not
+ * got the turn.
+ *
+ * The newest step still waiting on its result, in the words a running tool line in the transcript
+ * uses for it, so the pill and the line say the same thing at the same moment. Only this turn's
+ * steps count: a call from an earlier turn that never got its result is not running, it was cut
+ * off. With no step running the Bot is thinking, or writing what it found.
+ */
+export function stepFor(
+  messages: readonly Message[],
+  working: boolean,
+): string | null {
+  if (!working) return null;
+  const items = toVisibleChatItems(messages);
+  // The turn began at the person's last message: their words, or files sent without any.
+  const turn = items.slice(
+    items.findLastIndex(
+      (item) =>
+        item.kind === "attachments" ||
+        (item.kind === "text" && item.role === "user"),
+    ) + 1,
+  );
+  const running = turn
+    .flatMap((item) => (item.kind === "tool" ? [stepDetails(item)] : []))
+    .findLast((step) => step.pending);
+  return running ? `${running.label}…` : THINKING;
+}
+
 /**
  * Report a conversation's turn and draft to the header, for as long as it is mounted. Only Chat's
  * conversation reports (`enabled`), and outside the shell there is nothing to report to.
  *
  * `working` is the turn, not the run, for the reason `ConversationView` gives: a browser action
  * ends one run and starts another, and the orb would land in the gap. `failed` is the turn having
- * ended without an answer. Hand the composer `onTextChange`, and call `onStop` when somebody
- * presses Stop, so a stopped answer does not land either.
+ * ended without an answer. `step` is what `stepFor` says about the turn, null when there is none.
+ * Hand the composer `onTextChange`, and call `onStop` when somebody presses Stop, so a stopped
+ * answer does not land either.
  */
 export function useReportChatPresence(
   enabled: boolean,
-  { working, failed }: { working: boolean; failed: boolean },
+  {
+    working,
+    failed,
+    step = null,
+  }: { working: boolean; failed: boolean; step?: string | null },
 ): { onTextChange: (text: string) => void; onStop: () => void } | undefined {
   const context = useContext(ReportContext);
   const report = enabled ? context : null;
+  const stepContext = useContext(StepReportContext);
+  const reportStep = enabled ? stepContext : null;
   const wasWorking = useRef(false);
   const stopped = useRef(false);
   const typed = useRef("");
@@ -106,6 +157,10 @@ export function useReportChatPresence(
     }));
   }, [report, working, failed]);
 
+  useEffect(() => {
+    reportStep?.(step);
+  }, [reportStep, step]);
+
   // Leaving Chat rests the orb, mid-turn included: an answer nobody is there to see does not land.
   useEffect(() => {
     if (!report) return;
@@ -117,6 +172,11 @@ export function useReportChatPresence(
         drafting: false,
       }));
   }, [report]);
+  // And takes its step with it, so the pill does not name work on a screen that is gone.
+  useEffect(() => {
+    if (!reportStep) return;
+    return () => reportStep(null);
+  }, [reportStep]);
 
   const onTextChange = useCallback(
     (text: string) => {
@@ -156,4 +216,9 @@ export function useChatOrb(): { state: MicOrbState; keystrokes: number } {
     state: orbStateFor(presence, presence.answers !== landed),
     keystrokes: presence.edits,
   };
+}
+
+/** What the pill under the orb says, from what Chat last reported. Null hides it. */
+export function useChatStep(): string | null {
+  return useContext(StepContext);
 }

@@ -5,6 +5,7 @@ import {
   type BriefItem,
   MorningBriefCard,
 } from "@/components/duet/morning-brief-card";
+import { readToolName } from "@/lib/plugins/tool-name";
 
 /*
  * Draws the server's `morning_brief` tool as the film's brief card. The tool runs on the server
@@ -125,16 +126,17 @@ export function briefCard(brief: Brief): {
   };
 }
 
+const TOOL = "morning_brief";
 const parameters = z.object({ since: z.string().optional() });
 
 export function MorningBriefTool() {
   useRenderTool({
-    name: "morning_brief",
+    name: TOOL,
     parameters,
     render: ({ result, status }) => {
       const running = status !== "complete" && result === undefined;
       if (running)
-        return <ToolLine label="Reading your mail and calendar" running />;
+        return <ToolLine label={readToolName(TOOL, true).label} running />;
       const brief = readBrief(result);
       if (!brief)
         return (

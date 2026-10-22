@@ -84,11 +84,18 @@ export function readToolName(name: string, running = false): ToolName {
  * would otherwise say: "show_app_access", shimmering, while the Bot works out what an app is for the
  * person. Named twice, for the moment and for afterwards, because only these lines are drawn while
  * running AND left on screen once done.
+ *
+ * The morning brief draws a card of its own, but the pill under the header's orb names it while it
+ * runs, and its own line reads the words from here so the two cannot drift apart.
  */
 const OWN_TOOLS: Record<string, { running: string; done: string }> = {
   [SHOW_APP_ACCESS_TOOL]: {
     running: "Checking app access",
     done: "Checked app access",
+  },
+  morning_brief: {
+    running: "Reading your mail and calendar",
+    done: "Read your mail and calendar",
   },
 };
 

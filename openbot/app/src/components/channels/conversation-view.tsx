@@ -18,7 +18,10 @@ import {
   type QueuedMessage,
   reduceQueue,
 } from "@/components/channels/composer";
-import { useReportChatPresence } from "@/components/shell/chat-presence";
+import {
+  stepFor,
+  useReportChatPresence,
+} from "@/components/shell/chat-presence";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { newId } from "../../lib/new-id";
 
@@ -166,9 +169,13 @@ export function ConversationView({
   const inFlight = pending || running;
   // The app shell's orb follows Chat: thinking for the turn, listening to the draft. Not while
   // history is restoring: joining the thread is a run of its own, and it is not an answer.
+  const working = (busy || inFlight) && !restoring;
   const presence = useReportChatPresence(inShell, {
-    working: (busy || inFlight) && !restoring,
+    working,
     failed: Boolean(stopped),
+    // Read off the messages on every render, as the transcript reads them, because the agent
+    // grows the same array in place. Only Chat's conversation has a pill to say it in.
+    step: inShell ? stepFor(messages, working) : null,
   });
 
   /**

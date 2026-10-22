@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import type { ComponentProps } from "react";
+import { type ComponentProps, useState } from "react";
 import { DuetIcon } from "@/components/duet/icons";
 import { MicOrb } from "@/components/duet/mic-orb";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { appConfig } from "@/lib/generated/application-config";
 import { cn } from "@/lib/utils";
-import { useChatOrb } from "./chat-presence";
+import { useChatOrb, useChatStep } from "./chat-presence";
 
 const DISC =
   "grid shrink-0 place-items-center rounded-full bg-duet-card text-duet-ink shadow-duet-float transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95";
@@ -21,6 +21,7 @@ export function initialOf(user: { name?: string | null; email: string }) {
  * The film's header: the menu in a disc on the left, OpenDuet's mic orb in the centre (back to
  * Chat), the person's initial in a disc on the right (their settings). The orb follows Chat: it
  * thinks while the Bot works, listens while the person types, and rests on every other screen.
+ * While it thinks, a pill under it says what the Bot is doing.
  *
  * `floating` lays it over a screen that scrolls under it, behind a fade, as on Chat, Inbox and
  * Activity. Otherwise it is a bar in the page's flow, for the screens the menu opens.
@@ -55,14 +56,18 @@ export function ShellHeader({
       >
         <DuetIcon name="menu" size={21} />
       </Disc>
-      <Link
-        aria-label={`${appConfig.brand.productName} chat`}
-        className="pointer-events-auto grid shrink-0 place-items-center rounded-full transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
-        style={{ width: centre, height: centre }}
-        to="/"
-      >
-        <ChatOrb size={centre - 2} />
-      </Link>
+      {/* The span between the discs, so the pill under the orb can never reach under either. */}
+      <div className="flex min-w-0 flex-1 flex-col items-center gap-1 px-2">
+        <Link
+          aria-label={`${appConfig.brand.productName} chat`}
+          className="pointer-events-auto grid shrink-0 place-items-center rounded-full transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
+          style={{ width: centre, height: centre }}
+          to="/"
+        >
+          <ChatOrb size={centre - 2} />
+        </Link>
+        {floating ? <ChatStep /> : null}
+      </div>
       <Link
         aria-label="Your settings"
         className={cn(DISC, "pointer-events-auto", floating && "mt-2")}
@@ -81,6 +86,35 @@ export function ShellHeader({
 function ChatOrb({ size }: { size: number }) {
   const { state, keystrokes } = useChatOrb();
   return <MicOrb keystrokes={keystrokes} size={size} state={state} />;
+}
+
+/**
+ * What the Bot is doing right now, in a pill under the orb: the step its line in the transcript is
+ * running, or that it is thinking. Only on the floating header, which is Chat's, and its own
+ * component for the orb's reason: it reads the step alone, so a keystroke does not reach it.
+ *
+ * Always mounted, so it can fade out as well as in, and so the live region is already there when
+ * the first step arrives: a region added with its text in it is not announced. It holds the last
+ * step while it fades, and hides that from screen readers, which hear each new step once. It
+ * slides only for somebody who has not asked for less motion; for them it fades, and its words
+ * stop shimmering, as a running tool line's do.
+ */
+function ChatStep() {
+  const step = useChatStep();
+  const [held, setHeld] = useState(step);
+  if (step !== null && step !== held) setHeld(step);
+  const shown = step !== null;
+  return (
+    <div aria-live="polite" className="flex max-w-full justify-center">
+      <p
+        aria-hidden={shown ? undefined : true}
+        className="flex h-6 max-w-full items-center rounded-full bg-duet-card px-2.5 font-medium text-[13px] text-duet-ink-2 leading-4 shadow-duet-card transition-[opacity,translate] duration-200 data-[shown=false]:opacity-0 data-[shown=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[shown=true]:ease-[cubic-bezier(0.23,1,0.32,1)] motion-safe:data-[shown=false]:-translate-y-1"
+        data-shown={shown}
+      >
+        <span className="tool-line-running truncate">{held}</span>
+      </p>
+    </div>
+  );
 }
 
 function Disc({
