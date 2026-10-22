@@ -61,6 +61,7 @@ import { type RejectedFile, RejectedFiles } from "./rejected-files";
 import { PLACEHOLDER_COMMANDS } from "./sources";
 import { type AgentOption, buildTriggers } from "./triggers";
 import { useDictation } from "./use-dictation";
+import { VoiceSheet } from "./voice-sheet";
 
 /**
  * The SDK's upload failure, derived rather than imported for the reason `attachments.ts` records
@@ -369,14 +370,24 @@ export function Composer({
   /** A send has completed and the caret is owed back, as soon as the editor will take it. */
   const wantsFocus = useRef(false);
   const sendDictatedDraft = useRef(false);
+  /**
+   * Chat's voice sheet is open and driving `dictation` in place of the inline controls. It is only
+   * ever open while a recording is: whatever sends the session back to idle (a transcript landing,
+   * ×, Esc, the conversation going away) closes it, so there is one thing to keep right, not two.
+   */
+  const [voiceSheet, setVoiceSheet] = useState(false);
+  /** "Type instead" handed the words over to be edited, so the caret goes with them. */
+  const editAfterSheet = useRef(false);
   const dictation = useDictation(
     (transcript, intent) => {
       setValue((current) => appendDictation(current, transcript));
       sendDictatedDraft.current = intent === "send";
       wantsFocus.current = true;
+      if (voiceSheet && intent === "draft") editAfterSheet.current = true;
     },
     disabled || voiceCall?.active === true,
   );
+  if (voiceSheet && !dictation.busy) setVoiceSheet(false);
   /** `autoFocus` has been honoured once, and is not owed again for the life of this composer. */
   const claimedAutoFocus = useRef(false);
   /**
@@ -1274,6 +1285,16 @@ export function Composer({
     void submitDraft(value);
   }, [value, submitDraft]);
 
+  /**
+   * Straight after the sheet closes, rather than through `wantsFocus` below, which waits out a turn
+   * in flight: the person asked to type, and typing is allowed mid-turn.
+   */
+  useEffect(() => {
+    if (voiceSheet || !editAfterSheet.current) return;
+    editAfterSheet.current = false;
+    promptAreaRef.current?.focus();
+  }, [voiceSheet]);
+
   const wasDictating = useRef(false);
   /**
    * Put the caret back the moment the composer can accept it again.
@@ -1288,8 +1309,11 @@ export function Composer({
    * had moved it, and a composer that had never been sent from would grab focus mid-conversation.
    */
   useEffect(() => {
-    if (wasDictating.current && !dictation.busy) wantsFocus.current = true;
-    wasDictating.current = dictation.busy;
+    // The inline controls took the caret; the sheet hands it back itself, so its recordings do not
+    // owe it here. A discarded one returns it to whatever opened the sheet.
+    const inline = dictation.busy && !voiceSheet;
+    if (wasDictating.current && !inline) wantsFocus.current = true;
+    wasDictating.current = inline;
     if (disabled || isBusy || dictation.busy) {
       return;
     }
@@ -1300,7 +1324,7 @@ export function Composer({
     wantsFocus.current = false;
     claimedAutoFocus.current = true;
     promptAreaRef.current?.focus();
-  }, [autoFocus, disabled, isBusy, dictation.busy]);
+  }, [autoFocus, disabled, isBusy, dictation.busy, voiceSheet]);
 
   const handleFormSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1355,8 +1379,24 @@ export function Composer({
    * lie told to exactly the people who cannot see the queue it lands in.
    */
   const sendLabel = parking ? "Queue message" : "Send message";
-  const callAction =
-    draft.isEmpty && draft.attachments.length === 0 ? voiceCall : undefined;
+  const draftEmpty = draft.isEmpty && draft.attachments.length === 0;
+  const callAction = draftEmpty ? voiceCall : undefined;
+  /**
+   * Chat's composer, with nothing written yet, dictates into the voice sheet rather than inline:
+   * from an empty box a person is starting a brain dump, not adding to a sentence. With words in
+   * the box the mic goes on appending to them in place, as it does everywhere else.
+   */
+  const sheetDictation = compact && glass && draftEmpty && dictation.available;
+  /**
+   * The sheet's own button takes the send arrow's place, black like it, when nothing else needs
+   * that place: Stop while the Bot answers, and a voice call where there is one, both come first,
+   * and the mic beside them opens the sheet instead.
+   */
+  const voiceAction = sheetDictation && !canStop && !callAction;
+  const openVoiceSheet = () => {
+    setVoiceSheet(true);
+    void dictation.session.start();
+  };
   const actionClassName = cn(
     "rounded-full p-0",
     compact
@@ -1395,6 +1435,24 @@ export function Composer({
       ) : (
         <IconWaveform className="size-4" />
       )}
+    </Button>
+  ) : voiceAction ? (
+    <Button
+      aria-label="Speak a message"
+      title={
+        dictation.supported
+          ? "Say everything you need to do"
+          : "Dictation needs a supported browser and a secure (HTTPS) connection"
+      }
+      className={actionClassName}
+      // Not disabled while the sheet records: it is out of reach behind the sheet anyway, and a
+      // button disabled under the focus is one the sheet cannot hand focus back to on ×.
+      disabled={disabled || !dictation.supported}
+      onClick={openVoiceSheet}
+      size="icon"
+      type="button"
+    >
+      <DuetIcon name="waveform" size={19} stroke={2.2} />
     </Button>
   ) : (
     <Button
@@ -1492,120 +1550,140 @@ export function Composer({
 
   if (compact) {
     return (
-      /*
-       * THE WRAPPER EXISTS TO HOLD `containerRef`, AND HOLDING IT IS NOT OPTIONAL. The ref is the
-       * boundary our own `document` paste listener asks about — it claims a paste only when the
-       * event's target is inside this element — so a branch that never lands the ref has paste
-       * dead entirely rather than merely unstyled: every paste into it reads as somebody else's.
-       * The ref is typed for a `div`, which is why it cannot simply go on the form.
-       *
-       * IT IS ALSO A COLUMN NOW, so the refusals can sit ABOVE the composer. Below, they pushed the
-       * box the person is reading down the screen as each one arrived, and on the compact composer
-       * that box is already pinned to the bottom of the pane — so the reasons appeared in the gap
-       * under it, furthest from the drop that caused them.
-       */
-      <div className="flex flex-col" ref={containerRef} {...dropZone}>
-        <RejectedFiles onDismiss={dismissRejections} rejected={rejected} />
-        {tooManyStagedNotice}
-        <form
-          aria-busy={isBusy}
-          className={cn(
-            /*
-             * `py-3` IS LOAD-BEARING ONCE THE TEXT WRAPS. On one line `min-h-14` and the controls
-             * row's own `items-center` fake the vertical padding, so it read as correct for as long
-             * as nobody typed a paragraph. Past that the box grows to fit its content exactly and
-             * the glyphs sit against the border.
-             *
-             * It goes on the form rather than on the editor because the editor scrolls internally
-             * at COMPACT_MAX_HEIGHT_PX: padding inside that box would scroll away with the text, so
-             * the first visible line would still touch the top edge on a long message.
-             */
-            /*
-             * A COLUMN, SO THE ATTACHMENT STRIP CAN HAVE THE FULL WIDTH. It used to be one row —
-             * attach button, editor, send — with the strip inside the editor's column, which
-             * started it 42px in from the frame's left edge with nothing under it. The strip is
-             * its own row across the top now, and the three controls keep their row below it.
-             */
-            /*
-             * The film's composer: a white pill floating on a soft shadow, its controls on the
-             * bottom line. No ring when it has the caret; the caret says so.
-             */
-            "duet-face flex min-h-[54px] flex-col rounded-[27px] p-[9px]",
-            glass
-              ? "duet-glass shadow-duet-glass"
-              : "bg-duet-card shadow-duet-float",
-            className,
-          )}
-          onSubmit={handleFormSubmit}
-        >
-          <DictationSurface dictation={dictation} canSend={canSendRecording}>
-            {filePicker}
-            <AttachmentStrip
-              files={files}
-              images={images}
-              onRemove={discardAttachment}
-            />
-            {/*
-             * `self-end` ON THE THREE CONTROLS, AND IT COSTS NOTHING ON ONE LINE. The row is
-             * `items-center`, which is right while everything in it is a single line high. A long
-             * message grows the editor to `COMPACT_MAX_HEIGHT_PX`, and centred buttons then float to
-             * the middle of that block rather than sitting on the line the person is typing. Empty,
-             * the row is exactly a button tall, so centred and bottom are the same pixel.
-             */}
-            <div className="flex items-center gap-2.5">
-              {attachmentsEnabled ? (
-                <Button
-                  aria-label="Attach a file"
-                  className="size-9 self-end rounded-full text-duet-ink-2"
-                  // The button stays, and stays labelled: a conversation that cannot take another
-                  // message has not lost the ability to attach, it has lost the message. Swapping it
-                  // for the "unavailable" placeholder would say the wrong thing about why.
-                  disabled={disabled}
-                  onClick={() => fileInputRef.current?.click()}
-                  size="icon"
-                  type="button"
-                  variant="ghost"
-                >
-                  <DuetIcon name="plus" size={22} />
-                </Button>
-              ) : (
-                <Button
-                  aria-label="More message options unavailable"
-                  className="size-9 self-end rounded-full text-duet-ink-2 disabled:opacity-100"
-                  disabled
-                  size="icon"
-                  type="button"
-                  variant="ghost"
-                >
-                  <DuetIcon name="plus" size={22} />
-                </Button>
-              )}
-              <PromptArea
-                aria-label="Message"
-                className={cn(
-                  "min-w-0 flex-1 self-center border-0 bg-transparent p-0 py-[6.5px] text-[17px] text-duet-ink leading-[23px] tracking-[-0.011em] shadow-none",
-                  editorClassName,
+      <>
+        {/*
+         * THE WRAPPER EXISTS TO HOLD `containerRef`, AND HOLDING IT IS NOT OPTIONAL. The ref is the
+         * boundary our own `document` paste listener asks about — it claims a paste only when the
+         * event's target is inside this element — so a branch that never lands the ref has paste
+         * dead entirely rather than merely unstyled: every paste into it reads as somebody else's.
+         * The ref is typed for a `div`, which is why it cannot simply go on the form.
+         *
+         * IT IS ALSO A COLUMN NOW, so the refusals can sit ABOVE the composer. Below, they pushed the
+         * box the person is reading down the screen as each one arrived, and on the compact composer
+         * that box is already pinned to the bottom of the pane — so the reasons appeared in the gap
+         * under it, furthest from the drop that caused them.
+         *
+         * The voice sheet sits beside it rather than inside: it is portalled over the whole screen,
+         * but React still bubbles its events through this tree, and a file dropped on the sheet is not
+         * a file dropped on the composer.
+         */}
+        <div className="flex flex-col" ref={containerRef} {...dropZone}>
+          <RejectedFiles onDismiss={dismissRejections} rejected={rejected} />
+          {tooManyStagedNotice}
+          <form
+            aria-busy={isBusy}
+            className={cn(
+              /*
+               * `py-3` IS LOAD-BEARING ONCE THE TEXT WRAPS. On one line `min-h-14` and the controls
+               * row's own `items-center` fake the vertical padding, so it read as correct for as long
+               * as nobody typed a paragraph. Past that the box grows to fit its content exactly and
+               * the glyphs sit against the border.
+               *
+               * It goes on the form rather than on the editor because the editor scrolls internally
+               * at COMPACT_MAX_HEIGHT_PX: padding inside that box would scroll away with the text, so
+               * the first visible line would still touch the top edge on a long message.
+               */
+              /*
+               * A COLUMN, SO THE ATTACHMENT STRIP CAN HAVE THE FULL WIDTH. It used to be one row —
+               * attach button, editor, send — with the strip inside the editor's column, which
+               * started it 42px in from the frame's left edge with nothing under it. The strip is
+               * its own row across the top now, and the three controls keep their row below it.
+               */
+              /*
+               * The film's composer: a white pill floating on a soft shadow, its controls on the
+               * bottom line. No ring when it has the caret; the caret says so.
+               */
+              "duet-face flex min-h-[54px] flex-col rounded-[27px] p-[9px]",
+              glass
+                ? "duet-glass shadow-duet-glass"
+                : "bg-duet-card shadow-duet-float",
+              className,
+            )}
+            onSubmit={handleFormSubmit}
+          >
+            <DictationSurface
+              dictation={dictation}
+              canSend={canSendRecording}
+              inSheet={voiceSheet}
+            >
+              {filePicker}
+              <AttachmentStrip
+                files={files}
+                images={images}
+                onRemove={discardAttachment}
+              />
+              {/*
+               * `self-end` ON THE THREE CONTROLS, AND IT COSTS NOTHING ON ONE LINE. The row is
+               * `items-center`, which is right while everything in it is a single line high. A long
+               * message grows the editor to `COMPACT_MAX_HEIGHT_PX`, and centred buttons then float to
+               * the middle of that block rather than sitting on the line the person is typing. Empty,
+               * the row is exactly a button tall, so centred and bottom are the same pixel.
+               */}
+              <div className="flex items-center gap-2.5">
+                {attachmentsEnabled ? (
+                  <Button
+                    aria-label="Attach a file"
+                    className="size-9 self-end rounded-full text-duet-ink-2"
+                    // The button stays, and stays labelled: a conversation that cannot take another
+                    // message has not lost the ability to attach, it has lost the message. Swapping it
+                    // for the "unavailable" placeholder would say the wrong thing about why.
+                    disabled={disabled}
+                    onClick={() => fileInputRef.current?.click()}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <DuetIcon name="plus" size={22} />
+                  </Button>
+                ) : (
+                  <Button
+                    aria-label="More message options unavailable"
+                    className="size-9 self-end rounded-full text-duet-ink-2 disabled:opacity-100"
+                    disabled
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <DuetIcon name="plus" size={22} />
+                  </Button>
                 )}
-                disabled={disabled}
-                maxHeight={COMPACT_MAX_HEIGHT_PX}
-                minHeight={COMPACT_MIN_HEIGHT_PX}
-                onChange={handleChange}
-                onImagePaste={canAttach ? stagePastedImage : undefined}
-                onSubmit={submitDraft}
-                placeholder={placeholder}
-                ref={promptAreaRef}
-                triggers={triggers}
-                value={value}
-              />
-              <DictationButton
-                dictation={dictation}
-                disabled={disabled || voiceCall?.active === true}
-              />
-              {primaryAction}
-            </div>
-          </DictationSurface>
-        </form>
-      </div>
+                <PromptArea
+                  aria-label="Message"
+                  className={cn(
+                    "min-w-0 flex-1 self-center border-0 bg-transparent p-0 py-[6.5px] text-[17px] text-duet-ink leading-[23px] tracking-[-0.011em] shadow-none",
+                    editorClassName,
+                  )}
+                  disabled={disabled}
+                  maxHeight={COMPACT_MAX_HEIGHT_PX}
+                  minHeight={COMPACT_MIN_HEIGHT_PX}
+                  onChange={handleChange}
+                  onImagePaste={canAttach ? stagePastedImage : undefined}
+                  onSubmit={submitDraft}
+                  placeholder={placeholder}
+                  ref={promptAreaRef}
+                  triggers={triggers}
+                  value={value}
+                />
+                {voiceAction ? null : (
+                  <DictationButton
+                    dictation={dictation}
+                    disabled={disabled || voiceCall?.active === true}
+                    {...(sheetDictation ? { onStart: openVoiceSheet } : {})}
+                  />
+                )}
+                {primaryAction}
+              </div>
+            </DictationSurface>
+          </form>
+        </div>
+        {glass ? (
+          <VoiceSheet
+            canSend={canSendRecording}
+            dictation={dictation}
+            open={voiceSheet}
+          />
+        ) : null}
+      </>
     );
   }
 

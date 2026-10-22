@@ -18,9 +18,12 @@ type Dictation = ReturnType<typeof useDictation>;
 export function DictationButton({
   dictation,
   disabled,
+  onStart,
 }: {
   dictation: Dictation;
   disabled: boolean;
+  /** Start somewhere other than inline: Chat's composer opens its voice sheet from an empty draft. */
+  onStart?: () => void;
 }) {
   if (!dictation.available) return null;
   return (
@@ -32,8 +35,11 @@ export function DictationButton({
           : "Dictation needs a supported browser and a secure (HTTPS) connection"
       }
       className="h-9 w-[30px] shrink-0 self-end rounded-full text-duet-ink-2"
-      disabled={disabled || !dictation.supported || dictation.busy}
-      onClick={() => void dictation.session.start()}
+      // Opening the voice sheet, it stays enabled under it, so × can hand the focus back.
+      disabled={
+        disabled || !dictation.supported || (dictation.busy && !onStart)
+      }
+      onClick={onStart ?? (() => void dictation.session.start())}
       size="icon"
       type="button"
       variant="ghost"
@@ -49,28 +55,35 @@ export function DictationSurface({
   canSend,
   children,
   className,
+  inSheet = false,
 }: {
   dictation: Dictation;
   canSend: boolean;
   children: ReactNode;
   className?: string;
+  /**
+   * The voice sheet is showing this recording over the whole screen, with its own controls. The
+   * editor then stays as it was underneath, rather than giving its place to a second set of them.
+   */
+  inSheet?: boolean;
 }) {
+  const recording = dictation.busy && !inSheet;
   return (
     <div className={cn("min-w-0", className)}>
       <div className="relative min-w-0">
         <div
-          aria-hidden={dictation.busy || undefined}
-          inert={dictation.busy}
+          aria-hidden={recording || undefined}
+          inert={recording}
           className={cn(
             "min-w-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transform-none motion-reduce:transition-none",
-            dictation.busy
+            recording
               ? "pointer-events-none -translate-y-1 opacity-0"
               : "translate-y-0 opacity-100",
           )}
         >
           {children}
         </div>
-        {dictation.busy && (
+        {recording && (
           <RecordingControls dictation={dictation} canSend={canSend} />
         )}
       </div>
