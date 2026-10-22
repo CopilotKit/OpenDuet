@@ -435,6 +435,13 @@
       "when": 1792705553488,
       "tag": "0061_openduet_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792710124563,
+      "tag": "0062_check_in_interval",
+      "breakpoints": true
     }
   ]
 }

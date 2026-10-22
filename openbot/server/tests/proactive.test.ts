@@ -246,6 +246,8 @@ describe("proactive run", () => {
         statuses.push(status);
       },
       readsFor: async () => [],
+      suggestions: async () => [],
+      hiddenSince: async () => [],
       countSuggestions: async () => suggestions.length,
       addSuggestion: async (input: Record<string, unknown>) => {
         const row = {
@@ -387,6 +389,8 @@ describe("proactive run", () => {
         byId: async () => ({ ...setting, enabled: true }),
         recordRun: async () => undefined,
         readsFor: async () => [{ ref: "linear/list_issues", at: new Date(0) }],
+        suggestions: async () => [],
+        hiddenSince: async () => [],
         undelivered: async () => [],
       } as unknown as ProactiveStore,
       memory: {

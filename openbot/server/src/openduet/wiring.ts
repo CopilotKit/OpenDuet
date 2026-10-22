@@ -5,7 +5,9 @@ import type { AuditInitiator } from "../audit";
 import type { Database } from "../db/client";
 import { users } from "../db/schema";
 import { createProactiveStore } from "../proactive/store";
+import { ProactiveNotFoundError } from "../proactive/types";
 import { buildMorningBrief, type CallTool, openduetTools } from "./brief";
+import { offerTools } from "./offers";
 import { createPageStore, type PageStore, pageTools } from "./pages";
 import { replyTools } from "./replies";
 import { type TaskSink, taskDetail, taskTools } from "./tasks";
@@ -105,6 +107,15 @@ export function createOpenDuetTools(deps: {
     }),
     ...replyTools({ initiator }),
     ...taskTools({ actorId, botId, initiator, save }),
+    ...offerTools({
+      actorId,
+      initiator,
+      read: (ownerUserId, suggestionId) =>
+        proactive.suggestion(ownerUserId, suggestionId).catch((error) => {
+          if (error instanceof ProactiveNotFoundError) return null;
+          throw error;
+        }),
+    }),
     ...pageTools({
       save: (input) => pages.save(actorId, botId, input),
       initiator,

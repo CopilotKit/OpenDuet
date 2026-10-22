@@ -1,0 +1,2 @@
+ALTER TABLE "proactive_settings" DROP CONSTRAINT "proactive_settings_interval_check";--> statement-breakpoint
+ALTER TABLE "proactive_settings" ADD CONSTRAINT "proactive_settings_interval_check" CHECK ("proactive_settings"."interval_minutes" >= 15 AND "proactive_settings"."interval_minutes" <= 1440);

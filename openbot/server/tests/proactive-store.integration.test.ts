@@ -7,7 +7,10 @@ import { createDatabase } from "../src/db/client";
 import { agents, users } from "../src/db/schema/core";
 import { agentProfiles } from "../src/db/schema/coworker";
 import { mcpServers, mcpTools } from "../src/db/schema/plugins";
-import { proactiveSettings } from "../src/db/schema/proactive";
+import {
+  proactiveSettings,
+  proactiveSuggestions,
+} from "../src/db/schema/proactive";
 import { createMemoryIngestion } from "../src/memory/ingestion";
 import { createMemoryStore } from "../src/memory/store";
 import { MemoryRefusedError } from "../src/memory/types";
@@ -100,10 +103,11 @@ test("settings are owner scoped, one per Bot, and bounded in frequency", async (
   await expect(
     proactive.create(owner, settingInput, `${prefix}-t2`),
   ).rejects.toBeInstanceOf(ProactiveRefusedError);
+  // Every fifteen minutes at most: a check-in reads only what is new, so it can come often.
   await expect(
     proactive.create(
       owner,
-      { ...settingInput, agentId: secondBot, intervalMinutes: 30 },
+      { ...settingInput, agentId: secondBot, intervalMinutes: 14 },
       `${prefix}-t3`,
     ),
   ).rejects.toBeInstanceOf(ProactiveRefusedError);
@@ -138,6 +142,12 @@ test("settings are owner scoped, one per Bot, and bounded in frequency", async (
   expect(
     (await proactive.update(owner, setting.id, { focus: "Billing" })).focus,
   ).toBe("Billing");
+  // The database takes the fifteen-minute floor the parser allows.
+  expect(
+    (await proactive.update(owner, setting.id, { intervalMinutes: 15 }))
+      .intervalMinutes,
+  ).toBe(15);
+  await proactive.update(owner, setting.id, { intervalMinutes: 60 });
 });
 
 test("a due setting is claimed once and its next run moves forward by its interval", async () => {
@@ -264,6 +274,38 @@ test("suggestions are delivered once, listed to their owner, and resolved once",
       (row) => row.id === suggestion.id,
     ),
   ).toBe(false);
+});
+
+test("what the person hid is read back for this Bot only, and only since the window opened", async () => {
+  const [setting] = await proactive.list(owner);
+  if (!setting) throw new Error("setting missing");
+  const hide = async (title: string, daysAgo: number) => {
+    const row = await proactive.addSuggestion({
+      ownerUserId: owner,
+      agentId: bot,
+      settingId: setting.id,
+      runId: randomUUID(),
+      title,
+      detail: "Hidden.",
+      sourceApp: null,
+      sourceRef: null,
+      sourceLink: null,
+    });
+    await proactive.resolveSuggestion(owner, row.id, "dismissed");
+    await database
+      .update(proactiveSuggestions)
+      .set({ resolvedAt: new Date(Date.now() - daysAgo * 86_400_000) })
+      .where(eq(proactiveSuggestions.id, row.id));
+  };
+  await hide("Renew the market stall", 2);
+  await hide("Book the kiln technician", 15);
+  const since = new Date(Date.now() - 14 * 86_400_000);
+  // The earlier test may have hidden one of its own, so look only at these two.
+  const hidden = await proactive.hiddenSince(owner, bot, since);
+  expect(hidden).toContain("Renew the market stall");
+  expect(hidden).not.toContain("Book the kiln technician");
+  expect(await proactive.hiddenSince(owner, secondBot, since)).toEqual([]);
+  expect(await proactive.hiddenSince(other, bot, since)).toEqual([]);
 });
 
 test("Bot-formed memories carry provenance, await review, and never come back once forgotten", async () => {

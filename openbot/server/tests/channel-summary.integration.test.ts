@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import { CHECK_IN_FRAME, frameCheckIn } from "@openbot/shared/check-in";
 import { FIRST_DAY_FRAME, frameFirstDay } from "@openbot/shared/first-day";
 import { FIRING_FRAME, frameFiring } from "@openbot/shared/routine-firing";
 import { createAgentProfileStore } from "../src/agents/profile-store";
@@ -353,6 +354,41 @@ describe("naming a claimed conversation", () => {
     );
     for (const line of FIRST_DAY_FRAME) expect(excerptSeen).not.toContain(line);
     expect((await summaryOf(channel.id))?.summary).toBe("Getting to know you");
+  });
+
+  test("titles a conversation a check-in opened from what it found, not the check-in frame", async () => {
+    const owner = await createUser();
+    const channel = await createUsedChannel(owner);
+    await offer(channel.id);
+
+    let excerptSeen = "";
+    await summariseClaimedChannels(
+      options({
+        // Research writes first when it found something: see `shared/check-in.ts`.
+        transcript: transcriptOf(
+          frameCheckIn({
+            checkedAt: "2026-10-22T17:32:00.000Z",
+            offers: [
+              {
+                id: "s-1",
+                title: "Replace Priya's broken order today",
+                why: "Her order arrived broken.",
+              },
+            ],
+          }),
+          "Priya's order arrived broken and she wants a replacement today.",
+        ),
+        title: async (excerpt) => {
+          excerptSeen = excerpt;
+          return "Priya's broken order";
+        },
+      }),
+    );
+
+    expect(excerptSeen).toContain("Replace Priya's broken order today");
+    for (const line of CHECK_IN_FRAME) expect(excerptSeen).not.toContain(line);
+    expect(excerptSeen).not.toContain("suggestionId");
+    expect((await summaryOf(channel.id))?.summary).toBe("Priya's broken order");
   });
 
   test("two replicas racing for the same conversation name it once", async () => {
