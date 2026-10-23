@@ -27,10 +27,11 @@ import {
 import {
   offeredInputSchema,
   type PageInput,
-  pageInputSchema,
   type PageRecord,
+  pageInputSchema,
   pageTools,
   parsePageInput,
+  previewOf,
 } from "../src/openduet/pages";
 
 /*
@@ -143,12 +144,6 @@ const deck = (...slides: unknown[]) => ({
   slides,
 });
 
-function refusal(input: unknown): string {
-  const parsed = parsePageInput(input);
-  if (parsed.ok) throw new Error("expected the tool to refuse this");
-  return parsed.refusal;
-}
-
 function saved(input: unknown) {
   const parsed = parsePageInput(input);
   if (!parsed.ok) throw new Error(parsed.refusal);
@@ -174,6 +169,8 @@ function stringsOf(slides: readonly PageSlide[]): string[] {
             block.title ?? "",
             ...block.items.flatMap((i) => [i.text, i.note ?? ""]),
           ];
+        default:
+          return [];
       }
     }),
   );
@@ -234,6 +231,24 @@ describe("a deck the review made, which the viewer cut short", () => {
     );
     for (const list of lists.slice(1))
       expect(list?.type === "list" && list.title).toBeUndefined();
+  });
+
+  test("a deck's thumbnail shows a continued chart slide under its own title", () => {
+    const slides =
+      saved(
+        deck({
+          title: "Inbox this week",
+          blocks: [
+            { type: "text", text: "Fifty emails read." },
+            ordersAtAGlance.blocks[1],
+            mugsChart,
+          ],
+        }),
+      ).value.slides ?? [];
+    expect(
+      slides.some((slide) => slide.title === "Inbox this week (continued)"),
+    ).toBe(true);
+    expect(previewOf({ slides }).title).toBe("Inbox this week");
   });
 
   test("a slide that fits is saved as written, and the tool says nothing about continuing", () => {
@@ -343,6 +358,45 @@ describe("laying a slide out", () => {
     expect(
       parsePageInput({ kind: "page", title: "A page", blocks: [slideList] }).ok,
     ).toBe(false);
+  });
+
+  test("fourteen rows on one slide are laid out four to a slide, though a page takes eight", () => {
+    const rows = Array.from({ length: 14 }, (_, i) => ({
+      text: `Email ${i + 1}`,
+      note: "Waiting on a reply",
+    }));
+    const list = { type: "list", items: rows };
+    const slides =
+      saved(deck({ title: "Replies", blocks: [list] })).value.slides ?? [];
+    everySlideFits(slides);
+    expect(
+      slides.flatMap((slide) =>
+        slide.blocks.flatMap((b) => (b.type === "list" ? b.items : [])),
+      ),
+    ).toEqual(rows);
+    expect(
+      parsePageInput({ kind: "page", title: "A page", blocks: [list] }).ok,
+    ).toBe(false);
+  });
+
+  test("a blank optional note, title, label or summary is dropped rather than refused", () => {
+    const parsed = saved({
+      ...deck({
+        title: "Orders",
+        blocks: [
+          { type: "list", title: " ", items: [{ text: "Ana", note: "" }] },
+          { type: "bars", label: "", items: [{ label: "Mon", value: 3 }] },
+        ],
+      }),
+      summary: "",
+    });
+    expect(parsed.value.summary).toBeUndefined();
+    expect(parsed.value.slides?.[0]?.blocks).toEqual([
+      { type: "list", items: [{ text: "Ana" }] },
+      { type: "bars", items: [{ label: "Mon", value: 3 }] },
+    ]);
+    // A required string left blank is still refused.
+    expect(parsePageInput(deck({ title: "", blocks: [] })).ok).toBe(false);
   });
 
   test("a page keeps the limits it had", () => {

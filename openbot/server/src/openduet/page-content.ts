@@ -239,12 +239,16 @@ export const pageBlockSchema = pageBlockSchemaWith(ENFORCED);
 export type PageBlock = z.infer<typeof pageBlockSchema>;
 
 /**
- * What a slide takes from the model: a page's counts, and longer lines than a page's. A slide's
- * lines wrap and its items continue onto new slides at save, so a longer note or a seventh row is
- * laid out, not refused. Only the shape is refused: a figure is still a figure (24 characters).
+ * What a slide takes from the model: more items and longer lines than a page's. A slide's lines
+ * wrap and its items continue onto new slides at save, so a longer note or a fourteenth row is
+ * laid out, not refused. Only the shape is refused: a figure is still a figure (24 characters), and
+ * a chart's bars, which share one scale and stay on one slide, are still at most 12.
  */
 const SLIDE_INPUT_CAPS: Caps = {
-  ...PAGE_CAPS,
+  metrics: { max: 16 },
+  bars: { max: MAX_BARS },
+  list: { max: 24 },
+  bullets: { max: 24 },
   text: {
     metricLabel: 60,
     metricNote: 120,
@@ -299,9 +303,15 @@ function fits(slide: PageSlide): boolean {
 }
 
 /** A continuation slide's title: the slide's own, marked as carrying on, when that fits the cap. */
+const CONTINUED = " (continued)";
 function continued(title: string): string {
-  const next = `${title} (continued)`;
+  const next = `${title}${CONTINUED}`;
   return next.length <= MAX_TITLE ? next : title;
+}
+
+/** A slide's own title, without the mark a continuation slide carries. */
+export function ownTitle(title: string): string {
+  return title.endsWith(CONTINUED) ? title.slice(0, -CONTINUED.length) : title;
 }
 
 /** A text block's sentences, each with the space after it, so they join back as written. */

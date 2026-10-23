@@ -21,6 +21,7 @@ import {
   MAX_SUMMARY,
   MAX_TITLE,
   many,
+  ownTitle,
   PAGE_KINDS,
   type PageBlock,
   type PageContent,
@@ -172,7 +173,7 @@ export function parsePageInput(
 ):
   | { ok: true; value: PageInput; continued?: { from: number; to: number } }
   | { ok: false; refusal: string } {
-  const parsed = pageInputSchema.safeParse(input ?? {});
+  const parsed = pageInputSchema.safeParse(withoutBlankOptionals(input ?? {}));
   if (!parsed.success)
     return { ok: false, refusal: refusalFor(parsed.error.issues) };
   const value = parsed.data;
@@ -186,6 +187,65 @@ export function parsePageInput(
     ok: true,
     value: { ...value, slides: laid.slides },
     ...(to !== from ? { continued: { from, to } } : {}),
+  };
+}
+
+/** An optional string left blank says nothing; it is dropped rather than refused, which would cost a retry. */
+function blank(value: unknown): boolean {
+  return typeof value === "string" && value.trim() === "";
+}
+function omitBlank(record: Record<string, unknown>, keys: readonly string[]) {
+  return Object.fromEntries(
+    Object.entries(record).filter(
+      ([key, value]) => !(keys.includes(key) && blank(value)),
+    ),
+  );
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The input with its blank optional strings dropped: the page's `id` and `summary`, a list's
+ * `title`, a chart's `label` and an item's `note`. A model writes `note: ""` for a row with nothing
+ * to add, and that is the same as no note. Required strings are left for the parser to refuse.
+ */
+function withoutBlankOptionals(input: unknown): unknown {
+  if (!isRecord(input)) return input;
+  const block = (value: unknown) => {
+    if (!isRecord(value)) return value;
+    const kept = omitBlank(
+      value,
+      value.type === "list"
+        ? ["title"]
+        : value.type === "bars"
+          ? ["label"]
+          : [],
+    );
+    return Array.isArray(kept.items)
+      ? {
+          ...kept,
+          items: kept.items.map((item) =>
+            isRecord(item) ? omitBlank(item, ["note"]) : item,
+          ),
+        }
+      : kept;
+  };
+  const blocks = (value: unknown) =>
+    Array.isArray(value) ? value.map(block) : value;
+  const page = omitBlank(input, ["id", "summary"]);
+  return {
+    ...page,
+    ...(page.blocks !== undefined ? { blocks: blocks(page.blocks) } : {}),
+    ...(Array.isArray(page.slides)
+      ? {
+          slides: page.slides.map((slide) =>
+            isRecord(slide)
+              ? { ...slide, blocks: blocks(slide.blocks) }
+              : slide,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -213,7 +273,10 @@ export function previewOf(content: PageContent): PageSummary["preview"] {
     content.slides.find((slide) =>
       slide.blocks.some((block) => block.type === "bars"),
     ) ?? content.slides[0];
-  return shown ? { title: shown.title, blocks: shown.blocks } : { blocks: [] };
+  // A thumbnail is the deck's face: a continuation slide shows under its own title.
+  return shown
+    ? { title: ownTitle(shown.title), blocks: shown.blocks }
+    : { blocks: [] };
 }
 
 function summaryOf(row: Row): PageSummary {
