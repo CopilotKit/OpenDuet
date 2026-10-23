@@ -1365,7 +1365,8 @@ describe("report", () => {
           { id: "a2", role: "assistant", content: "Sent. Ana has it." },
         ];
       },
-    })(owner.id, task);
+      // Read again now its turns are on the ledgers: just opened, with none, it is still starting.
+    })(owner.id, await taskStore.get(owner.id, task.id));
 
     expect(read).toEqual([[threadId, owner.id]]);
     expect(

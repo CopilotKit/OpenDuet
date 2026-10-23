@@ -467,6 +467,8 @@ describe("GET /api/openduet/tasks/:id/report", () => {
     sourceLink: null,
     fromChannelId: null,
     status: "ready_for_review",
+    failure: null,
+    failedAt: null,
     resolvedAt: null,
     createdAt: "2026-10-23T09:41:00.000Z",
     updatedAt: "2026-10-23T09:41:00.000Z",
@@ -489,6 +491,7 @@ describe("GET /api/openduet/tasks/:id/report", () => {
           } as never);
           await next();
         },
+        undefined,
         undefined,
         report,
       ),

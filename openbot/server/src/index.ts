@@ -214,9 +214,7 @@ import {
   REFUSAL_MARKER,
   vendorAnswer,
 } from "./plugins/tools";
-import {
-  createProactiveEngine,
-} from "./proactive/engine";
+import { createProactiveEngine } from "./proactive/engine";
 import {
   createPrivateShareCheck,
   PRIVATE_SHARE_TOOL_REF,

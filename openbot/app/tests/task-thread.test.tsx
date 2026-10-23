@@ -460,6 +460,17 @@ test("a card whose task couldn't finish says why, and Try again runs it once mor
   ).toBeNull();
 });
 
+/** Opens the conversation folded under the task's report, as a person would to read it. */
+async function unfold(sheet: HTMLElement) {
+  const disclosure = await within(sheet).findByRole(
+    "button",
+    { name: /(Show|Hide) conversation/ },
+    { timeout: 5_000 },
+  );
+  if (disclosure.getAttribute("aria-expanded") === "false")
+    fireEvent.click(disclosure);
+}
+
 /** Types into the composer and presses Enter, as a person would. */
 function type(box: HTMLElement, text: string) {
   box.textContent = text;
@@ -815,6 +826,7 @@ test("the task page of one that couldn't finish says why in the Bot's words, and
     within(sheet).queryByRole("button", { name: "Try this task again" }),
   ).toBeNull();
   // Still the task's own conversation.
+  await unfold(sheet);
   expect(
     await within(sheet).findByText(ASK, undefined, { timeout: 5_000 }),
   ).toBeTruthy();
@@ -836,6 +848,7 @@ test("a reply typed on a failed task runs it again with the person's words, neve
     { timeout: 5_000 },
   );
   // What its runs left is shown, the ask first, under a line saying what a reply does.
+  await unfold(sheet);
   expect(
     await within(sheet).findByText(ASK, undefined, { timeout: 5_000 }),
   ).toBeTruthy();
@@ -869,6 +882,7 @@ test("while the task's own turn runs on the server, a reply waits in the queue a
     { name: rosa().title },
     { timeout: 5_000 },
   );
+  await unfold(sheet);
   await within(sheet).findByText(ASK, undefined, { timeout: 5_000 });
   const box = within(sheet).getByRole("textbox");
   type(box, "Also say which one is most urgent.");
@@ -899,6 +913,7 @@ test("a task marked done after it failed still takes a reply as Try again", asyn
     { name: rosa().title },
     { timeout: 5_000 },
   );
+  await unfold(sheet);
   await within(sheet).findByText(ASK, undefined, { timeout: 5_000 });
   expect(sheet.textContent).toContain("Your reply runs this task again.");
   type(within(sheet).getByRole("textbox"), "Please do it now.");

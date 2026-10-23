@@ -519,7 +519,7 @@ test("a waiting email is answered in place under Needs input", async () => {
   );
 });
 
-test("a decided action is not waiting: it is left out of Needs input and listed as Resolved", async () => {
+test("a decided action is not waiting, and not a task: it is left out of Needs input and Resolved", async () => {
   quiet();
   inbox = {
     requests: [
@@ -527,10 +527,20 @@ test("a decided action is not waiting: it is left out of Needs input and listed 
     ],
     questions: [],
   };
+  tasks = [
+    task({
+      id: "done",
+      title: "Done today",
+      status: "resolved",
+      resolvedAt: ago(10),
+    }),
+  ];
   serving();
   const view = draw();
-  await view.findByRole("region", { name: "Resolved" });
+  const resolved = await view.findByRole("region", { name: "Resolved" });
   expect(view.queryByRole("region", { name: "Needs input" })).toBeNull();
+  // Its conversation shows the action that ran; a receipt is not finished work.
+  expect(resolved.textContent).not.toContain("Allowed once by you");
 });
 
 test("a question is answered in place", async () => {
@@ -669,7 +679,7 @@ test("Resolved keeps a week of done tasks, newest first, and folds after five wi
   ).toBeTruthy();
 });
 
-test("Resolved lists finished work and answered actions, read-only, beside done tasks", async () => {
+test("Resolved lists finished work, read-only, beside done tasks, and not the actions answered", async () => {
   quiet();
   activity = {
     inProgress: [],
@@ -707,9 +717,9 @@ test("Resolved lists finished work and answered actions, read-only, beside done 
   const text = resolved.textContent ?? "";
   expect(text).toContain("Follow-up · Done");
   expect(text).toContain("Didn't finish");
-  expect(text).toContain("Allowed once by you");
-  const order = ["Tidy inbox", "Send email", "Review the launch deck"].map(
-    (title) => text.indexOf(title),
+  expect(text).not.toContain("Allowed once by you");
+  const order = ["Tidy inbox", "Review the launch deck"].map((title) =>
+    text.indexOf(title),
   );
   expect(order.every((at) => at >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
