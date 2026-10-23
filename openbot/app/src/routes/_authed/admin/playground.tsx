@@ -25,6 +25,8 @@ import {
   type SandboxedRecord,
   sandboxedListQueryOptions,
 } from "@/lib/sandboxed/queries";
+import { useInPageChrome, usePageChrome } from "@/components/shell/page-chrome";
+import { cn } from "@/lib/utils";
 
 /**
  * Browser-authored components are edited as drafts, previewed in the production sandbox renderer,
@@ -179,6 +181,10 @@ function PlaygroundPage() {
     publishDraft.mutate(payload, { onSuccess: () => setNotice("Published.") });
   };
 
+  // Named in the app's page chrome, as every Admin page is (parity-spec 2.9).
+  usePageChrome({ title: "Playground" });
+  const inChrome = useInPageChrome();
+
   const load = (component: SandboxedRecord) =>
     setDraft({
       slug: component.name.replace(/^custom_/, ""),
@@ -198,14 +204,21 @@ function PlaygroundPage() {
      * standard prose column and it lands below the fold, so you would be typing at something you
      * cannot see. It takes the header and the controls, and keeps the two panes.
      */
-    <div className="flex h-screen flex-col">
+    <div className={cn("flex h-screen flex-col", inChrome && "pt-[88px]")}>
       <header className="flex flex-wrap items-start justify-between gap-4 border-border border-b px-6 py-4">
         {/* Inline rather than in a band of its own: this screen is an editor beside a live preview
             and every 48px of height is taken from the thing being previewed. */}
         <div className="flex items-start gap-2">
-          <SidebarToggle className="-ml-2 shrink-0" />
+          {inChrome ? null : <SidebarToggle className="-ml-2 shrink-0" />}
           <div>
-            <h1 className="font-bold text-2xl">Playground</h1>
+            <h1
+              className={cn(
+                "type-display font-semibold",
+                inChrome && "sr-only",
+              )}
+            >
+              Playground
+            </h1>
             <p className="mt-1 max-w-prose text-pretty text-muted-foreground text-sm leading-relaxed">
               Write a component and publish it without redeploying. Your edits
               are a draft. Conversations only show what is published.

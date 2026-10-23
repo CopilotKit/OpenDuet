@@ -87,7 +87,7 @@ export function BotsNavBadge() {
     return (
       <span
         aria-label={`${waiting} ${waiting === 1 ? "thing needs" : "things need"} you`}
-        className="ml-auto rounded-full bg-primary px-1.5 text-[11px] font-medium text-primary-foreground tabular-nums"
+        className="type-caption ml-auto grid h-[18px] min-w-[18px] place-items-center rounded-full bg-duet-accent px-1.5 font-medium text-duet-on-accent tabular-nums"
         role="img"
       >
         {waiting}
@@ -98,7 +98,7 @@ export function BotsNavBadge() {
     return (
       <span
         aria-label="Unread messages"
-        className="ml-auto size-2 rounded-full bg-primary"
+        className="ml-auto size-2 rounded-full bg-duet-accent"
         role="img"
       />
     );

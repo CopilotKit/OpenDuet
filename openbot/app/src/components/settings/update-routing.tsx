@@ -1,4 +1,5 @@
 import { IconRoute } from "@tabler/icons-react";
+import { appConfig } from "@/lib/generated/application-config";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
 import { PageRows, PageSection } from "@/components/layout/page-shell";
@@ -62,7 +63,7 @@ export function UpdateRoutingSection() {
     reach.data ? reach.data.available[transport] : true;
   return (
     <PageSection
-      description="Where each kind of update goes when you're away. OpenBot on the web always shows everything."
+      description={`Where each kind of update goes when you're away. ${appConfig.brand.productName} on the web always shows everything.`}
       title="Where updates go"
     >
       {routing.isPending || reach.isPending ? null : routing.error ? (

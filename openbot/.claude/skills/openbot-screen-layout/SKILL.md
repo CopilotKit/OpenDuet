@@ -144,19 +144,16 @@ itself when the dialog changes something.
 
 ## The rem Trap
 
-`app/src/styles.css` sets `html { font-size: 15px }`. Every rem-based Tailwind token is therefore
-**0.9375×** its documented pixel value:
+`app/src/styles.css` used to set `html { font-size: 15px }`, which made every rem-based Tailwind
+token 0.9375× its documented size and froze the text at one size. The root is the browser's own now
+(16px by default), so `max-w-3xl` is 768px and `h-11` is 44px, and both grow with the person's text
+size. Text sizes come from the five `type-*` utilities (`type-display`, `type-nav`, `type-body`,
+`type-sub`, `type-caption`), which are in rem for the same reason.
 
-| Token | Documented | Actual here |
-|-------|-----------|-------------|
-| `max-w-2xl` | 672px | **630px** |
-| `max-w-3xl` | 768px | **720px** |
-| `max-w-5xl` | 1024px | **960px** |
-
-Never hardcode a pixel constant derived from a Tailwind rem token, and never compute a ratio from
-one. Measure the element — `offsetWidth`, `clientWidth`, a `ResizeObserver` — and scale from what is
-actually on screen. A constant taken from the Tailwind docs is wrong by 6.25% here, which is enough
-to sit a centred element visibly off centre or clip a card's corners against its container.
+The rule that came out of the trap still holds: never hardcode a pixel constant derived from a
+Tailwind rem token, and never compute a ratio from one. A person who sets a larger text size changes
+every rem on the page. Measure the element (`offsetWidth`, `clientWidth`, a `ResizeObserver`) and
+scale from what is actually on screen.
 
 ## Decision Tree
 
@@ -184,7 +181,7 @@ to sit a centred element visibly off centre or clip a card's corners against its
 | Children on an element passed to `Item`'s `render` | They replace the row's own children; the row draws empty | Pass a childless element |
 | `bg-card` on a row inside a dialog | `--card` equals `--popover`; the row is invisible | `variant="muted"` |
 | `Item variant="outline"` and `variant="muted"` on one screen | Reads as two kinds of list and invites a distinction that is not there | One variant per screen |
-| A pixel constant matching a Tailwind rem token (672, 768, 1024) | Assumes a 16px root; the root here is 15px | Measure the element |
+| A pixel constant matching a Tailwind rem token (672, 768, 1024) | Assumes the person's text size is the default | Measure the element |
 | A `Switch` on a row that needs two or more values | Half the change happens in place and half in a dialog | A summary, a chevron, and a dialog |
 | A chevron on a row that opens nothing | Announces a destination that does not exist | Value in `ItemActions`, no chevron |
 | A set of chips or toggles crammed into `ItemActions` | It competes with the label for width and wraps badly | `ItemFooter`, which is `basis-full` |
@@ -195,8 +192,8 @@ to sit a centred element visibly off centre or clip a card's corners against its
 - **A row renders empty — media, title and actions all missing**: children were passed on the
   element given to `Item`'s `render`. Remove them.
 - **A row's content sits visibly off centre, or a card's corners are clipped by its container**: a
-  pixel constant was taken from the Tailwind docs and the root font size is 15px. Measure the drawn
-  element instead of the box it was given.
+  pixel constant was taken from the Tailwind docs and the person's text size is not the default.
+  Measure the drawn element instead of the box it was given.
 - **A dialog's footer has body content painted over it**: `DialogBody` is missing
   `overflow-y-auto`. It has `flex-1 min-h-0` and no overflow of its own.
 - **A dialog stops scrolling after a refactor**: `DialogBody` is no longer a direct child of

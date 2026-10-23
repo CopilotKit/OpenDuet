@@ -20,15 +20,15 @@ const TABS: {
 ];
 
 /**
- * Which tab a path belongs to, or null for a screen opened from the menu. Something open over the
- * Make grid (`/make/<id>`) is still the Make tab, and any other conversation with a Bot
- * (`/channel/<id>`) is drawn as Chat is. Starting one (`/channel/new`, where Bots are picked) keeps
- * its own page.
+ * Which tab a path belongs to, or null for a page pushed over the app. Something open over the
+ * Make grid (`/make/<id>`) is still the Make tab, and a task over Tasks is still Tasks. A channel
+ * (`/channels/<id>`) is a conversation like Chat's, under Chat's tab. A conversation opened from
+ * the menu (`/channel/<id>`) is not Chat: it is a page, with a back disc and no tab bar
+ * (parity-spec 2.9).
  */
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
-  if (/^\/channel\/[^/]+$/.test(path) && path !== "/channel/new") return "chat";
   // A channel is a conversation like Chat's, under the same header and tab bar.
   if (/^\/channels\/[^/]+$/.test(path)) return "chat";
   // A task opens over the Tasks list, so the list's tab stays current under it.
@@ -49,18 +49,24 @@ export function TabBar({ current }: { current: ShellTab }) {
   return (
     <nav
       aria-label="Main"
-      className="duet-face duet-glass absolute inset-x-0 bottom-[22px] z-20 mx-auto flex h-16 w-[300px] max-w-[calc(100%-32px)] gap-0.5 rounded-[32px] p-[5px] shadow-duet-glass"
+      className="duet-face duet-glass absolute inset-x-0 bottom-[22px] z-20 mx-auto flex h-16 w-[344px] max-w-[calc(100%-32px)] gap-0.5 rounded-[32px] p-[5px] shadow-duet-glass"
     >
       {TABS.map((tab) => {
         const on = tab.id === current;
         const badge = tab.id === "tasks" && waiting > 0 ? waiting : 0;
         return (
           <Link
-            // The router marks the current tab with aria-current; exact, or "/" would match all three.
-            activeOptions={{ exact: true }}
+            /*
+             * What is announced is what is drawn: the tab `current` names carries aria-current. The
+             * router sets it on its own active link too, so its matching is made to agree: exact for
+             * Chat ("/" would match all three), and Tasks and Make also over a task or a page open on
+             * them.
+             */
+            activeOptions={{ exact: tab.id === "chat" }}
+            aria-current={on ? "page" : undefined}
             aria-label={badge ? `${tab.label}, ${badge} waiting` : tab.label}
             className={cn(
-              "relative flex flex-1 flex-col items-center justify-center gap-px rounded-[27px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
+              "relative flex flex-1 flex-col items-center justify-center gap-px rounded-[27px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
               on
                 ? "bg-duet-tile text-duet-ink"
                 : "text-duet-ink-2 hover:text-duet-ink",
@@ -70,7 +76,10 @@ export function TabBar({ current }: { current: ShellTab }) {
           >
             <DuetIcon name={tab.icon} size={20} stroke={on ? 2.1 : 1.9} />
             <span
-              className={cn("type-label", on ? "font-semibold" : "font-medium")}
+              className={cn(
+                "type-caption",
+                on ? "font-semibold" : "font-medium",
+              )}
             >
               {tab.label}
             </span>
@@ -78,7 +87,8 @@ export function TabBar({ current }: { current: ShellTab }) {
               <span
                 aria-hidden
                 className={cn(
-                  "absolute top-1 left-1/2 ml-[7px] grid h-5 min-w-5 place-items-center rounded-full bg-duet-violet px-1 font-bold text-[13px] text-white tabular-nums",
+                  // The one badge style (parity-spec 2.2): the accent, with what sits on it.
+                  "type-caption absolute top-1 left-1/2 ml-[7px] grid h-5 min-w-5 place-items-center rounded-full bg-duet-accent px-1 font-semibold text-duet-on-accent tabular-nums",
                   on
                     ? "shadow-[0_0_0_2px_var(--duet-tile)]"
                     : "shadow-[0_0_0_2px_var(--duet-card)]",

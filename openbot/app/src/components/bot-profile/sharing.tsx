@@ -53,6 +53,7 @@ import {
   unpublishTeamBotMutationOptions,
 } from "@/lib/team-bots";
 import { queryClient } from "@/query-client";
+import { appConfig } from "@/lib/generated/application-config";
 
 const list = (value: string) =>
   value
@@ -150,7 +151,7 @@ export function SharingSections({ agent }: { agent: AgentProfile }) {
         ) : (
           <PageEmpty>
             {agent.visibility === "public"
-              ? "Not published to the team. It's public, so everyone on OpenBot can already use it."
+              ? `Not published to the team. It's public, so everyone on ${appConfig.brand.productName} can already use it.`
               : agent.mine
                 ? "Not published. Only you can use it."
                 : "Not published."}

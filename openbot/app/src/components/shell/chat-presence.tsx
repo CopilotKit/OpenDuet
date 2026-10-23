@@ -1,5 +1,10 @@
 import type { Message } from "@ag-ui/core";
 import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
   createContext,
   type Dispatch,
   type ReactNode,
@@ -11,8 +16,17 @@ import {
   useState,
 } from "react";
 import { toVisibleChatItems } from "@/components/channels/chat-messages";
-import { stepDetails } from "@/components/channels/tool-activity";
 import { FINISH_MS, type MicOrbState } from "@/components/duet/mic-orb";
+import { primaryBot } from "@/lib/agents/primary-bot";
+import {
+  type ApprovalInboxData,
+  type ApprovalRequest,
+  approvalInboxOptions,
+} from "@/lib/approvals";
+import { agentListQueryOptions } from "@/lib/agents/queries";
+import { ongoingChannel } from "@/lib/channels/ongoing";
+import { channelListQueryOptions } from "@/lib/channels/queries";
+import { STEP_PHRASES, stepPhrase } from "@/lib/plugins/tool-name";
 
 /**
  * What Chat is doing, for the header's orb to show, as the film's phone header does: it thinks
@@ -60,16 +74,41 @@ const StepReportContext = createContext<Dispatch<
   SetStateAction<string | null>
 > | null>(null);
 const StepContext = createContext<string | null>(null);
+/** Whether Chat is on screen, on its own so the pill can ask without hearing every keystroke. */
+const OnChatContext = createContext(false);
+/** Whether the conversation on screen has a turn of its own running, without the keystrokes. */
+const WorkingContext = createContext(false);
+/** What the server is doing in Chat's conversation, if anything (`useServerWork`). */
+const ServerWorkContext = createContext<string | null>(null);
 
-export function ChatPresenceProvider({ children }: { children: ReactNode }) {
+/**
+ * `serverWork` is what the shell reads off the server for Chat's conversation (`useServerWork`): the
+ * phrase for a turn the server is running there, or null. The pill and the orb show it, for work
+ * this screen did not start.
+ */
+export function ChatPresenceProvider({
+  children,
+  serverWork = null,
+}: {
+  children: ReactNode;
+  serverWork?: string | null;
+}) {
   const [presence, setPresence] = useState(AT_REST);
   const [step, setStep] = useState<string | null>(null);
   return (
     <ReportContext.Provider value={setPresence}>
       <StepReportContext.Provider value={setStep}>
-        <PresenceContext.Provider value={presence}>
-          <StepContext.Provider value={step}>{children}</StepContext.Provider>
-        </PresenceContext.Provider>
+        <ServerWorkContext.Provider value={serverWork}>
+          <PresenceContext.Provider value={presence}>
+            <OnChatContext.Provider value={presence.chat}>
+              <WorkingContext.Provider value={presence.working}>
+                <StepContext.Provider value={step}>
+                  {children}
+                </StepContext.Provider>
+              </WorkingContext.Provider>
+            </OnChatContext.Provider>
+          </PresenceContext.Provider>
+        </ServerWorkContext.Provider>
       </StepReportContext.Provider>
     </ReportContext.Provider>
   );
@@ -93,16 +132,22 @@ export function orbStateFor(
 }
 
 /** What the pill under the orb says while the Bot works and no step of its own is running. */
-export const THINKING = "Thinking it through…";
+export const THINKING = STEP_PHRASES.thinking;
+
+/**
+ * What the pill says when the server is running something in Chat this screen did not start: the
+ * continuation after Allow once, a suggestion started from the card, a check-in, another tab.
+ */
+export const SERVER_WORKING = STEP_PHRASES.working;
 
 /**
  * What the Bot is doing right now, in a line for the pill under the orb, or null when it has not
  * got the turn.
  *
- * The newest step still waiting on its result, in the words a running tool line in the transcript
- * uses for it, so the pill and the line say the same thing at the same moment. Only this turn's
- * steps count: a call from an earlier turn that never got its result is not running, it was cut
- * off. With no step running the Bot is thinking, or writing what it found.
+ * The newest step still waiting on its result, as a phrase about the person (`stepPhrase`): "Searching
+ * your email", never "Gmail search messages". Steps the pill does not name, such as the reply chips,
+ * are passed over. Only this turn's steps count: a call from an earlier turn that never got its result
+ * is not running, it was cut off. With no step running the Bot is thinking, or writing what it found.
  */
 export function stepFor(
   messages: readonly Message[],
@@ -119,9 +164,128 @@ export function stepFor(
     ) + 1,
   );
   const running = turn
-    .flatMap((item) => (item.kind === "tool" ? [stepDetails(item)] : []))
-    .findLast((step) => step.pending);
-  return running ? `${running.label}…` : THINKING;
+    .flatMap((item) =>
+      item.kind === "tool" && item.result === undefined
+        ? [stepPhrase(item.toolCall.function.name)]
+        : [],
+    )
+    .findLast((phrase) => phrase !== null);
+  return running ?? THINKING;
+}
+
+/**
+ * Whether the server says Chat's conversation has a turn running, and that conversation's thread,
+ * from the busy flag it puts on the conversation list. That flag covers runs this screen never
+ * started, which is the point: without it the pill and the orb sat still for the 20 seconds after
+ * Allow once while the Bot sent the email.
+ *
+ * Chat's conversation is found the way the Chat tab finds it (`ChatScreen`): the main Bot's most
+ * recently used conversation. When Chat's identity changes there, this changes with it.
+ */
+export function useChatServerBusy(onChat: boolean): {
+  busy: boolean;
+  threadId?: string;
+} {
+  const agents = useQuery({ ...agentListQueryOptions(), enabled: onChat });
+  const channels = useInfiniteQuery({
+    ...channelListQueryOptions(),
+    enabled: onChat,
+  });
+  if (!onChat) return { busy: false };
+  const bot = primaryBot(agents.data);
+  const chat = bot ? ongoingChannel(channels.data, bot.id) : undefined;
+  return chat
+    ? { busy: chat.busy === true, threadId: chat.threadId }
+    : { busy: false };
+}
+
+/** How recent an action has to be for the run after it to be that action going ahead. */
+const DECISION_WINDOW_MS = 5 * 60_000;
+
+/**
+ * What the server is doing in a conversation while its busy flag is up, as a pill phrase, or null
+ * when it is not busy.
+ *
+ * The flag says only that a turn is running. When the person has just allowed an action in that
+ * thread, the run is that action going ahead, so the pill names it ("Sending your email"); anything
+ * else is "Working on it".
+ */
+export function serverWorkPhrase(
+  busy: boolean,
+  threadId: string | undefined,
+  inbox: ApprovalInboxData | undefined,
+  now = Date.now(),
+): string | null {
+  if (!busy) return null;
+  // The newest action the person allowed in this thread, if they allowed one just now.
+  const decided = (inbox?.requests ?? [])
+    .filter(
+      (request) =>
+        request.action.threadId === threadId &&
+        (request.decision === "allow_once" ||
+          request.decision === "allow_always") &&
+        typeof request.decidedAt === "string" &&
+        now - Date.parse(request.decidedAt) < DECISION_WINDOW_MS,
+    )
+    .sort(
+      (a, b) => Date.parse(b.decidedAt ?? "") - Date.parse(a.decidedAt ?? ""),
+    )
+    .at(0);
+  return decided ? approvedActionPhrase(decided) : SERVER_WORKING;
+}
+
+/** The phrase for an action the person allowed, read from what it does. */
+export function approvedActionPhrase(request: ApprovalRequest): string {
+  const [server = "", tool = ""] = request.action.toolRef.split("/");
+  const args =
+    request.action.args && typeof request.action.args === "object"
+      ? (request.action.args as Record<string, unknown>)
+      : {};
+  /*
+   * The gate every outgoing message passes through. An email when it goes to an address: the
+   * inbox carries the scope (`external:ana@…`) and audience, not the message's own fields.
+   */
+  if (tool === "share_private_information") {
+    const audience = `${request.action.scope} ${String(args.audience ?? "")}`;
+    return /\S@\S/.test(audience) ? STEP_PHRASES.sendEmail : SERVER_WORKING;
+  }
+  return stepPhrase(`mcp__${server}__${tool}`) ?? SERVER_WORKING;
+}
+
+/** `serverWorkPhrase` for a conversation, reading the approvals the app already polls. */
+export function useServerWork(
+  busy: boolean,
+  threadId: string | undefined,
+): string | null {
+  const queryClient = useQueryClient();
+  const inbox = useQuery({ ...approvalInboxOptions(), enabled: busy });
+  /*
+   * The inbox polls, so the decision that just started this run may not be in it yet. Read it
+   * again the moment the conversation goes busy, rather than guessing from a request still shown
+   * waiting.
+   */
+  useEffect(() => {
+    if (busy)
+      void queryClient.invalidateQueries({
+        queryKey: approvalInboxOptions().queryKey,
+      });
+  }, [busy, queryClient]);
+  return serverWorkPhrase(busy, threadId, inbox.data);
+}
+
+/**
+ * Server work this screen did not start: null while the screen's own turn runs, and for the rest of
+ * that busy spell. The server's flag goes down a moment after the screen's own turn ends, and
+ * without this the pill ended every turn on "Working on it" as it faded.
+ */
+export function useUnownedServerWork(
+  serverWork: string | null,
+  localWorking: boolean,
+): string | null {
+  const owned = useRef(false);
+  if (serverWork === null) owned.current = false;
+  else if (localWorking) owned.current = true;
+  return serverWork !== null && !owned.current ? serverWork : null;
 }
 
 /**
@@ -222,7 +386,16 @@ export function useReportFinish(): () => void {
 
 /** The header orb's state and keystrokes, from what Chat and `useReportFinish` last reported. */
 export function useChatOrb(): { state: MicOrbState; keystrokes: number } {
-  const presence = useContext(PresenceContext);
+  const reported = useContext(PresenceContext);
+  // Work the server is doing in Chat thinks too, as a turn this screen started does.
+  const serverWork = useUnownedServerWork(
+    useContext(ServerWorkContext),
+    reported.working,
+  );
+  const presence =
+    serverWork !== null && reported.chat && !reported.working
+      ? { ...reported, working: true }
+      : reported;
   // The answer whose landing has played out. Behind `answers` while the orb holds "done".
   const [landed, setLanded] = useState(presence.answers);
   useEffect(() => {
@@ -263,7 +436,21 @@ export function useChatDrafting(): boolean {
   return useContext(PresenceContext).drafting;
 }
 
-/** What the pill under the orb says, from what Chat last reported. Null hides it. */
+/**
+ * What the pill under the orb says, from what Chat last reported, or that the Bot is working when
+ * the server has a turn running in Chat that this screen did not start. Null hides it.
+ */
 export function useChatStep(): string | null {
-  return useContext(StepContext);
+  const step = useContext(StepContext);
+  const onChat = useContext(OnChatContext);
+  const serverWork = useUnownedServerWork(
+    useContext(ServerWorkContext),
+    useChatWorking(),
+  );
+  return step ?? (onChat ? serverWork : null);
+}
+
+/** Whether the conversation on screen has a turn of its own running. Keystrokes don't reach it. */
+export function useChatWorking(): boolean {
+  return useContext(WorkingContext);
 }

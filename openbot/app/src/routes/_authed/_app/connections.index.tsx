@@ -420,12 +420,13 @@ function RouteComponent() {
             <p className="mt-4 text-xs text-muted-foreground">
               {inUse} in use · {rows.length} in all
             </p>
-            <InputGroup className="mt-3 h-9 border-transparent bg-muted/60 shadow-none dark:bg-muted/60">
+            <InputGroup className="mt-3 h-11 border-transparent bg-muted/60 shadow-none dark:bg-muted/60">
               <InputGroupAddon>
                 <IconSearch aria-hidden="true" className="size-4" />
               </InputGroupAddon>
               <InputGroupInput
                 aria-label="Search connections"
+                className="h-11"
                 placeholder="Search connections"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}

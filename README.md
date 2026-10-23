@@ -72,6 +72,7 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 | Make                         | Ask for prep notes, a plan, a deck or a dashboard, or pick one from the **+** on the Make tab, and OpenDuet makes it. A card in Chat opens it, and Make keeps everything it made as thumbnails you can filter by kind. | Available today |
 | Channels                     | Make a channel for a piece of work: a name, an icon in a colour, and what it is for. OpenDuet says hello there and offers three things it could start on, keeps the work there about that purpose, and the tasks it starts there wear the channel's colour. Everything stays your one thread, and the menu lists your channels with Archived folded under them. | Available today |
 | Answers in a tap             | When it asks you to choose, the likely answers appear as replies you can tap.         | Available today |
+| Light or dark                | Follows your phone's setting, changing with it, or pick Light or Dark in Settings.    | Available today |
 | Say it instead               | Tap the voice button in Chat and say everything you need to do. It is written down and sent as your message. Needs a speech-to-text provider on the server (`TRANSCRIPTION_*`). | Available today |
 | Sensitive-info check         | A check on every outgoing message. OpenBot today classifies each tool as a read or a write and redacts secrets from its audit trail. | In progress |
 

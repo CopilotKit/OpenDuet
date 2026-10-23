@@ -25,7 +25,7 @@ function BotsPage() {
           render={(props) => (
             <Link {...props} search={{ new: true }} to="/bots" />
           )}
-          size="sm"
+          className="min-h-11"
           variant="ghost"
         >
           <IconPlus />

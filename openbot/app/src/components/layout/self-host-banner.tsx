@@ -34,7 +34,7 @@ export function SelfHostBanner() {
   return (
     <aside
       aria-label={`Self-host ${appConfig.brand.productName}`}
-      className="duet-face flex shrink-0 flex-wrap items-center gap-x-2 border-duet-hair-2 border-b bg-duet-card px-4 py-1.5 text-[13px] text-duet-ink-2"
+      className="duet-face type-caption flex shrink-0 flex-wrap items-center gap-x-2 border-duet-hair-2 border-b bg-duet-card px-4 py-0.5 text-duet-ink-2"
     >
       {/*
        * Packed from the left rather than pushing Dismiss to the far right: on localhost CopilotKit's
@@ -51,7 +51,8 @@ export function SelfHostBanner() {
           // Foreground, not the link variant's primary, which is a mid grey on the dark bar.
           className={cn(
             buttonVariants({ size: "sm", variant: "link" }),
-            "h-auto px-0 font-semibold text-[13px] text-duet-ink underline",
+            // 44px tall to tap, as every control is (parity-spec 2.11).
+            "type-caption min-h-11 px-0 font-semibold text-duet-ink underline",
           )}
           href={SELF_HOST_URL}
           rel="noopener noreferrer"
@@ -62,8 +63,8 @@ export function SelfHostBanner() {
         <Button
           aria-label="Dismiss"
           onClick={() => dismiss.mutate()}
-          className="text-duet-ink-3 hover:text-duet-ink"
-          size="icon-xs"
+          className="size-11 text-duet-ink-3 hover:text-duet-ink"
+          size="icon"
           variant="ghost"
         >
           <IconX />

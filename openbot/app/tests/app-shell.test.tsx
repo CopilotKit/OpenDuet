@@ -120,12 +120,10 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/tasks/task-1/more")).toBeNull();
   expect(tabForPath("/activity")).toBeNull();
   expect(tabForPath("/bots")).toBeNull();
-  // Any other conversation with a Bot is drawn as Chat is, in the column with the tab bar.
-  expect(tabForPath("/channel/abc")).toBe("chat");
-  expect(tabForPath("/channel/abc/")).toBe("chat");
-  // Starting a new one, and a group's shared transcript, keep their own pages.
+  // A conversation opened from the menu is a page over the app, not Chat.
+  expect(tabForPath("/channel/abc")).toBeNull();
+  expect(tabForPath("/channel/abc/")).toBeNull();
   expect(tabForPath("/channel/new")).toBeNull();
-  expect(tabForPath("/channel/abc/more")).toBeNull();
   expect(tabForPath("/group/abc")).toBeNull();
   // A channel is a conversation like Chat's, under Chat's tab.
   expect(tabForPath("/channels/abc")).toBe("chat");
@@ -426,7 +424,6 @@ test("the drawer reads Everything, the channels, New channel, Archived folded, t
     "Manage",
     "Settings",
     "Sign out",
-    "Close",
   ]);
   // Everything is Chat, the one thread.
   expect(
@@ -534,7 +531,6 @@ test("with no channels yet the drawer is Everything and New channel, and no Arch
     "New channel",
     "Manage",
     "Settings",
-    "Close",
   ]);
 });
 

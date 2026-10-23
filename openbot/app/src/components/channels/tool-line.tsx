@@ -19,6 +19,7 @@ export function ToolLine({
   running,
   refused,
   failed,
+  declined,
   children,
 }: {
   /** Drawn before the label, small and muted. A group of steps puts its kinds here. */
@@ -32,6 +33,8 @@ export function ToolLine({
   refused?: boolean;
   /** It was permitted and did not work. A different request might. */
   failed?: boolean;
+  /** The person said no on its card, so it was not done. Their decision, not a failure. */
+  declined?: boolean;
   /** Shown when the line is expanded. Without it the line is not expandable. */
   children?: ReactNode;
 }) {
@@ -45,13 +48,14 @@ export function ToolLine({
    * done), then what was done. The group's own kinds come after the label, where they no longer
    * compete with the outcome.
    */
-  const glyph: DuetIconName = refused
-    ? "x"
-    : failed
+  const glyph: DuetIconName =
+    refused || declined
       ? "x"
-      : running
-        ? "clock"
-        : "checkCircle";
+      : failed
+        ? "x"
+        : running
+          ? "clock"
+          : "checkCircle";
   const text = (
     <span className="duet-face inline-flex min-w-0 max-w-full items-center gap-[7px]">
       <svg
@@ -83,17 +87,20 @@ export function ToolLine({
       </span>
       <span
         className={cn(
-          "type-label inline-flex min-w-0 items-baseline gap-1.5 font-semibold",
+          "type-sub inline-flex min-w-0 items-baseline gap-1.5 font-medium",
           tone,
           running && "tool-line-running",
         )}
       >
-        <span className="shrink-0">
-          {refused
-            ? `Blocked: ${label}`
-            : failed
-              ? `${label}, didn't work`
-              : label}
+        {/* Cut with an ellipsis rather than run past its row: a summary can be long. */}
+        <span className="min-w-0 truncate">
+          {declined
+            ? `You declined: ${label}`
+            : refused
+              ? `Blocked: ${label}`
+              : failed
+                ? `${label}, didn't work`
+                : label}
         </span>
         {detail ? (
           <span className="truncate font-medium opacity-70">{detail}</span>
@@ -112,7 +119,7 @@ export function ToolLine({
       {/*
        * The summary IS the line. No marker of its own: the chevron after the label says it opens.
        */}
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 [&::-webkit-details-marker]:hidden">
         {text}
         <span
           aria-hidden
@@ -124,7 +131,7 @@ export function ToolLine({
       {/*
        * Indented to the label, past the hook and the glyph, so the detail reads as belonging to it.
        */}
-      <div className="mt-2 ml-[45px] max-h-80 overflow-auto border-duet-hair border-l pl-3 text-duet-ink-2 text-xs [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h4]:text-xs [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
+      <div className="mt-2 ml-[45px] max-h-80 overflow-auto border-duet-hair border-l pl-3 type-caption text-duet-ink-2 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h4]:text-xs [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
         {children}
       </div>
     </details>

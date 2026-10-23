@@ -165,7 +165,7 @@ function RosterRows({
               </ItemContent>
               <ItemActions>
                 {state && needsInput(state) > 0 ? (
-                  <span className="rounded-full bg-primary px-1.5 text-[11px] font-medium text-primary-foreground tabular-nums">
+                  <span className="type-caption grid h-[18px] min-w-[18px] place-items-center rounded-full bg-duet-accent px-1.5 font-medium text-duet-on-accent tabular-nums">
                     {needsInput(state)}
                   </span>
                 ) : null}

@@ -48,6 +48,7 @@ import { updateAgentMutationOptions } from "@/lib/agents/mutations";
 import type { AgentProfile } from "@/lib/agents/queries";
 import { isComposing } from "@/lib/composing";
 import { queryClient } from "@/query-client";
+import { appConfig } from "@/lib/generated/application-config";
 
 type TextField = "name" | "title" | "roleDescription";
 
@@ -125,7 +126,8 @@ export function SetupSections({ agent }: { agent: AgentProfile }) {
                 <ItemContent>
                   <ItemTitle>System owned</ItemTitle>
                   <ItemDescription>
-                    Comes with OpenBot. It doesn't belong to a person.
+                    Comes with {appConfig.brand.productName}. It doesn't belong
+                    to a person.
                   </ItemDescription>
                 </ItemContent>
               </Item>
@@ -169,7 +171,7 @@ function VisibilityRow({
           {error ??
             (agent.visibility === "private"
               ? "Only you can see it and start conversations with it."
-              : "Everyone on OpenBot can find and use it.")}
+              : `Everyone on ${appConfig.brand.productName} can find and use it.`)}
         </ItemDescription>
       </ItemContent>
       <ItemActions>
@@ -333,7 +335,7 @@ function ConnectionSection({ agent }: { agent: AgentProfile }) {
               }
             >
               {builtIn
-                ? "Runs inside OpenBot. There's nothing to connect."
+                ? `Runs inside ${appConfig.brand.productName}. There's nothing to connect.`
                 : agent.endpoint}
             </ItemDescription>
           </ItemContent>

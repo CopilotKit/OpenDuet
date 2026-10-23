@@ -562,7 +562,12 @@ function AppConnectionPage() {
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     render={
-                      <Button size="sm" type="button" variant="outline">
+                      <Button
+                        className="min-h-11"
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
                         <span
                           aria-hidden="true"
                           className="size-1.5 rounded-full bg-emerald-500"

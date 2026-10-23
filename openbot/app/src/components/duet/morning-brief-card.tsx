@@ -57,9 +57,7 @@ export function MorningBriefCard({
     <DuetCard aria-label="Morning brief" role="region">
       <div className="px-4 pt-[18px]">
         <p className="type-sub font-medium text-duet-ink-2">{date}</p>
-        <p className="mt-0.5 font-semibold text-[23px] leading-[27px] tracking-[-0.018em]">
-          {greeting}
-        </p>
+        <p className="type-display mt-0.5 font-semibold">{greeting}</p>
         {nothing && notes.length === 0 ? (
           <p className="type-sub mt-2 text-duet-ink-2">
             Nothing new needs you, and nothing is on your calendar today.
@@ -136,7 +134,8 @@ function RowAction({ action }: { action: BriefAction }) {
   return (
     <button
       aria-label={action.done ?? action.name}
-      className="type-label h-8 shrink-0 rounded-full bg-duet-black px-3.5 font-semibold text-duet-on-black transition-[filter,transform,opacity] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.97] disabled:bg-duet-tile disabled:text-duet-ink-2 disabled:hover:brightness-100"
+      // 44px to tap (parity-spec 2.11); weight 500, as buttons are (2.3).
+      className="type-sub h-11 shrink-0 rounded-full bg-duet-black px-4 font-medium text-duet-on-black transition-[filter,transform,opacity] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 active:scale-[0.97] disabled:bg-duet-tile disabled:text-duet-ink-2 disabled:hover:brightness-100"
       disabled={action.disabled || action.done !== undefined}
       onClick={action.onPress}
       type="button"

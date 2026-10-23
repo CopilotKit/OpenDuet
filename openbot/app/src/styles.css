@@ -14,9 +14,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
-html {
-  font-size: 15px;
-}
+/*
+ * NO ROOT FONT SIZE. It was `html { font-size: 15px }`, which shrank every rem by 6.25% (Tailwind's
+ * `h-11` drew 41.25px, not 44) and froze the text at one size whatever the person set their phone or
+ * browser to. The root is the browser's own now, 16px by default, and the type scale below is in rem
+ * so it follows the person's text size.
+ */
 
 :root {
   color-scheme: light;
@@ -55,9 +58,10 @@ html {
   --sidebar-ring: oklch(0.708 0 0);
 
   /*
-   * The app the launch film shows (launch-film/film/src/duet/theme.ts). Neutral greys with a cool
-   * bias, one near-black for the primary action, colour only on outcomes, and the violet as a light
-   * accent for what needs you.
+   * OpenDuet's tokens (parity-spec Part 2). Neutral greys with a cool bias, one accent used in a few
+   * fixed places, and four status colours for how work stands. Every token here has a dark value in
+   * `.dark` below; `tests/visual-system.test.ts` fails if one is missing or a colour falls under its
+   * contrast floor, and `lib/theme-tokens.ts` carries the same values to the generated-UI prompt.
    */
   --duet-surface: #f6f6f8;
   --duet-card: #ffffff;
@@ -65,22 +69,43 @@ html {
   --duet-user: #e7e3f7;
   --duet-ink: #18181b;
   --duet-ink-2: #55555e;
-  --duet-ink-3: #9a9aa4;
+  --duet-ink-3: #6b6b75;
   --duet-hair: rgb(24 24 27 / 9%);
   --duet-hair-2: rgb(24 24 27 / 6%);
   --duet-tile: #f1f1f4;
-  --duet-violet: #6430ab;
-  --duet-violet-soft: #f0ebfa;
-  --duet-green: #15803d;
-  --duet-green-soft: #e6f4ea;
-  --duet-red: #b91c1c;
-  --duet-red-soft: #fbeaea;
-  --duet-blue: #1d4ed8;
-  --duet-blue-soft: #eaf0fd;
-  --duet-amber: #b45309;
-  --duet-amber-soft: #fdf3e1;
+  /*
+   * The one accent: the Tasks badge, the unread dot, the + button, a selected chip, a link to a
+   * task, the focus ring, the Everything icon. Not a heading colour. `on-accent` is what sits on it.
+   */
+  --duet-accent: #6430ab;
+  --duet-accent-soft: #f0ebfa;
+  --duet-on-accent: #ffffff;
+  /* How work stands: ready for review, needs you, working, couldn't finish. Only on status. */
+  --duet-status-done: #147a3a;
+  --duet-status-done-soft: #e6f4ea;
+  --duet-status-needs: #a34a06;
+  --duet-status-needs-soft: #fdf3e1;
+  --duet-status-working: #1d4ed8;
+  --duet-status-working-soft: #eaf0fd;
+  --duet-status-problem: #b91c1c;
+  --duet-status-problem-soft: #fbeaea;
+  /* The primary button: near-black on light, white on dark. */
   --duet-black: #111114;
   --duet-on-black: #ffffff;
+  /*
+   * The names the components were written against, kept as aliases of the roles so a screen that
+   * still says `violet` or `green` draws the role's colour. New code names the role.
+   */
+  --duet-violet: var(--duet-accent);
+  --duet-violet-soft: var(--duet-accent-soft);
+  --duet-green: var(--duet-status-done);
+  --duet-green-soft: var(--duet-status-done-soft);
+  --duet-amber: var(--duet-status-needs);
+  --duet-amber-soft: var(--duet-status-needs-soft);
+  --duet-blue: var(--duet-status-working);
+  --duet-blue-soft: var(--duet-status-working-soft);
+  --duet-red: var(--duet-status-problem);
+  --duet-red-soft: var(--duet-status-problem-soft);
   --duet-shadow-float:
     0 0 0 0.5px rgb(1 5 7 / 10%), 0 1px 1.5px rgb(1 5 7 / 6%),
     0 4px 12px -4px rgb(1 5 7 / 12%);
@@ -91,13 +116,28 @@ html {
   /*
    * Glass: the chrome that floats over a screen (the tab bar, the composer, the header's discs)
    * lets what scrolls under it show through, frosted. Translucent enough to read as a layer, opaque
-   * enough that text under it never competes with the controls on it. `--duet-veil` is the same
-   * material laid over a whole screen, for a sheet that the screen stays visible behind.
+   * enough that text under it never competes with the controls on it: at 66% and 62% a message
+   * passing under the composer could still be read through it (parity finding 18), so about 80%.
+   * `--duet-veil` is the same material laid over a whole screen, for a sheet that the screen stays
+   * visible behind.
    */
-  --duet-glass: rgb(255 255 255 / 66%);
+  --duet-glass: rgb(255 255 255 / 80%);
   --duet-veil: rgb(246 246 248 / 74%);
   --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 80%);
   --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
+  /* Shape (parity-spec 2.4) and the smallest thing a finger can hit (2.11). */
+  --duet-radius-bubble: 20px;
+  --duet-radius-card: 20px;
+  --duet-radius-field: 22px;
+  --duet-radius-tile: 10px;
+  --duet-target: 44px;
+  /* Motion (parity-spec 2.10). */
+  --duet-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duet-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --duet-dur-tap: 120ms;
+  --duet-dur-swap: 200ms;
+  --duet-dur-enter: 250ms;
+  --duet-dur-sheet: 350ms;
 
   /*
    * A channel's colour: its icon in the drawer and the sheet, and its tag on a task. Nine, by the
@@ -149,27 +189,32 @@ html {
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 
-  /* The film is drawn light; these keep the same roles, and the primary action turns light. */
+  /*
+   * Duet's dark is near-black and neutral (it samples #0E0E0E behind, #232323 for the Bot's bubble).
+   * These keep the same roles, and the primary action turns light.
+   */
   --duet-surface: #111113;
   --duet-card: #1c1c1f;
   --duet-bubble: #26262b;
   --duet-user: #2f2845;
   --duet-ink: #f4f4f5;
   --duet-ink-2: #a1a1aa;
-  --duet-ink-3: #71717a;
+  --duet-ink-3: #8e8e98;
   --duet-hair: rgb(255 255 255 / 10%);
   --duet-hair-2: rgb(255 255 255 / 7%);
   --duet-tile: #26262b;
-  --duet-violet: #b49ae8;
-  --duet-violet-soft: #2a2140;
-  --duet-green: #4ade80;
-  --duet-green-soft: #14301f;
-  --duet-red: #f87171;
-  --duet-red-soft: #3a1717;
-  --duet-blue: #7aa2ff;
-  --duet-blue-soft: #18233d;
-  --duet-amber: #fbbf24;
-  --duet-amber-soft: #3a2a0c;
+  --duet-accent: #b49ae8;
+  --duet-accent-soft: #2a2140;
+  /* Dark text on the light lilac: white on it was 2.4:1. */
+  --duet-on-accent: #1a1033;
+  --duet-status-done: #4ade80;
+  --duet-status-done-soft: #14301f;
+  --duet-status-needs: #fbbf24;
+  --duet-status-needs-soft: #3a2a0c;
+  --duet-status-working: #7aa2ff;
+  --duet-status-working-soft: #18233d;
+  --duet-status-problem: #f87171;
+  --duet-status-problem-soft: #3a1717;
   --duet-black: #f4f4f5;
   --duet-on-black: #111114;
   --duet-shadow-float:
@@ -177,7 +222,7 @@ html {
   --duet-shadow-card: 0 0 0 1px var(--duet-hair);
   --duet-shadow-raised:
     0 0 0 1px var(--duet-hair), 0 10px 26px -14px rgb(0 0 0 / 60%);
-  --duet-glass: rgb(28 28 31 / 62%);
+  --duet-glass: rgb(28 28 31 / 82%);
   --duet-veil: rgb(17 17 19 / 72%);
   --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 8%);
   --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
@@ -199,7 +244,6 @@ html {
 body {
   margin: 0;
   position: relative;
-  min-width: 20rem;
   min-height: 100vh;
   background: var(--background);
   color: var(--foreground);
@@ -272,6 +316,17 @@ body {
   --color-duet-hair: var(--duet-hair);
   --color-duet-hair-2: var(--duet-hair-2);
   --color-duet-tile: var(--duet-tile);
+  --color-duet-accent: var(--duet-accent);
+  --color-duet-accent-soft: var(--duet-accent-soft);
+  --color-duet-on-accent: var(--duet-on-accent);
+  --color-duet-status-done: var(--duet-status-done);
+  --color-duet-status-done-soft: var(--duet-status-done-soft);
+  --color-duet-status-needs: var(--duet-status-needs);
+  --color-duet-status-needs-soft: var(--duet-status-needs-soft);
+  --color-duet-status-working: var(--duet-status-working);
+  --color-duet-status-working-soft: var(--duet-status-working-soft);
+  --color-duet-status-problem: var(--duet-status-problem);
+  --color-duet-status-problem-soft: var(--duet-status-problem-soft);
   --color-duet-violet: var(--duet-violet);
   --color-duet-violet-soft: var(--duet-violet-soft);
   --color-duet-green: var(--duet-green);
@@ -291,37 +346,64 @@ body {
 }
 
 /*
- * The film app's type scale, in CSS px at the phone's 402pt width. Inter's tracking tightens as it
- * grows, and cv11/ss03 are the single-storey a and the flat-topped 3 the film is set with.
+ * The type scale (parity-spec 2.3): five sizes, in rem so they follow the person's text size. Inter's
+ * tracking tightens as it grows, and cv11/ss03 (`duet-face`) are the single-storey a and the
+ * flat-topped 3 the film is set with. Weights are not part of a size: 600 for titles and the pill's
+ * status line, 500 for row titles, chips and buttons, 400 otherwise.
+ *
+ *   type-display  24/28  screen titles, a task page's title
+ *   type-nav      18/22  drawer rows, Settings rows
+ *   type-body     17/23  messages, task and card titles
+ *   type-sub      15/20  status lines, chips, the composer, section headers, buttons
+ *   type-caption  13/16  captions, the pill, tab labels, the footer, "Seen", timestamps, tags
  */
-@utility type-big {
-  font-size: 30px;
-  line-height: 34px;
+@utility type-display {
+  font-size: 1.5rem;
+  line-height: 1.75rem;
   letter-spacing: -0.018em;
 }
-@utility type-title {
-  font-size: 21px;
-  line-height: 26px;
-  letter-spacing: -0.018em;
-}
-@utility type-body {
-  font-size: 18px;
-  line-height: 24px;
+@utility type-nav {
+  font-size: 1.125rem;
+  line-height: 1.375rem;
   letter-spacing: -0.011em;
 }
-@utility type-row {
-  font-size: 17px;
-  line-height: 22px;
+@utility type-body {
+  font-size: 1.0625rem;
+  line-height: 1.4375rem;
   letter-spacing: -0.011em;
 }
 @utility type-sub {
-  font-size: 16px;
-  line-height: 21px;
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
   letter-spacing: -0.006em;
 }
+@utility type-caption {
+  font-size: 0.8125rem;
+  line-height: 1rem;
+  letter-spacing: 0;
+}
+/*
+ * The film's names for the same sizes, each now one of the five, so a screen written against them
+ * lands on the scale without being edited. New code uses the five names above.
+ */
+@utility type-big {
+  font-size: 1.5rem;
+  line-height: 1.75rem;
+  letter-spacing: -0.018em;
+}
+@utility type-title {
+  font-size: 1.5rem;
+  line-height: 1.75rem;
+  letter-spacing: -0.018em;
+}
+@utility type-row {
+  font-size: 1.0625rem;
+  line-height: 1.4375rem;
+  letter-spacing: -0.011em;
+}
 @utility type-label {
-  font-size: 15px;
-  line-height: 18px;
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
   letter-spacing: -0.006em;
 }
 /*
@@ -551,4 +633,37 @@ body {
  */
 :where(div:has(> iframe.websandbox__frame)) {
   min-height: 200px;
+}
+
+/*
+ * The buttons Streamdown draws on a code block or a table (Copy, Download, Full screen) are 24px
+ * icons. A finger needs 44 (parity-spec 2.11), so each gets that much room around its icon. They live
+ * in a dependency's markup, which is why this is a rule on its attribute rather than a class.
+ */
+[data-streamdown] button {
+  min-width: var(--duet-target);
+  min-height: var(--duet-target);
+  display: inline-grid;
+  place-items: center;
+}
+
+/*
+ * Every control a screen in the app's shell draws is at least 44px to tap (parity-spec 2.11): the
+ * configuration pages were built with 28px and 36px buttons, selects and fields for a desktop
+ * pointer, and they all open inside the shell on a phone now. The shared primitives mark themselves
+ * with `data-slot`, so one rule covers every page without a class on each control. A link drawn as
+ * a button sits inside a sentence and keeps its line height. A switch keeps its look and gets a 44px
+ * hit area of its own (`components/ui/switch.tsx`).
+ */
+.duet-touch
+:is(
+  [data-slot="button"]:not([data-variant="link"]),
+  [data-slot="select-trigger"],
+  [data-slot="input"],
+  [data-slot="input-group"]
+) {
+  min-height: var(--duet-target);
+}
+.duet-touch [data-slot="button"][data-size^="icon"] {
+  min-width: var(--duet-target);
 }

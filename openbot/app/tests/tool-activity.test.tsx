@@ -120,6 +120,72 @@ test("a tool step is named in words and counted as tools", () => {
   ).toBe("Searched the web and used 2 tools");
 });
 
+test("a summary names what happened to the person's own things, not the connector", () => {
+  const gw = (id: string, tool: string) =>
+    call(id, `mcp__google-workspace__${tool}`, {}, '"{}"');
+  expect(
+    summarise(
+      [gw("a", "gmail_search_messages"), gw("b", "calendar_list_events")].map(
+        stepDetails,
+      ),
+    ),
+  ).toBe("Searched your email and checked your calendar");
+  expect(
+    summarise(
+      [gw("a", "gmail_search_messages"), gw("c", "gmail_search_messages")].map(
+        stepDetails,
+      ),
+    ),
+  ).toBe("Searched your email");
+  // A connector with no words of its own is still named by the app it reached.
+  expect(
+    summarise(
+      [call("d", "mcp__google-drive__search_files", {}, '"x"')].map(
+        stepDetails,
+      ),
+    ),
+  ).toBe("Used Google Drive");
+});
+
+test("a summary never says a send happened before it did, or after it was refused", () => {
+  const read = call(
+    "r",
+    "mcp__google-workspace__gmail_read_message",
+    {},
+    '"{}"',
+  );
+  const send = (result?: string) =>
+    call("s", "mcp__google-workspace__gmail_send_reply", {}, result);
+  // Waiting on its card: no result yet.
+  expect(summarise([read, send()].map(stepDetails))).toBe(
+    "Read your email and waiting for your OK to send your email",
+  );
+  // Refused.
+  const refused = [read, send("Refused. The person said no.")].map(stepDetails);
+  expect(summarise(refused)).toBe("Read your email");
+  expect(refused[1]?.label).toBe("Send your email");
+  // Declined on its card by the person: not sent, and not named as sent.
+  const declined = [
+    read,
+    send(
+      "The person declined this action when you asked for their approval, so it was not done.",
+    ),
+  ].map(stepDetails);
+  expect(declined[1]?.refused).toBe(true);
+  expect(summarise(declined)).toBe("Read your email");
+  // A search that failed is not "searched".
+  const failed = [
+    call(
+      "f",
+      "mcp__google-workspace__gmail_search_messages",
+      {},
+      "Model tried to call unavailable tool 'mcp__google-workspace__gmail_search_messages'.",
+    ),
+  ].map(stepDetails);
+  expect(failed[0]?.failed).toBe(true);
+  expect(summarise(failed)).toBe("Search your email");
+});
+
 test("the tools CopilotKit has a renderer for are the ones the app draws", () => {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <CopilotKitContext.Provider
@@ -203,7 +269,7 @@ test("the app-access card stays out of a group, even before its answer arrives",
 
 test("show_app_access is named in words in a step's details too, and keeps its words to the model out", () => {
   const running = stepDetails(call("card", "show_app_access", { app: "x" }));
-  expect(running.label).toBe("Checking app access");
+  expect(running.label).toBe("Checking your apps");
   const done = stepDetails(
     call(
       "card",
@@ -214,7 +280,7 @@ test("show_app_access is named in words in a step's details too, and keeps its w
       ),
     ),
   );
-  expect(done.label).toBe("Checked app access");
+  expect(done.label).toBe("Checked your apps");
   expect(done.output).toBeUndefined();
 });
 
@@ -278,7 +344,7 @@ test("while running, the line names the step in progress; opened, a step shows i
       <ToolActivity group={group} active />
     </QueryClientProvider>,
   );
-  expect(view.getByText("Read web pages…")).toBeDefined();
+  expect(view.getByText("Reading a web page…")).toBeDefined();
   fireEvent.click(view.getAllByText("Search the web")[0] as HTMLElement);
   expect(view.getByText("query")).toBeDefined();
   expect(view.getAllByText("top 5 GDP 2025").length).toBeGreaterThan(0);

@@ -9,6 +9,7 @@ import {
 import type { Message } from "@ag-ui/core";
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ComposerDraft } from "@/components/channels/composer/draft";
 import {
@@ -77,20 +78,26 @@ function mount(
   const sent: ComposerDraft[] = [];
   const into: { current: ConversationSend | null } = { current: null };
   // The provider and the renderer are for the transcript, which draws the Bot's call through them.
+  // The transcript reads the approval inbox to tell a held call from a running one.
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   const tree = (next: typeof props) => (
-    <CopilotKitProvider>
-      <ReplyChipsTool />
-      <ConversationView
-        disabled={next.disabled ?? false}
-        lead={<Probe into={into} />}
-        messages={next.messages ?? ASKED}
-        onSubmit={(draft) => {
-          sent.push(draft);
-        }}
-        pending={next.pending ?? false}
-        queueWhileBusy={next.queueWhileBusy ?? false}
-      />
-    </CopilotKitProvider>
+    <QueryClientProvider client={client}>
+      <CopilotKitProvider>
+        <ReplyChipsTool />
+        <ConversationView
+          disabled={next.disabled ?? false}
+          lead={<Probe into={into} />}
+          messages={next.messages ?? ASKED}
+          onSubmit={(draft) => {
+            sent.push(draft);
+          }}
+          pending={next.pending ?? false}
+          queueWhileBusy={next.queueWhileBusy ?? false}
+        />
+      </CopilotKitProvider>
+    </QueryClientProvider>
   );
   const view = render(tree(props));
   return {

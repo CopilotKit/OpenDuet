@@ -1,6 +1,5 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { AdminSidebar } from "@/components/admin/admin-sidebar";
-import { SidebarShell } from "@/components/layout/sidebar-shell";
+import { AppShell } from "@/components/shell/app-shell";
 import { currentUserQueryOptions } from "../../../lib/auth/queries";
 
 export const Route = createFileRoute("/_authed/admin")({
@@ -15,13 +14,15 @@ export const Route = createFileRoute("/_authed/admin")({
   component: RouteComponent,
 });
 
+/**
+ * Admin is a page in the app's own shell (parity-spec 2.9), as Settings is: the back disc and the
+ * title pill over it, the sections as rows on its index page. It used to be OpenBot's admin sidebar,
+ * whose only way out on a phone was a 30px "Show sidebar".
+ */
 function RouteComponent() {
   return (
-    <SidebarShell width="300px">
-      <AdminSidebar />
-      <main className="flex-1">
-        <Outlet />
-      </main>
-    </SidebarShell>
+    <AppShell>
+      <Outlet />
+    </AppShell>
   );
 }
