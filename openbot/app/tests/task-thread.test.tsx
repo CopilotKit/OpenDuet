@@ -59,6 +59,8 @@ const ASK = "Draft a reply to Rosa saying we'll take Oat Satin.";
 
 let tasks: TaskRecord[] = [];
 const posted: string[] = [];
+/** What each Try again carried. */
+const againBodies: unknown[] = [];
 
 const rosa = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
   id: "rosa",
@@ -109,6 +111,7 @@ function sse(events: unknown[]) {
 /** Every request the card, the page and the conversation make, answered from the fixtures above. */
 function serving() {
   posted.length = 0;
+  againBodies.length = 0;
   globalThis.fetch = Object.assign(
     async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = new URL(
@@ -146,6 +149,7 @@ function serving() {
       const again = /^\/api\/openduet\/tasks\/([^/]+)\/again$/.exec(path);
       if (again && method === "POST") {
         posted.push(path);
+        againBodies.push(init?.body ? JSON.parse(String(init.body)) : null);
         tasks = tasks.map((task) =>
           task.id === again[1]
             ? { ...task, status: "working", failure: null, failedAt: null }
@@ -502,6 +506,88 @@ test("the task page of one that couldn't finish says why in the Bot's words, and
   expect(
     await within(sheet).findByText(ASK, undefined, { timeout: 5_000 }),
   ).toBeTruthy();
+});
+
+test("a reply typed on a failed task runs it again with the person's words, never on its own", async () => {
+  tasks = [
+    rosa({
+      status: "failed",
+      failure: "a service didn't answer",
+      failedAt: new Date("2026-10-22T09:47:00").toISOString(),
+    }),
+  ];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  // What its runs left is shown, the ask first, under a line saying what a reply does.
+  expect(
+    await within(sheet).findByText(ASK, undefined, { timeout: 5_000 }),
+  ).toBeTruthy();
+  expect(sheet.textContent).toContain("Your reply runs this task again.");
+  const box = within(sheet).getByRole("textbox");
+  fireEvent.input(box, { target: { textContent: "Use the Oat Satin glaze." } });
+  box.textContent = "Use the Oat Satin glaze.";
+  fireEvent.input(box);
+  fireEvent.keyDown(box, { key: "Enter" });
+  await waitFor(() =>
+    expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]),
+  );
+  expect(againBodies).toEqual([{ reply: "Use the Oat Satin glaze." }]);
+  await waitFor(() =>
+    expect(sheet.querySelector("[data-status]")?.textContent).toBe("Working"),
+  );
+});
+
+test("when a task's conversation stops running a turn, where the task stands is read again at once", async () => {
+  tasks = [rosa({ status: "ready_for_review" })];
+  serving();
+  const busyRoster = (busy: boolean) =>
+    queryClient.setQueryData(channelKeys.list(), {
+      pages: [
+        {
+          channels: [
+            {
+              ...conversation,
+              summary: null,
+              lastMessage: null,
+              lastMessageAgentId: null,
+              createdAt: "2026-10-22T09:41:00.000Z",
+              pinned: false,
+              lastReadAt: null,
+              taskId: "rosa",
+              busy,
+            },
+          ],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [""],
+    });
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <ChatTaskCard
+        started={{
+          taskId: "rosa",
+          channelId: "rosa-channel",
+          title: rosa().title,
+        }}
+      />
+    </QueryClientProvider>,
+  );
+  const pill = () => view.container.querySelector("[data-status]");
+  await waitFor(() => expect(pill()?.textContent).toBe("Ready for review"));
+  await act(async () => busyRoster(true));
+  await waitFor(() => expect(pill()?.textContent).toBe("Working"));
+  // The person's turn ended with a question for them; the quiet poll is half a minute away.
+  tasks = [rosa({ status: "needs_input" })];
+  await act(async () => busyRoster(false));
+  await waitFor(() => expect(pill()?.textContent).toBe("Needs input"), {
+    timeout: 2_000,
+  });
 });
 
 test("a task that is not the person's says so in the sheet", async () => {

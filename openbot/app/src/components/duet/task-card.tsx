@@ -1,12 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { RowButton } from "@/components/shell/activity-screen";
 import { tryTaskAgainMutationOptions } from "@/lib/tasks/mutations";
 import {
   couldNotFinish,
   TASK_STATUS_LABEL,
   type TaskStatus,
 } from "@/lib/tasks/queries";
+import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 import { DuetIcon, type DuetIconName } from "./icons";
 import { CardRow, DuetCard, OutcomePill, type PillTone } from "./kit";
@@ -16,8 +16,8 @@ import { CardRow, DuetCard, OutcomePill, type PillTone } from "./kit";
  * opens it. The same row sits under the Bot's "On it" in Chat and in Tasks' Your tasks. The caller
  * supplies the link, since a task opens from both.
  *
- * A task that couldn't finish says why under its pill, and has Try again under the row. The button
- * sits outside the link, so pressing it never opens the task.
+ * A task that couldn't finish says so on its status line, "Failed · Couldn't finish: <reason>.", and
+ * has Try again under the row. The button sits outside the link, so pressing it never opens the task.
  */
 
 const PILL: Record<TaskStatus, { tone: PillTone; icon: DuetIconName | null }> =
@@ -56,17 +56,17 @@ export function TaskRow({
   return (
     <CardRow
       detail={
-        status ? (
-          <>
-            <span className="mt-1.5 flex">
-              <TaskStatusPill status={status} />
+        status === "failed" ? (
+          <span className="mt-1 line-clamp-2 block" data-failure>
+            <span className="text-duet-red" data-status="failed">
+              {TASK_STATUS_LABEL.failed}
             </span>
-            {status === "failed" ? (
-              <span className="mt-1 line-clamp-2 block" data-failure>
-                {couldNotFinish(failure)}
-              </span>
-            ) : null}
-          </>
+            {` · ${couldNotFinish(failure)}`}
+          </span>
+        ) : status ? (
+          <span className="mt-1.5 flex">
+            <TaskStatusPill status={status} />
+          </span>
         ) : undefined
       }
       icon="tasks"
@@ -81,6 +81,41 @@ export function TaskRow({
 }
 
 /**
+ * A task's own button: Try again, Mark done, Reopen. A full 44px target, which is what a finger
+ * needs, so it is drawn here rather than as the 32px row button lists use.
+ */
+export function TaskButton({
+  children,
+  label,
+  busy,
+  onClick,
+  primary = false,
+}: {
+  children: ReactNode;
+  label: string;
+  busy: boolean;
+  onClick: () => void;
+  primary?: boolean;
+}) {
+  return (
+    <button
+      aria-label={label}
+      className={cn(
+        "type-label h-[44px] shrink-0 rounded-full px-4 font-semibold outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50",
+        primary
+          ? "bg-duet-black text-duet-on-black hover:brightness-125"
+          : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
+      )}
+      disabled={busy}
+      onClick={onClick}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
  * Try again, under a failed task's row: its turn runs once more in its own conversation, and the
  * row reads Working until that run ends.
  */
@@ -88,14 +123,14 @@ export function TryTaskAgain({ taskId }: { taskId: string }) {
   const again = useMutation(tryTaskAgainMutationOptions(queryClient));
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pr-4 pb-3 pl-[69px]">
-      <RowButton
+      <TaskButton
         busy={again.isPending}
         label="Try this task again"
-        onClick={() => again.mutate(taskId)}
+        onClick={() => again.mutate({ id: taskId })}
         primary
       >
         Try again
-      </RowButton>
+      </TaskButton>
       {again.error ? (
         <p className="type-label text-duet-red" role="alert">
           {again.error.message}

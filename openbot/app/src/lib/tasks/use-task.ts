@@ -1,19 +1,34 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { channelListQueryOptions } from "@/lib/channels/queries";
+import { queryClient } from "@/query-client";
 import {
   liveStatus,
   type TaskRecord,
   type TaskStatus,
+  taskKeys,
   taskListQueryOptions,
   taskQueryOptions,
 } from "./queries";
 
-/** Whether a turn is running in this conversation now, as the roster's working dot says. */
+/**
+ * Whether a turn is running in this conversation now, as the roster's working dot says.
+ *
+ * When the dot goes out, the tasks are read again at once: the turn has ended, so where the task
+ * stands has changed, and the quiet poll would leave the old status up for half a minute.
+ */
 export function useConversationBusy(channelId: string | undefined): boolean {
   const roster = useInfiniteQuery(channelListQueryOptions());
-  return channelId
+  const busy = channelId
     ? (roster.data?.find((channel) => channel.id === channelId)?.busy ?? false)
     : false;
+  const was = useRef(busy);
+  useEffect(() => {
+    if (was.current && !busy)
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    was.current = busy;
+  }, [busy]);
+  return busy;
 }
 
 /**

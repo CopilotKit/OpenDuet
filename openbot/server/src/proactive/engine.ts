@@ -627,6 +627,13 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     text: z.string().min(1).optional(),
     /** Queued by Try again, beside the turn that failed. */
     again: z.boolean().optional(),
+    /** What the person said with Try again: a reply typed on the failed task. */
+    reply: z.string().min(1).optional(),
+    /**
+     * How many runs this turn was queued with. A turn queued without it is from before retries,
+     * when one failure was final, so it is never run a second time.
+     */
+    runs: z.number().int().positive().optional(),
   });
 
   /** Opens the task a started suggestion becomes, in its own conversation with the suggesting Bot. */
@@ -670,6 +677,14 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     }
     if (!taskId || !ask)
       throw new ProactiveRefusedError("This task has nothing to start.");
+    /*
+     * A turn from before retries failed once and was left, as final then. Run again now, it would
+     * act weeks late on whatever it was asked; refused instead, so it stays failed with Try again.
+     */
+    if (attempt > 1 && work.runs === undefined)
+      throw new ProactiveRefusedError(
+        "This turn failed before it could be tried again.",
+      );
     const scope = await deps.tasks.scope(work.ownerUserId, taskId);
     if (!scope)
       throw new ProactiveRefusedError(
@@ -680,7 +695,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       runId: rerun
         ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
         : `task-${taskId}`,
-      text: frameTaskBrief(ask),
+      text: frameTaskBrief(work.reply ? `${ask}\n\n${work.reply}` : ask),
       signal,
       final: attempt >= TASK_RUNS,
     });
@@ -835,7 +850,12 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: suggestionId,
-        payload: { ownerUserId, suggestionId, taskId: task.id },
+        payload: {
+          ownerUserId,
+          suggestionId,
+          taskId: task.id,
+          runs: TASK_RUNS,
+        },
       });
       startSoon();
       return { suggestion: started, task };
@@ -862,7 +882,12 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: `task:${task.id}`,
-        payload: { ownerUserId, taskId: task.id, text: input.instruction },
+        payload: {
+          ownerUserId,
+          taskId: task.id,
+          text: input.instruction,
+          runs: TASK_RUNS,
+        },
       });
       startSoon();
       return task;
@@ -870,14 +895,26 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     /**
      * Try again: a task whose turn couldn't finish runs it once more, in the same conversation, as a
      * turn of its own beside the one that failed. Keyed on how many turns the task has had, so two
-     * presses at once queue one.
+     * presses at once queue one. A reply the person typed on the failed task goes with the ask, so
+     * the run has the task and their words both.
      */
-    async again(ownerUserId: string, taskId: string): Promise<void> {
+    async again(
+      ownerUserId: string,
+      taskId: string,
+      reply?: string,
+    ): Promise<void> {
       const { ask, turns } = await deps.tasks.failedTurn(ownerUserId, taskId);
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: `task:${taskId}:again:${turns}`,
-        payload: { ownerUserId, taskId, ...ask, again: true },
+        payload: {
+          ownerUserId,
+          taskId,
+          ...ask,
+          ...(reply ? { reply } : {}),
+          again: true,
+          runs: TASK_RUNS,
+        },
       });
       startSoon();
     },
@@ -895,11 +932,19 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           payload: { settingId: setting.id, runId },
         });
       }
-      await drain(PROACTIVE_RUN_KIND, async (payload, signal) => {
-        const { settingId, runId } = payloadSchema.parse(payload);
-        await run(settingId, runId, signal);
-      });
-      await drainTask();
+      /*
+       * Side by side, so a research run that throws or takes its ten minutes never holds back a
+       * task's turn, which is the only path a turn cut off by a restart is retried by.
+       */
+      const [research, task] = await Promise.allSettled([
+        drain(PROACTIVE_RUN_KIND, async (payload, signal) => {
+          const { settingId, runId } = payloadSchema.parse(payload);
+          await run(settingId, runId, signal);
+        }),
+        drainTask(),
+      ]);
+      for (const outcome of [research, task])
+        if (outcome.status === "rejected") throw outcome.reason;
     },
   };
 }

@@ -28,6 +28,7 @@ import { START_TASK_TOOL } from "../src/openduet/tasks";
 import { createOpenDuetTools } from "../src/openduet/wiring";
 import {
   createProactiveEngine,
+  PROACTIVE_RUN_KIND,
   PROACTIVE_TASK_KIND,
   type ProactiveScope,
 } from "../src/proactive/engine";
@@ -722,18 +723,20 @@ describe("a task whose turn fails", () => {
     expect(done.failedAt).toBeNull();
   });
 
-  test("whose second run a restart cut off too fails, saying so, at the moment its lease ran out", async () => {
+  test("whose last run a restart cut off fails, saying so, at the moment its lease ran out", async () => {
     const task = await opened();
     const expired = new Date(Date.now() - 60_000);
+    // The first run threw and left its error; the second was cut off, and that is what is said.
     await turnFor(task.id, {
       attempts: 2,
       claimedBy: "gone",
       leaseUntil: expired,
+      lastError: "fetch failed",
       updatedAt: new Date(Date.now() - 4 * 60_000),
     });
     expect(await read(task.id)).toMatchObject({
       status: "failed",
-      failure: "the run was cut off partway through, twice",
+      failure: "the run was cut off partway through",
       failedAt: expired.toISOString(),
     });
   });
@@ -750,34 +753,37 @@ describe("a task whose turn fails", () => {
     });
   });
 
-  test("moves past the failure once the person replies in its conversation and the Bot answers", async () => {
+  test("stays Failed whatever is said in its conversation, until a turn of its own finishes", async () => {
     const task = await opened();
     await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
-    // The server's own line saying it failed is not the conversation moving on.
     await channelStore.recordActivity(
       owner,
       task.channelId,
       {
-        text: "I couldn't finish this: a service it needed didn't answer.",
+        text: "I couldn't finish this: a service didn't answer.",
         agentId: bot,
         at: new Date(),
       },
       { id: `task-${task.id}-x:failed` },
     );
-    expect((await read(task.id)).status).toBe("failed");
-    // The person's reply alone is not an answer yet.
+    // A Bot answer from the browser is not the task's turn: it may not have had the task at all.
     await channelStore.recordActivity(owner, task.channelId, {
       text: "Try it with the other glaze.",
       agentId: null,
       at: new Date(Date.now() + 1_000),
     });
-    expect((await read(task.id)).status).toBe("failed");
-    // The Bot answered in the browser: there is something to read.
     await channelStore.recordActivity(owner, task.channelId, {
-      text: "Done, with Oat Satin.",
+      text: "Evening. Here's what's in your inbox.",
       agentId: bot,
       at: new Date(Date.now() + 2_000),
     });
+    expect((await read(task.id)).status).toBe("failed");
+    // Its own turn finishing is.
+    const again = await turnFor(task.id, {}, `task:${task.id}:again:1`);
+    await database
+      .update(workItems)
+      .set({ attempts: 1, finishedAt: new Date() })
+      .where(again);
     expect((await read(task.id)).status).toBe("ready_for_review");
   });
 
@@ -797,6 +803,9 @@ describe("a task whose turn fails", () => {
     expect(started[1]?.runId).not.toBe(started[0]?.runId);
     expect(started[1]?.text).toBe(started[0]?.text);
     // Out of runs: unfinished on the queue, with its reason, which is what reads as Failed.
+    expect(
+      items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)?.payload,
+    ).toMatchObject({ runs: 2 });
     expect(items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)).toMatchObject({
       attempts: 2,
       finished: false,
@@ -811,7 +820,12 @@ describe("a task whose turn fails", () => {
     items.set(`${PROACTIVE_TASK_KIND}:task:${task.id}`, {
       kind: PROACTIVE_TASK_KIND,
       key: `task:${task.id}`,
-      payload: { ownerUserId: owner.id, taskId: task.id, text: "Go on." },
+      payload: {
+        ownerUserId: owner.id,
+        taskId: task.id,
+        text: "Go on.",
+        runs: 2,
+      },
       attempts: 1,
       finished: false,
       claimed: false,
@@ -824,6 +838,77 @@ describe("a task whose turn fails", () => {
     expect(items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)?.finished).toBe(
       true,
     );
+  });
+
+  test("a turn from before retries is never run a second time, and stays failed", async () => {
+    const task = await opened();
+    const { engine, items, started } = engineFor();
+    // Failed once, when one failure was final, and left unfinished.
+    items.set(`${PROACTIVE_TASK_KIND}:task:${task.id}`, {
+      kind: PROACTIVE_TASK_KIND,
+      key: `task:${task.id}`,
+      payload: { ownerUserId: owner.id, taskId: task.id, text: "Go on." },
+      attempts: 1,
+      finished: false,
+      claimed: false,
+    });
+    await engine.sweep().catch(() => undefined);
+    expect(started).toHaveLength(0);
+    expect(items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)).toMatchObject({
+      attempts: 2,
+      finished: false,
+      lastError: "This turn failed before it could be tried again.",
+    });
+  });
+
+  test("a research run that throws in the sweep does not hold back a task's turn", async () => {
+    const task = await opened();
+    const { engine, items, started } = engineFor();
+    items.set(`${PROACTIVE_RUN_KIND}:broken`, {
+      kind: PROACTIVE_RUN_KIND,
+      key: "broken",
+      payload: {},
+      attempts: 0,
+      finished: false,
+      claimed: false,
+    });
+    items.set(`${PROACTIVE_TASK_KIND}:task:${task.id}`, {
+      kind: PROACTIVE_TASK_KIND,
+      key: `task:${task.id}`,
+      payload: {
+        ownerUserId: owner.id,
+        taskId: task.id,
+        text: "Go on.",
+        runs: 2,
+      },
+      attempts: 0,
+      finished: false,
+      claimed: false,
+    });
+    await expect(engine.sweep()).rejects.toThrow();
+    expect(started).toHaveLength(1);
+    expect(items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)?.finished).toBe(
+      true,
+    );
+  });
+
+  test("a reply on a failed task is Try again with the person's words beside the ask", async () => {
+    const task = await opened();
+    await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
+    const { engine, items, started } = engineFor();
+    await engine.again(owner.id, task.id, "Use the Oat Satin glaze.");
+    await engine.idle();
+    expect(started).toHaveLength(1);
+    expect(started[0]?.text).toBe(
+      frameTaskBrief("Prepare the notes.\n\nUse the Oat Satin glaze."),
+    );
+    expect(
+      items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}:again:1`)?.payload,
+    ).toMatchObject({
+      reply: "Use the Oat Satin glaze.",
+      again: true,
+      runs: 2,
+    });
   });
 
   test("Try again runs it once more in its own conversation, and only when it failed", async () => {
@@ -884,12 +969,31 @@ describe("a task whose turn fails", () => {
     expect(((await refused.json()) as { error: string }).error).toBe(
       "Only a task that couldn't finish can be tried again.",
     );
-    const accepted = await again(owner.id, task.id);
+    const tooLong = await routes.request(`/${task.id}/again`, {
+      method: "POST",
+      headers: { "x-person": owner.id, "content-type": "application/json" },
+      body: JSON.stringify({ reply: "x".repeat(4001) }),
+    });
+    expect(tooLong.status).toBe(400);
+    const accepted = await routes.request(`/${task.id}/again`, {
+      method: "POST",
+      headers: { "x-person": owner.id, "content-type": "application/json" },
+      body: JSON.stringify({ reply: "Use the Oat Satin glaze." }),
+    });
     expect(accepted.status).toBe(200);
     expect(((await accepted.json()) as { task: TaskRecord }).task.id).toBe(
       task.id,
     );
     await engine.idle();
     expect(started).toHaveLength(1);
+    expect(readTaskBrief(started[0]?.text ?? "")).toBe(
+      "Prepare the notes.\n\nUse the Oat Satin glaze.",
+    );
+    // And with no body, as the button sends it.
+    const fresh = await opened();
+    await turnFor(fresh.id, { attempts: 2, lastError: "fetch failed" });
+    expect((await again(owner.id, fresh.id)).status).toBe(200);
+    await engine.idle();
+    expect(readTaskBrief(started[1]?.text ?? "")).toBe("Prepare the notes.");
   });
 });

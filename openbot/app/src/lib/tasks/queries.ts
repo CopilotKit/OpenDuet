@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { client } from "@/lib/client";
+import { readThreadMessages } from "@/lib/copilot/thread-messages";
 
 /*
  * The person's tasks: work OpenDuet does in the background, each in a conversation of its own
@@ -63,6 +64,20 @@ export const taskListQueryOptions = () =>
       query.state.data?.some((task) => moving(task.status))
         ? LIVE_MS
         : QUIET_MS,
+  });
+
+/**
+ * A failed task's conversation as the history store holds it, for the page to show while nothing
+ * runs there. Read once on open; Try again replaces it with the live conversation.
+ */
+export const failedConversationQueryOptions = (input: {
+  taskId: string;
+  threadId: string;
+  botId: string;
+}) =>
+  queryOptions({
+    queryKey: [...taskKeys.detail(input.taskId), "conversation"] as const,
+    queryFn: () => readThreadMessages(input.threadId, input.botId),
   });
 
 /** One task, kept live while it is under way. */

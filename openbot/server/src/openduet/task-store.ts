@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Hono, type MiddlewareHandler } from "hono";
+import { z } from "zod";
 import type { AppVariables } from "../auth/guards";
 import type { Database } from "../db/client";
 import {
   approvalRequests,
-  channels,
   intelligenceChannelMappings,
   workItems,
 } from "../db/schema";
@@ -106,15 +106,16 @@ export function taskStatus(state: {
 
 /** How long a task with no turn on the queue yet still reads as just started. */
 const STARTING_MS = 60_000;
-/** A turn the second run of which was cut off too, so the queue holds no error for it. */
-const CUT_OFF = "the run was cut off partway through, twice";
+/** A turn whose last run a crash or restart cut off. */
+const CUT_OFF = "the run was cut off partway through";
 /** A task whose turn never reached the queue. */
 const NEVER_STARTED = "it never started";
 
 /**
- * Why a task's turn couldn't finish, in words the person reads after "Couldn't finish:". Never the
- * error itself: that is an operator's, kept on the queue's row, and can be a status code, a JSON
- * body or a stack. Anything not recognised here is said generically.
+ * Why a task's turn couldn't finish, in words that read right after both the row's "Couldn't
+ * finish:" and the Bot's own "I couldn't finish this:", so never the Bot in the third person. Never
+ * the error itself: that is an operator's, kept on the queue's row, and can be a status code, a
+ * JSON body or a stack. Anything not recognised here is said generically.
  */
 export function plainFailure(error: string | null | undefined): string {
   if (!error) return CUT_OFF;
@@ -127,15 +128,20 @@ export function plainFailure(error: string | null | undefined): string {
   const rules: [RegExp, string][] = [
     [/finished without saying anything/i, "the run ended without a reply"],
     [/stopped to ask a question/i, "the run stopped to ask a question"],
-    [/no longer available/i, "the Bot or its conversation is gone"],
+    [/no longer available/i, "this conversation is gone"],
     [/nothing to start/i, "there was nothing to start"],
-    [/\bpaused\b/i, "the Bot is paused"],
-    [/allowed model/i, "the Bot's model isn't allowed"],
+    [/before (it|retries) could/i, "it failed before it could be tried again"],
+    [/\bpaused\b/i, "work is paused"],
+    [/allowed model/i, "the model isn't allowed here"],
     [/lock/i, "the conversation was busy with another reply"],
     [/cancel|abort/i, "the run was stopped"],
     [
+      /\b40[13]\b|authentication|api.?key/i,
+      "the model provider turned the request away",
+    ],
+    [
       /fetch failed|ECONN|ETIMEDOUT|ENOTFOUND|socket hang up|unavailable|overloaded|\b50[234]\b/i,
-      "a service it needed didn't answer",
+      "a service didn't answer",
     ],
   ];
   return (
@@ -260,7 +266,7 @@ export function createTaskStore(
     const suggestionIds = rows.flatMap((row) =>
       row.suggestionId ? [row.suggestionId] : [],
     );
-    const [turns, lines, resuming] = await Promise.all([
+    const [turns, resuming] = await Promise.all([
       database
         .select({
           taskId: payload("taskId"),
@@ -269,6 +275,7 @@ export function createTaskStore(
           live: sql<boolean>`coalesce(${workItems.leaseUntil} > now(), false)`,
           finished: sql<boolean>`${workItems.finishedAt} is not null`,
           lastError: workItems.lastError,
+          claimed: sql<boolean>`${workItems.claimedBy} is not null`,
           updatedAt: workItems.updatedAt,
           leaseUntil: workItems.leaseUntil,
         })
@@ -291,14 +298,6 @@ export function createTaskStore(
           ),
         )
         .orderBy(desc(workItems.createdAt)),
-      database
-        .select({
-          id: channels.id,
-          sourceId: channels.lastMessageSourceId,
-          agentId: channels.lastMessageAgentId,
-        })
-        .from(channels)
-        .where(inArray(channels.id, channelIds)),
       database
         .select({ threadId: approvalThread })
         .from(workItems)
@@ -327,7 +326,6 @@ export function createTaskStore(
         turn.taskId ?? taskOfSuggestion.get(turn.suggestionId ?? "");
       if (taskId && !newest.has(taskId)) newest.set(taskId, turn);
     }
-    const lineOf = new Map(lines.map((line) => [line.id, line]));
     const at = now().getTime();
     for (const row of rows) {
       const entry = state.get(row.id);
@@ -355,17 +353,16 @@ export function createTaskStore(
         continue;
       }
       /*
-       * Unless the conversation moved on: the person replied in it from the browser and the Bot
-       * answered there, which a server turn never records without a source.
+       * It stays failed until a turn of its own finishes. Anything else said in its conversation
+       * since is not that turn: the task page sends a reply on a failed task as Try again.
+       *
+       * Still claimed means its last run was cut off, not let go after a throw, whatever error an
+       * earlier run left on the row; it failed when that lease ran out.
        */
-      const line = lineOf.get(row.channelId);
-      if (line && line.sourceId === null && line.agentId !== null) continue;
-      entry.failure = plainFailure(turn.lastError);
-      // Let go after its last run threw, or, cut off, when its lease ran out.
+      const cutOff = turn.claimed && turn.leaseUntil !== null;
+      entry.failure = plainFailure(cutOff ? null : turn.lastError);
       entry.failedAt =
-        turn.leaseUntil && turn.leaseUntil > turn.updatedAt
-          ? turn.leaseUntil
-          : turn.updatedAt;
+        cutOff && turn.leaseUntil ? turn.leaseUntil : turn.updatedAt;
     }
     for (const row of resuming)
       mark(channelOfThread.get(row.threadId), "working");
@@ -522,10 +519,16 @@ export function createTaskStore(
   };
 }
 
-/** Runs a failed task's turn again: the proactive engine's `again`. */
+/** Runs a failed task's turn again, with the person's reply when there is one: the engine's `again`. */
 export type TaskRetry = {
-  again(ownerUserId: string, taskId: string): Promise<unknown>;
+  again(ownerUserId: string, taskId: string, reply?: string): Promise<unknown>;
 };
+
+/** The longest reply that goes with Try again. */
+const MAX_REPLY = 4000;
+const againSchema = z
+  .object({ reply: z.string().trim().max(MAX_REPLY).optional() })
+  .strict();
 
 /** `/api/openduet/tasks`: the person's own tasks, as Chat's cards, the task page and Tasks read them. */
 export function createTaskRoutes(
@@ -569,12 +572,27 @@ export function createTaskRoutes(
       task: await store.reopen(context.var.actor.id, context.req.param("id")),
     }),
   );
-  // Try again: the failed turn runs once more, in the task's own conversation.
+  /*
+   * Try again: the failed turn runs once more, in the task's own conversation. A reply typed on a
+   * failed task comes here too, and goes with the ask, so the run has the task and the person's
+   * words both.
+   */
   if (retry)
     routes.post("/:id/again", async (context) => {
       const owner = context.var.actor.id;
       const id = context.req.param("id");
-      await retry.again(owner, id);
+      const body = context.req
+        .header("content-type")
+        ?.includes("application/json")
+        ? await context.req.json().catch(() => null)
+        : {};
+      const parsed = againSchema.safeParse(body ?? {});
+      if (!parsed.success)
+        return context.json(
+          { error: `Say it in at most ${MAX_REPLY} characters.` },
+          400,
+        );
+      await retry.again(owner, id, parsed.data.reply || undefined);
       return context.json({ task: await store.get(owner, id) });
     });
   return routes;

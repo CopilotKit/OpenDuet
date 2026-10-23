@@ -67,12 +67,15 @@ export function createTaskThreads(deps: {
 }
 
 /**
- * DEV ONLY. While the file this names exists, every task's turn fails before it reaches the Bot, the
- * way a turn fails when a service it needs is down. Unset, as it is everywhere but a developer's own
- * stack, it does nothing. It is how the failed state and Try again are shown on a running stack:
- * create the file, start a task, watch it fail twice, delete the file, press Try again.
+ * DEV ONLY. While the file this names exists, every task's turn fails partway through, the way a
+ * turn fails when its model provider drops: the run starts for real, so the ask is in the
+ * conversation, and is cut at its first words (or after `DEV_FAIL_AFTER_MS`). Unset, as it is
+ * everywhere but a developer's own stack, it does nothing. It is how the failed state and Try again
+ * are shown on a running stack: create the file, start a task, watch it fail twice, delete the file,
+ * press Try again.
  */
 export const DEV_FAIL_TASKS_WHILE = "OPENDUET_DEV_FAIL_TASKS_WHILE";
+const DEV_FAIL_AFTER_MS = 8_000;
 
 /**
  * A task's turn: the person's ask as their message in the task's conversation, a person-started turn
@@ -118,18 +121,27 @@ export function createTaskTurn(deps: {
     );
     await deps.channels.signalBusy(scope.threadId, true).catch(() => {});
     try {
-      if (failWhile && existsSync(failWhile))
-        throw new Error(
-          `The model provider is unavailable (simulated: ${DEV_FAIL_TASKS_WHILE} names a file that exists).`,
-        );
-      const result = await deps.runTurn({
+      const failing = failWhile !== undefined && existsSync(failWhile);
+      const cut = new AbortController();
+      const turn = deps.runTurn({
         ...scope,
         routineId: input.runId,
         instruction: input.text,
         userMessage: { id: input.runId, role: "user", content: input.text },
         initiator: PERSON_INITIATOR,
-        signal: input.signal,
+        signal: failing
+          ? AbortSignal.any([input.signal, cut.signal])
+          : input.signal,
+        ...(failing ? { onText: () => cut.abort() } : {}),
       });
+      if (failing) {
+        const timer = setTimeout(() => cut.abort(), DEV_FAIL_AFTER_MS);
+        await turn.catch(() => undefined).finally(() => clearTimeout(timer));
+        throw new Error(
+          `The model provider is unavailable (simulated: ${DEV_FAIL_TASKS_WHILE} names a file that exists).`,
+        );
+      }
+      const result = await turn;
       if (result.replyText)
         await record(result.replyText, scope.agentId, `${input.runId}:reply`);
     } catch (error) {

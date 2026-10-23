@@ -126,25 +126,35 @@ describe("the dev flag that fails task turns", () => {
   const folder = mkdtempSync(join(tmpdir(), "task-turn-"));
   afterAll(() => rmSync(folder, { recursive: true, force: true }));
 
-  test("fails every turn while its file exists, and nothing once it is gone", async () => {
+  test("fails every turn partway through while its file exists, and nothing once it is gone", async () => {
     const flag = join(folder, "fail");
     writeFileSync(flag, "");
-    let ran = 0;
-    const runTurn: TurnRunner = async () => {
-      ran += 1;
+    const asked: Parameters<TurnRunner>[0][] = [];
+    // A run that starts for real, so the ask reaches the conversation, and stops when it is cut.
+    const runTurn: TurnRunner = async (input) => {
+      asked.push(input);
+      input.onText?.("Here are");
+      if (input.signal?.aborted)
+        throw new Error("The headless turn was cancelled.");
       return { replyText: "Here are your notes." };
     };
     const failing = turnWith(runTurn, { final: true, failWhile: flag });
     await expect(failing.start()).rejects.toThrow("simulated");
-    expect(ran).toBe(0);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.userMessage).toMatchObject({
+      id: "task-1",
+      content: frameTaskBrief(ASK),
+    });
+    expect(asked[0]?.signal?.aborted).toBe(true);
     expect(failing.said.at(-1)?.text).toBe(
-      "I couldn't finish this: a service it needed didn't answer.",
+      "I couldn't finish this: a service didn't answer.",
     );
 
     rmSync(flag);
     const fine = turnWith(runTurn, { final: true, failWhile: flag });
     await fine.start();
-    expect(ran).toBe(1);
+    expect(asked).toHaveLength(2);
+    expect(asked[1]?.signal?.aborted).toBe(false);
     expect(fine.said.at(-1)?.text).toBe("Here are your notes.");
   });
 });
@@ -157,19 +167,28 @@ describe("plainFailure", () => {
     expect(plainFailure("The turn finished without saying anything.")).toBe(
       "the run ended without a reply",
     );
+    // Never the Bot in the third person: each reads after "I couldn't finish this:" too.
     expect(
       plainFailure("This Bot or its channel is no longer available to you."),
-    ).toBe("the Bot or its conversation is gone");
-    expect(plainFailure("fetch failed")).toBe(
-      "a service it needed didn't answer",
+    ).toBe("this conversation is gone");
+    expect(plainFailure("This Bot is paused.")).toBe("work is paused");
+    expect(
+      plainFailure(
+        "This Bot uses gpt-x, which isn't an allowed model. Ask an admin to allow it.",
+      ),
+    ).toBe("the model isn't allowed here");
+    expect(
+      plainFailure("This turn failed before it could be tried again."),
+    ).toBe("it failed before it could be tried again");
+    expect(plainFailure("fetch failed")).toBe("a service didn't answer");
+    expect(plainFailure("invalid x-api-key")).toBe(
+      "the model provider turned the request away",
     );
     expect(plainFailure('429 {"error":{"type":"rate_limit"}} at line 3')).toBe(
       "something went wrong during the run",
     );
-    // A run cut off twice leaves no error on the queue.
-    expect(plainFailure(null)).toBe(
-      "the run was cut off partway through, twice",
-    );
+    // A run cut off by a crash leaves no error of its own.
+    expect(plainFailure(null)).toBe("the run was cut off partway through");
   });
 });
 

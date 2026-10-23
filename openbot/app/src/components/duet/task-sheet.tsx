@@ -2,7 +2,7 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRef } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
-import { RowButton } from "@/components/shell/activity-screen";
+import { ConversationView } from "@/components/channels/conversation-view";
 import { clockTime } from "@/lib/approval-view";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { channelQueryOptions } from "@/lib/channels/queries";
@@ -11,6 +11,7 @@ import {
   tryTaskAgainMutationOptions,
 } from "@/lib/tasks/mutations";
 import {
+  failedConversationQueryOptions,
   failureLine,
   liveStatus,
   type TaskRecord,
@@ -20,7 +21,7 @@ import { useConversationBusy } from "@/lib/tasks/use-task";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 import { DuetIcon } from "./icons";
-import { TaskStatusPill } from "./task-card";
+import { TaskButton, TaskStatusPill } from "./task-card";
 
 /*
  * A task, opened: a large card on the frosted veil, × at its top left and the title across its
@@ -31,7 +32,8 @@ import { TaskStatusPill } from "./task-card";
  * over Chat itself: that would put two conversations on screen at once.
  *
  * A task that couldn't finish says why under its pill, and offers Try again beside Mark done: its
- * turn runs once more in this conversation.
+ * turn runs once more in this conversation. A reply typed on it does the same, with the person's
+ * words beside the ask, so a reply never runs without the task (see `FailedConversation`).
  *
  * The conversation is the whole report for now. A fuller layout (the decisions it made, its updates,
  * the resources it used) is a later slice.
@@ -139,23 +141,23 @@ function TaskBody({ task }: { task: TaskRecord }) {
         <div className="flex items-center justify-between gap-2.5">
           <TaskStatusPill status={status} />
           <div className="flex items-center gap-2">
-            <RowButton
+            <TaskButton
               busy={resolve.isPending}
               label={done ? "Reopen this task" : "Mark this task done"}
               onClick={() => resolve.mutate({ id: task.id, done: !done })}
               primary={!done && !failed}
             >
               {done ? "Reopen" : "Mark done"}
-            </RowButton>
+            </TaskButton>
             {failed ? (
-              <RowButton
+              <TaskButton
                 busy={again.isPending}
                 label="Try this task again"
-                onClick={() => again.mutate(task.id)}
+                onClick={() => again.mutate({ id: task.id })}
                 primary
               >
                 Try again
-              </RowButton>
+              </TaskButton>
             ) : null}
           </div>
         </div>
@@ -172,6 +174,13 @@ function TaskBody({ task }: { task: TaskRecord }) {
           <p className="type-sub px-2 pt-4 text-duet-red" role="alert">
             Couldn't load this task's conversation. Close it and try again.
           </p>
+        ) : failed ? (
+          <FailedConversation
+            busy={again.isPending}
+            onReply={(reply) => again.mutateAsync({ id: task.id, reply })}
+            task={task}
+            threadId={conversation.data.threadId}
+          />
         ) : (
           <ChannelChat
             channel={conversation.data}
@@ -181,5 +190,50 @@ function TaskBody({ task }: { task: TaskRecord }) {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * A failed task's conversation: what its runs left, read from the history store, with a composer
+ * whose reply is Try again with the person's words.
+ *
+ * NOT THE LIVE CONVERSATION. Sent there, a reply would start a turn of its own beside the task, and
+ * when the task's ask never reached the thread the Bot would answer it without the task. So while
+ * the task is failed, a reply goes to the server with the ask (`POST /again`), and the run it starts
+ * is the task's own turn. Once that run is under way the page draws the live conversation again.
+ */
+function FailedConversation({
+  task,
+  threadId,
+  busy,
+  onReply,
+}: {
+  task: TaskRecord;
+  threadId: string;
+  busy: boolean;
+  onReply: (reply: string) => Promise<unknown>;
+}) {
+  const stored = useQuery(
+    failedConversationQueryOptions({
+      taskId: task.id,
+      threadId,
+      botId: task.botId,
+    }),
+  );
+  return (
+    <ConversationView
+      busy={busy}
+      messages={stored.data?.messages ?? []}
+      notice={
+        <p className="type-label px-2 text-duet-ink-3">
+          Your reply runs this task again.
+        </p>
+      }
+      onSubmit={async (draft) => {
+        if (draft.text.trim()) await onReply(draft.text.trim());
+      }}
+      placeholder="Message OpenDuet"
+      restoring={stored.isPending}
+    />
   );
 }
