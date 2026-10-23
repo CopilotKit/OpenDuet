@@ -14,6 +14,7 @@ import {
 import { type OpenDuetTaskOrigin, openduetTasks } from "../db/schema/openduet";
 import { PROACTIVE_TASK_KIND } from "../proactive/engine";
 import { DEFAULT_MAX_ATTEMPTS } from "../work/queue";
+import type { TaskReportReader } from "./task-report";
 
 /*
  * The person's tasks: work OpenDuet does in the background, each in a conversation of its own, so
@@ -442,6 +443,8 @@ export function createTaskRoutes(
   requireUser: MiddlewareHandler<{ Variables: AppVariables }>,
   /** Absent, the + routes are not served: there is nowhere to start or save a task. */
   intake?: TaskIntake,
+  /** Absent, a task's report is not served: there is no conversation history to read it from. */
+  report?: TaskReportReader,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
   routes.use("*", requireUser, bodyLimit({ maxSize: 16_384 }));
@@ -501,6 +504,31 @@ export function createTaskRoutes(
       task: await store.get(context.var.actor.id, context.req.param("id")),
     }),
   );
+  if (report) {
+    /*
+     * The task page's report: decisions, updates and what it read, worked out from its conversation
+     * on every read (openduet/task-report.ts). Another person's task is the same as no task.
+     */
+    routes.get("/:id/report", async (context) => {
+      const owner = context.var.actor.id;
+      const task = await store.get(owner, context.req.param("id"));
+      try {
+        return context.json({ report: await report(owner, task) });
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            type: "openduet-task-report-error",
+            error: error instanceof Error ? error.name : "unknown",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+        return context.json(
+          { error: "Couldn't load this task's report. Try again." },
+          503,
+        );
+      }
+    });
+  }
   routes.post("/:id/resolve", async (context) =>
     context.json({
       task: await store.resolve(context.var.actor.id, context.req.param("id")),

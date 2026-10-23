@@ -4,7 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
+  createRoute,
   createRouter,
+  Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
@@ -19,6 +21,8 @@ import { TabBar, tabForPath } from "@/components/shell/tab-bar";
 import { authKeys } from "@/lib/auth/queries";
 import { Route as ActivityRoute } from "@/routes/_authed/_app/activity";
 import { Route as InboxRoute } from "@/routes/_authed/_app/inbox";
+import { Route as PageLinkRoute } from "@/routes/_authed/_app/pages.$pageId";
+import { Route as PagesRoute } from "@/routes/_authed/_app/pages.index";
 import { type ChannelSummary, channelKeys } from "@/lib/channels/queries";
 import { deploymentKeys } from "@/lib/deployment/queries";
 import { settleReactWork } from "./settle-react-work";
@@ -104,10 +108,12 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/")).toBe("chat");
   expect(tabForPath("/tasks")).toBe("tasks");
   expect(tabForPath("/tasks/")).toBe("tasks");
-  expect(tabForPath("/pages")).toBe("pages");
-  // A page open over the list is still the Pages tab, and a task open over Tasks still Tasks.
-  expect(tabForPath("/pages/page-1")).toBe("pages");
-  expect(tabForPath("/pages/page-1/more")).toBeNull();
+  expect(tabForPath("/make")).toBe("make");
+  // Something open over the grid is still the Make tab, and a task open over Tasks still Tasks.
+  expect(tabForPath("/make/page-1")).toBe("make");
+  expect(tabForPath("/make/page-1/more")).toBeNull();
+  // Pages became Make; its old paths redirect before a tab is drawn.
+  expect(tabForPath("/pages")).toBeNull();
   expect(tabForPath("/tasks/task-1")).toBe("tasks");
   expect(tabForPath("/tasks/task-1/more")).toBeNull();
   expect(tabForPath("/activity")).toBeNull();
@@ -115,7 +121,7 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/channel/abc")).toBeNull();
 });
 
-test("the tab bar draws Chat, Tasks and Pages, the current one marked", async () => {
+test("the tab bar draws Chat, Tasks and Make, the current one marked", async () => {
   inbox = { requests: [], questions: [] };
   serving();
   const view = draw(<TabBar current="tasks" />, undefined, "/tasks");
@@ -124,13 +130,17 @@ test("the tab bar draws Chat, Tasks and Pages, the current one marked", async ()
   expect(links.map((link) => link.textContent)).toEqual([
     "Chat",
     "Tasks",
-    "Pages",
+    "Make",
   ]);
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
     "/",
     "/tasks",
-    "/pages",
+    "/make",
   ]);
+  // Make's glyph is the spark, not Pages' sheet of paper.
+  expect(links[2]?.querySelector("svg path")?.getAttribute("d")).toMatch(
+    /^M10\.6 3\.6/,
+  );
   expect(within(nav).getByRole("link", { current: "page" }).textContent).toBe(
     "Tasks",
   );
@@ -147,24 +157,75 @@ test("/inbox, where earlier notifications and links point, goes to Tasks", () =>
   expect(thrown).toMatchObject({ options: { to: "/tasks", replace: true } });
 });
 
-test("/activity, where earlier links point, goes to Pages", () => {
-  const beforeLoad = ActivityRoute.options.beforeLoad as () => void;
-  let thrown: unknown;
+/** What a redirecting route's `beforeLoad` throws. */
+function redirectOf(beforeLoad: unknown, input: unknown = {}): unknown {
   try {
-    beforeLoad();
+    (beforeLoad as (input: unknown) => void)(input);
   } catch (error) {
-    thrown = error;
+    return error;
   }
-  expect(thrown).toMatchObject({ options: { to: "/pages", replace: true } });
+  return undefined;
+}
+
+test("/activity and /pages, where earlier links point, go to Make", () => {
+  expect(redirectOf(ActivityRoute.options.beforeLoad)).toMatchObject({
+    options: { to: "/make", replace: true },
+  });
+  expect(redirectOf(PagesRoute.options.beforeLoad)).toMatchObject({
+    options: { to: "/make", replace: true },
+  });
 });
 
-test("on a page open over the list, the Pages tab is the one drawn current", async () => {
+test("a /pages/<id> link, as Chat's older cards wrote it, opens the same page under Make", () => {
+  expect(
+    redirectOf(PageLinkRoute.options.beforeLoad, {
+      params: { pageId: "deck-1" },
+    }),
+  ).toMatchObject({
+    options: {
+      to: "/make/$pageId",
+      params: { pageId: "deck-1" },
+      replace: true,
+    },
+  });
+});
+
+test("the redirects land where they say when a router follows them", async () => {
+  const root = createRootRoute({ component: Outlet });
+  const route = (path: string, beforeLoad?: unknown) =>
+    createRoute({
+      getParentRoute: () => root,
+      path,
+      component: () => <p>{path}</p>,
+      ...(beforeLoad ? { beforeLoad: beforeLoad as never } : {}),
+    });
+  const router = createRouter({
+    routeTree: root.addChildren([
+      route("/make"),
+      route("/make/$pageId"),
+      route("/pages/", PagesRoute.options.beforeLoad),
+      route("/pages/$pageId", PageLinkRoute.options.beforeLoad),
+      route("/activity", ActivityRoute.options.beforeLoad),
+    ]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  for (const [from, to] of [
+    ["/pages", "/make"],
+    ["/pages/deck-1", "/make/deck-1"],
+    ["/activity", "/make"],
+  ] as const) {
+    await router.navigate({ to: from as never });
+    await waitFor(() => expect(router.state.location.pathname).toBe(to));
+  }
+});
+
+test("on a page open over the grid, the Make tab is the one drawn current", async () => {
   inbox = { requests: [], questions: [] };
   serving();
-  const view = draw(<TabBar current="pages" />, undefined, "/pages");
+  const view = draw(<TabBar current="make" />, undefined, "/make");
   const nav = await view.findByRole("navigation", { name: "Main" });
   expect(within(nav).getByRole("link", { current: "page" }).textContent).toBe(
-    "Pages",
+    "Make",
   );
 });
 
@@ -190,7 +251,7 @@ test("the Tasks badge counts the approvals and questions waiting outside any tas
   expect(
     await view.findByRole("link", { name: "Tasks, 3 waiting" }),
   ).toBeTruthy();
-  expect(view.getByRole("link", { name: "Pages" })).toBeTruthy();
+  expect(view.getByRole("link", { name: "Make" })).toBeTruthy();
 });
 
 test("the Tasks badge counts what Needs input lists: a task waiting on the person once, with its own approval", async () => {

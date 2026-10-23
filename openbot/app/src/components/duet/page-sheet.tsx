@@ -17,6 +17,8 @@ import {
 import { searchText } from "@/lib/search-text";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
+import { PageCardFace } from "./page-card";
+import { FADE_MS, useSheetMorph } from "./page-morph";
 import { type OnListItem, PageBlocks, SlideCard } from "./page-view";
 
 /*
@@ -25,9 +27,12 @@ import { type OnListItem, PageBlocks, SlideCard } from "./page-view";
  * scrolls, and a deck shows one 16:9 slide at a time.
  *
  * Two places open it. Chat draws it over the conversation (`PageSheetHost`, below), so a row worth
- * a closer look can be sent as the person's own words. The Pages tab draws it over the list, from
- * the `/pages/$pageId` route, where there is no conversation and the rows are still. Either way the
- * address bar says `/pages/<id>`, so the link works on its own.
+ * a closer look can be sent as the person's own words. The Make tab draws it over the grid, from
+ * the `/make/$pageId` route, where there is no conversation and the rows are still. Either way the
+ * address bar says `/make/<id>`, so the link works on its own.
+ *
+ * Opened from a card, the card grows into it and closing shrinks it back (page-morph.tsx). Opened
+ * any other way, or with reduced motion, it fades.
  */
 
 /** How far a finger has to travel across a slide, in pixels, to turn it. */
@@ -67,11 +72,14 @@ export function PageSheet({
 }) {
   const page = useQuery(pageQueryOptions(pageId));
   const popup = useRef<HTMLDivElement>(null);
+  const morph = useSheetMorph(pageId, onClose, (summary, size) => (
+    <PageCardFace page={summary} size={size} />
+  ));
   const title = page.data?.title ?? "";
   return (
     <DialogPrimitive.Root
       onOpenChange={(next) => {
-        if (!next) onClose();
+        if (!next) morph.close();
       }}
       open
     >
@@ -80,19 +88,35 @@ export function PageSheet({
           aria-modal="true"
           className={cn(
             "duet-veil duet-face group fixed inset-0 z-50 flex flex-col text-duet-ink outline-none",
-            "transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none",
+            // The veil fades in and out with reduced motion too: a fade is the reduced transition.
+            "transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0",
+            morph.fading && "opacity-0",
           )}
+          data-closing={morph.fading || undefined}
           // The sheet takes focus, not ×, so a stray Enter does not close what was just opened.
           initialFocus={popup}
           ref={popup}
+          style={
+            morph.fading ? { transitionDuration: `${FADE_MS}ms` } : undefined
+          }
         >
           <div className="mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col px-2.5 pt-[max(env(safe-area-inset-top),12px)] pb-[max(env(safe-area-inset-bottom),10px)]">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] bg-duet-card shadow-duet-raised transition-transform duration-300 ease-out motion-reduce:transition-none motion-safe:group-data-starting-style:translate-y-6">
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] bg-duet-card shadow-duet-raised motion-reduce:transition-none",
+                morph.morphing
+                  ? "transition-opacity duration-150 ease-out"
+                  : "transition-transform duration-300 ease-out motion-safe:group-data-starting-style:translate-y-6",
+                morph.hidden && "opacity-0",
+              )}
+              data-morph-hidden={morph.hidden || undefined}
+              ref={morph.sheetRef}
+            >
               <header className="grid h-14 shrink-0 grid-cols-[44px_1fr_44px] items-center px-2">
                 <button
                   aria-label="Close"
                   className="grid size-11 place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
-                  onClick={onClose}
+                  onClick={morph.close}
                   type="button"
                 >
                   <DuetIcon name="x" size={22} stroke={2.1} />
@@ -128,6 +152,7 @@ export function PageSheet({
               </div>
             </div>
           </div>
+          {morph.ghost}
         </DialogPrimitive.Popup>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -297,7 +322,7 @@ export function useCloseSheet(fallback: () => void): () => void {
 /**
  * Chat's half: draws the page named by the conversation's `?page=` over it, inside the conversation,
  * so a row in it can be sent as the person's own words. The card puts it there, masked as
- * `/pages/<id>` in the address bar (see page-card-tool.tsx).
+ * `/make/<id>` in the address bar (see page-card-tool.tsx).
  *
  * Draws nothing outside a router. A conversation rendered on its own, as tests do, has no address
  * to read a page from.

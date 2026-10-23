@@ -30,7 +30,7 @@ import {
   PageSheetHost,
   useCloseSheet,
 } from "@/components/duet/page-sheet";
-import { PagesScreen } from "@/components/shell/pages-screen";
+import { MakeScreen } from "@/components/shell/make-screen";
 import { agentKeys } from "@/lib/agents/queries";
 import { ConversationPageCard, readPage } from "@/lib/copilot/page-card-tool";
 import type { PageSummary } from "@/lib/pages/queries";
@@ -40,7 +40,7 @@ import { settleReactWork } from "./settle-react-work";
 
 /**
  * Things the Bot makes: the card Chat draws under its line, the page it opens over the conversation
- * or over the Pages list, and the Pages tab that lists them. Drawn under a real router, so opening
+ * or over the Make grid, and the Make tab that lists them. Drawn under a real router, so opening
  * and closing a page is real navigation.
  */
 
@@ -203,11 +203,11 @@ function Chat({ page }: { page: PageSummary }) {
   );
 }
 
-/** The `/pages/$pageId` route's component, against this test's route tree. */
+/** The `/make/$pageId` route's component, against this test's route tree. */
 function PageRoute() {
   const { pageId } = useParams({ strict: false }) as { pageId: string };
   const navigate = useNavigate();
-  const close = useCloseSheet(() => void navigate({ to: "/pages" }));
+  const close = useCloseSheet(() => void navigate({ to: "/make" }));
   return <PageSheet onClose={close} pageId={pageId} />;
 }
 
@@ -224,10 +224,10 @@ function app(chat: ReactNode, path: string) {
   });
   const pagesRoute = createRoute({
     getParentRoute: () => root,
-    path: "/pages",
+    path: "/make",
     component: () => (
       <>
-        <PagesScreen />
+        <MakeScreen />
         <Outlet />
       </>
     ),
@@ -260,7 +260,7 @@ function card(page: PageSummary) {
   const view = render(
     <PageCard
       link={({ className, children }) => (
-        <a className={className} href={`/pages/${page.id}`}>
+        <a className={className} href={`/make/${page.id}`}>
           {children}
         </a>
       )}
@@ -282,7 +282,7 @@ test("a page's card previews its title over its first lines as soft bars, then s
   expect(preview.textContent).not.toContain("second kiln");
   expect(preview.textContent).not.toContain("Bring the samples");
   const link = view.getByRole("link");
-  expect(link.getAttribute("href")).toBe("/pages/prep");
+  expect(link.getAttribute("href")).toBe("/make/prep");
   expect(link.textContent).toContain(
     updatedLabel(prep.updatedAt, new Date("2026-10-22T10:00:00")),
   );
@@ -332,13 +332,13 @@ test("the tool's answer is drawn as a card only when it saved a page", () => {
   expect(readPage(undefined)).toBeNull();
 });
 
-test("in Chat the card opens the page over the conversation at /pages/<id>, and × goes back", async () => {
+test("in Chat the card opens the page over the conversation at /make/<id>, and × goes back", async () => {
   serving();
   const { view, router } = app(<Chat page={pulse} />, "/");
   fireEvent.click(await view.findByRole("link", { name: /Marlo Pulse/ }));
   const sheet = await view.findByRole("dialog", { name: "Marlo Pulse" });
-  // The address says /pages/pulse; the conversation is still under it.
-  expect(router.state.location.maskedLocation?.pathname).toBe("/pages/pulse");
+  // The address says /make/pulse; the conversation is still under it.
+  expect(router.state.location.maskedLocation?.pathname).toBe("/make/pulse");
   expect(router.state.location.pathname).toBe("/");
   expect(view.getByText(/It's a 2-minute read/)).toBeTruthy();
   expect(
@@ -352,7 +352,7 @@ test("in Chat the card opens the page over the conversation at /pages/<id>, and 
   expect(within(sheet).getAllByText("vs last year")).toHaveLength(8);
 
   fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
-  await waitFor(() => expect(view.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(view.queryByRole("dialog") === null).toBe(true));
   expect(router.state.location.pathname).toBe("/");
   expect(router.state.location.search).toEqual({});
 });
@@ -370,26 +370,26 @@ test("opened from Chat, a row worth a closer look asks about it in the conversat
     within(look).getByRole("button", { name: /Valencia delivery errors/ }),
   );
   expect(sent).toEqual(["Tell me more about Valencia delivery errors"]);
-  await waitFor(() => expect(view.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(view.queryByRole("dialog") === null).toBe(true));
   expect(router.state.location.search).toEqual({});
 });
 
-test("Pages lists everything made as the same cards, in the server's order, and opens one over the list", async () => {
+test("Make lists everything made as thumbnail cards, in the server's order, and opens one over the grid", async () => {
   listed = [pulse, deck, prep];
   serving();
-  const { view, router } = app(null, "/pages");
-  const list = await view.findByRole("list", { name: "Pages" });
+  const { view, router } = app(null, "/make");
+  const list = await view.findByRole("list", { name: "Made for you" });
   const links = within(list).getAllByRole("link");
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
-    "/pages/pulse",
-    "/pages/deck",
-    "/pages/prep",
+    "/make/pulse",
+    "/make/deck",
+    "/make/prep",
   ]);
   expect(view.getByText("What OpenDuet made for you.")).toBeTruthy();
 
   fireEvent.click(links[0] as HTMLElement);
   const sheet = await view.findByRole("dialog", { name: "Marlo Pulse" });
-  expect(router.state.location.pathname).toBe("/pages/pulse");
+  expect(router.state.location.pathname).toBe("/make/pulse");
   // No conversation here: the rows are still.
   const look = await within(sheet).findByRole("region", {
     name: "Where to look",
@@ -398,36 +398,23 @@ test("Pages lists everything made as the same cards, in the server's order, and 
   expect(look.textContent).toContain("Northford teams");
 
   fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
-  await waitFor(() => expect(view.queryByRole("dialog")).toBeNull());
-  expect(router.state.location.pathname).toBe("/pages");
+  await waitFor(() => expect(view.queryByRole("dialog") === null).toBe(true));
+  expect(router.state.location.pathname).toBe("/make");
 });
 
-test("a /pages/<id> link opened on its own closes to the Pages list", async () => {
+test("a /make/<id> link opened on its own closes to the Make grid", async () => {
   listed = [pulse];
   serving();
-  const { view, router } = app(null, "/pages/pulse");
+  const { view, router } = app(null, "/make/pulse");
   const sheet = await view.findByRole("dialog", { name: "Marlo Pulse" });
   fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
-  await waitFor(() => expect(router.state.location.pathname).toBe("/pages"));
-});
-
-test("with nothing made yet, Pages says what will appear and how", async () => {
-  listed = [];
-  serving();
-  const { view } = app(null, "/pages");
-  expect(await view.findByText("Nothing here yet.")).toBeTruthy();
-  expect(
-    view.getByText(
-      "Ask OpenDuet for prep notes, a plan, a deck or a dashboard. What it makes shows up here.",
-    ),
-  ).toBeTruthy();
-  expect(view.queryByRole("list", { name: "Pages" })).toBeNull();
+  await waitFor(() => expect(router.state.location.pathname).toBe("/make"));
 });
 
 test("a deck shows one slide at a time, turned by the arrow keys, the buttons or a swipe", async () => {
   listed = [deck];
   serving();
-  const { view } = app(null, "/pages/deck");
+  const { view } = app(null, "/make/deck");
   const sheet = await view.findByRole("dialog", { name: "Series A deck" });
   const counter = await within(sheet).findByText("1 / 3");
   const shown = () =>

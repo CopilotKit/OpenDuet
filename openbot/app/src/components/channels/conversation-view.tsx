@@ -55,6 +55,7 @@ export function ConversationView({
   inShell = false,
   placeholder,
   lead,
+  folded = false,
 }: {
   messages: readonly Message[];
   busy?: boolean;
@@ -120,6 +121,8 @@ export function ConversationView({
   placeholder?: string;
   /** Drawn above the first message; see `ChatTranscript`. */
   lead?: ReactNode;
+  /** Draw the lead alone, the conversation folded under it; see `ChatTranscript`. */
+  folded?: boolean;
 }) {
   /*
    * THE QUEUE LIVES HERE BECAUSE BOTH HALVES OF IT DO.
@@ -538,6 +541,7 @@ export function ConversationView({
                     "max-w-none gap-[14px] px-4 pt-[100px] pb-[calc(var(--duet-dock,0px)+24px)]",
                 }
               : {})}
+            folded={folded}
             lead={lead}
             commandNames={(commands ?? [])
               .map((command) => command.name)

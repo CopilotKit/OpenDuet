@@ -88,7 +88,7 @@ test("the card is drawn under the Bot's line about the page, and links to it", a
   const card = await view.findByRole("link", {
     name: /Hearth & Co studio visit/,
   });
-  expect(card.getAttribute("href")).toBe("/pages/prep-1");
+  expect(card.getAttribute("href")).toBe("/make/prep-1");
   expect(card.textContent).toContain("Updated");
   const line = view.getByText(/It's a 2-minute read/);
   // The line comes first in the document, the card under it.

@@ -110,6 +110,7 @@ import {
 } from "./plugins/store";
 import { REFUSAL_MARKER, vendorAnswer } from "./plugins/tools";
 import { createPageRoutes, type PageStore } from "./openduet/pages";
+import type { TaskReportReader } from "./openduet/task-report";
 import {
   createTaskRoutes,
   type TaskIntake,
@@ -447,7 +448,13 @@ export function createApp(
      * What OpenDuet made for the person, and the tasks it is working on: the Pages tab and the viewer,
      * and Chat's task cards, the task page and Tasks. See openduet/pages.ts and openduet/task-store.ts.
      */
-    openduet?: { pages: PageStore; tasks?: TaskStore; intake?: TaskIntake };
+    openduet?: {
+      pages: PageStore;
+      tasks?: TaskStore;
+      intake?: TaskIntake;
+      /** A task's report, read from its conversation. See openduet/task-report.ts. */
+      report?: TaskReportReader;
+    };
   },
   /**
    * Whether to offer help self-hosting, which also hides it from a deployment that pays for
@@ -1678,6 +1685,7 @@ export function createApp(
         coworker.openduet.tasks,
         requireUser,
         coworker.openduet.intake,
+        coworker.openduet.report,
       ),
     );
   if (coworker?.memory)

@@ -34,7 +34,11 @@ export type DuetIconName =
   | "chevronLeft"
   | "search"
   | "sort"
-  | "calendar";
+  | "calendar"
+  | "sparkle"
+  | "layout"
+  | "deck"
+  | "dashboard";
 
 const PATHS: Record<DuetIconName, ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h10" />,
@@ -146,6 +150,36 @@ const PATHS: Record<DuetIconName, ReactNode> = {
     <>
       <rect x="3" y="4.5" width="18" height="17" rx="2.5" />
       <path d="M8 2.5v4M16 2.5v4M3 10h18" />
+    </>
+  ),
+  // Make: a four-point spark and a small one, for what the Bot makes.
+  sparkle: (
+    <>
+      <path d="M10.6 3.6a.6.6 0 0 1 1.13 0l1.43 4.13a2 2 0 0 0 1.23 1.23l4.13 1.43a.6.6 0 0 1 0 1.13l-4.13 1.43a2 2 0 0 0-1.23 1.23l-1.43 4.13a.6.6 0 0 1-1.13 0l-1.43-4.13a2 2 0 0 0-1.23-1.23L4.4 12.12a.6.6 0 0 1 0-1.13l4.13-1.43a2 2 0 0 0 1.23-1.23z" />
+      <path d="M19 15.5v5M21.5 18h-5" />
+    </>
+  ),
+  // A page laid out: a header band and a column.
+  layout: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2.5" />
+      <path d="M3 9h18M9 21V9" />
+    </>
+  ),
+  // A deck: a slide on its stand.
+  deck: (
+    <>
+      <path d="M2.5 3.5h19" />
+      <path d="M20.5 3.5v10a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10M12 15.5V19M8 21l4-2 4 2" />
+    </>
+  ),
+  // A dashboard: tiles of different heights.
+  dashboard: (
+    <>
+      <rect x="3" y="3" width="7.5" height="9" rx="1.5" />
+      <rect x="13.5" y="3" width="7.5" height="5" rx="1.5" />
+      <rect x="13.5" y="11" width="7.5" height="10" rx="1.5" />
+      <rect x="3" y="15" width="7.5" height="6" rx="1.5" />
     </>
   ),
 };

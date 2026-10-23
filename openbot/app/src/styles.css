@@ -454,6 +454,29 @@ body {
   }
 }
 
+/*
+ * A thumbnail still being made on Make: a soft band of the card's own colour sweeps across the
+ * tile. Only `background-position` moves. Held still with reduced motion.
+ */
+.duet-making {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, var(--duet-card) 70%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  animation: tool-line-sweep 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duet-making {
+    animation: none;
+    background-image: none;
+  }
+}
+
 .tool-line[open] .tool-line-chevron {
   transform: rotate(90deg);
 }

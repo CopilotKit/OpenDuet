@@ -8,7 +8,13 @@ import {
 } from "@copilotkit/react-core/v2";
 import { observeApprovalAgent } from "@/lib/copilot/approval-context";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { HandoffResumeNotice } from "@/components/computer/handoff-resume-notice";
 import { attachmentModality } from "@/components/channels/chat-messages";
 import { toAgentOptions } from "@/components/channels/composer";
@@ -306,6 +312,9 @@ export function ChannelChat({
   runtimeAgentId,
   inShell = false,
   topic,
+  lead,
+  folded = false,
+  onSubmitted,
 }: {
   channel: AgentChannel;
   runtimeAgentId: string;
@@ -313,6 +322,12 @@ export function ChannelChat({
   inShell?: boolean;
   /** What the conversation is about, drawn above it as the film's topic label. */
   topic?: string | null;
+  /** Drawn above the conversation in place of the topic, such as a task's report. */
+  lead?: ReactNode;
+  /** Keep the conversation folded under the lead; see `ChatTranscript`. */
+  folded?: boolean;
+  /** The person sent something from the composer. */
+  onSubmitted?: () => void;
 }) {
   // The core attaches the frontend tool registry; direct agent runs do not.
   const { copilotkit } = useCopilotKit();
@@ -1021,8 +1036,9 @@ export function ChannelChat({
             taskRunning={agent.isRunning || runsInFlight > 0}
           />
           <ConversationView
+            folded={folded}
             inShell={inShell}
-            lead={topic ? <Topic>{topic}</Topic> : null}
+            lead={lead ?? (topic ? <Topic>{topic}</Topic> : null)}
             placeholder={`Message ${botName}`}
             voiceCall={
               call.available
@@ -1101,6 +1117,7 @@ export function ChannelChat({
               </>
             }
             onSubmit={async (draft) => {
+              onSubmitted?.();
               // `draft.agentId` carries the @mentioned coworker, but nothing routes on it yet: this
               // channel is pinned to one `runtimeAgentId` for the life of its thread, so honouring a
               // per-message mention is a change to that binding, not to the composer.
