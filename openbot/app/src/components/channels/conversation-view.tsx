@@ -33,6 +33,7 @@ import {
 import { PageSheetHost } from "@/components/duet/page-sheet";
 import { ChatSuggestionCard } from "@/components/shell/chat-suggestion";
 import { attachmentUrl } from "@/lib/channels/attachments";
+import { isThreadBusyError } from "@/lib/channels/run-lifecycle";
 import { newId } from "../../lib/new-id";
 
 export function ConversationView({
@@ -358,7 +359,18 @@ export function ConversationView({
       if (!next.run) {
         return undefined;
       }
-      const started = startRef.current(next.run);
+      const run = next.run;
+      /*
+       * A SEND THAT MET A TURN ALREADY GOING IS PARKED, NOT FAILED. The caller says so with
+       * `ThreadBusyError` when another run held the thread (a continuation after Allow once, another
+       * tab, another device). The words become Queued, exactly as if the composer had known the
+       * conversation was busy, and run when that turn ends; the composer is told it went, so it does
+       * not put the same words back in the box beside them.
+       */
+      const started = startRef.current(run).catch((error: unknown) => {
+        if (!isThreadBusyError(error)) throw error;
+        apply({ busy: true, draft: run, id: newId(), type: "submit" });
+      });
       /*
        * A SEND THAT TOOK THE QUEUE WITH IT AND THEN FAILED LEAVES THE PARKED HALF HELD BY NOBODY,
        * which is the same shape the drain effect below answers, and with the same line.
@@ -474,7 +486,14 @@ export function ConversationView({
       return;
     }
     const carried = next.restoreIfRunFails;
-    void startRef.current(next.run).catch(() => {
+    void startRef.current(next.run).catch((error: unknown) => {
+      // Met a turn already going: parked again, to run when it ends. Not held back, because nothing
+      // failed; the turn it waits behind keeps the conversation busy until then, and this send's
+      // own `running` falling is an edge this effect sees either way.
+      if (isThreadBusyError(error)) {
+        apply({ messages: carried, type: "restore" });
+        return;
+      }
       /*
        * Swallowed on purpose, and only here. A failed send from the composer throws so the composer
        * can put the words back in the box; the box for these is the queue they came out of, and the
