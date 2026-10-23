@@ -38,7 +38,8 @@ import {
  *   turn ENDS there: the next step's model call is answered "stop" without reaching the model
  *   (`endingTurns`), because told "write nothing more" the Bot still wrote a line about the buttons.
  * - A shown call replaces a held set, because the choices picked after the answer fit it better.
- *   Any other call once a set was held or shown this turn is REFUSED, so one row is drawn per turn,
+ *   A copy of the call in the same step gets the first one's answer word for word, and the app draws
+ *   the last set of a turn only. A call in a later step, once a set was held or shown, is REFUSED,
  *   in words that match the set it lost to: "write your full answer" beside a held one, "end your
  *   turn" beside a shown one.
  * - A call made while another tool in its step waits on the person's approval is REFUSED: the next
@@ -91,6 +92,8 @@ type Turn = {
   waiting: Map<string, () => void>;
   /** The set of chips held or shown in this run, if any. */
   drawn: Drawn;
+  /** The first chips call's answer in each step, which every copy beside it gets too. */
+  firstInStep: WeakMap<object, Promise<string>>;
   /** The answer and its chips are on screen: the run takes no further step. */
   ended: boolean;
 };
@@ -115,6 +118,7 @@ export function watchReplyTurn(
       seen: new Map(),
       waiting: new Map(),
       drawn: null,
+      firstInStep: new WeakMap(),
       ended: false,
     };
     const subscription = turns.run(turn, () =>
@@ -223,6 +227,27 @@ export async function answerReplies(
       .filter((call) => call.name !== REPLIES_TOOL)
       .map((call) => call.settled),
   );
+  /*
+   * A copy of a chips call in the same step gets the first call's answer, word for word. The model
+   * often sends two or three at once; answered differently, it followed whichever one told it to
+   * stop and wrote "Nothing more to add for now." in place of its answer. The app draws the last set
+   * of a turn only, so the copies still make one row.
+   */
+  const key = execution?.messages;
+  const first = key ? turn.firstInStep.get(key) : undefined;
+  if (first) return first;
+  const answering = decide(turn, execution, seen, step, run);
+  if (key) turn.firstInStep.set(key, answering);
+  return answering;
+}
+
+async function decide(
+  turn: Turn,
+  execution: ToolExecution | undefined,
+  seen: Seen | undefined,
+  step: Executed[],
+  run: () => Promise<string>,
+): Promise<string> {
   if (nativeRunWaiting()) return REPLIES_AFTER_APPROVAL;
   const messages = execution?.messages ?? [];
   if (onTheFirstDay(messages)) return REPLIES_FIRST_DAY;
@@ -239,8 +264,8 @@ export async function answerReplies(
   const early = beside || !answered;
 
   /*
-   * Checked and claimed with no await between, so of two calls in one step only the first finds the
-   * turn free. A shown set is never replaced; a held one is, by a call made after the answer.
+   * Checked and claimed with no await between. A shown set is never replaced; a held one is, by a
+   * call made after the answer.
    */
   const sets = [turn.drawn, earlier.drawn];
   const prior: Drawn = sets.includes("shown")

@@ -48,7 +48,7 @@ const ACK =
 
 /** As the server holds a call made beside a read (server/src/openduet/reply-turn.ts), encoded. */
 const HELD = JSON.stringify(
-  "The buttons are held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't mention the buttons. If what you read changes the choices, call suggest_replies once more after your answer.",
+  "The buttons are held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't call suggest_replies again, and don't mention the buttons.",
 );
 
 /** The person asks, the Bot asks back and offers three replies. */

@@ -185,9 +185,7 @@ describe("a suggest_replies call made too early is held under the answer, not dr
     expect(drawn(held)).toBe(true);
     expect(held).toContain("Nothing is on the person's screen yet");
     expect(held).toContain("Write your full answer now");
-    expect(held).toContain(
-      `If what you read changes the choices, call ${REPLIES_TOOL} once more after your answer.`,
-    );
+    expect(held).toContain(`Don't call ${REPLIES_TOOL} again`);
     // Not the answer that collapsed it: nothing about the buttons being on screen, or one sentence.
     expect(held).not.toContain("on screen,");
     expect(held).not.toContain("one short sentence");
@@ -226,7 +224,7 @@ describe("a suggest_replies call made too early is held under the answer, not dr
 
   test("the Bot is told not to mention the buttons", async () => {
     const { calls } = await turn([{ calls: [chips()] }, { text: ANSWER }]);
-    expect(replyAnswers(calls)[0]).toContain("Don't mention the buttons.");
+    expect(replyAnswers(calls)[0]).toContain("don't mention the buttons");
   });
 });
 
@@ -264,21 +262,20 @@ describe("a suggest_replies call after the answer", () => {
     expect(shown).toContain("Ask your question now");
   });
 
-  test("beside a copy of itself: the first is shown and the copy dropped, so one row is drawn", async () => {
-    // A copy is not a read: the answer before them stands, and neither is held.
+  test("beside a copy of itself: every copy gets the same answer, and the turn ends", async () => {
+    // A copy is not a read: the answer before them stands, and neither is held. The app draws the
+    // last set of a turn only (`repliesLast`), so identical answers still make one row.
     const { calls, steps } = await turn([
       { calls: [reads()] },
       { text: ANSWER, calls: [chips(), chips(), chips()] },
-      { text: "" },
+      { text: "The buttons are on screen above." },
     ]);
 
     const answers = replyAnswers(calls);
-    expect(answers.filter(drawn)).toHaveLength(1);
-    expect(answers.filter(drawn)[0]).toContain("End your turn now");
+    expect(answers).toHaveLength(3);
+    expect(new Set(answers).size).toBe(1);
+    expect(answers[0]).toContain("End your turn now and write nothing more.");
     expect(steps).toBe(2);
-    expect(
-      answers.filter((answer) => answer.includes("already on screen")),
-    ).toHaveLength(2);
   });
 
   test("that asks nothing does not end the turn: the Bot still has its question to write", async () => {
@@ -353,23 +350,21 @@ describe("one set of chips per turn", () => {
     expect(second).toContain("already held");
   });
 
-  test("two calls held in one step: one is drawn, and the copy still asks for the full answer", async () => {
+  test("two calls held in one step: both get the held answer, so the model is told one thing", async () => {
+    /*
+     * The model often sends two or three copies of the chips call in one step. Answered differently,
+     * "end your turn" or even "already held, write your full answer", it followed the odd one out and
+     * wrote "Nothing more to add for now." or "I've given you my full answer above." in place of its
+     * answer. Every copy now gets what the first got; the app draws the last set of the turn only.
+     */
     const { calls, steps, text } = await turn([
       { calls: [reads(), chips(), chips(["Draft it", "Not yet"])] },
       { text: ANSWER },
     ]);
     const answers = replyAnswers(calls);
     expect(answers).toHaveLength(2);
-    expect(answers.filter(drawn)).toHaveLength(1);
-    /*
-     * Told "End your turn now and write nothing more" beside the held answer, the model obeyed the
-     * shorter of the two and wrote "Nothing more to add for now." So the copy says what the held set
-     * says: the answer is still to be written.
-     */
-    const copy = answers.find((answer) => !drawn(answer)) ?? "";
-    expect(copy).toStartWith("Refused.");
-    expect(copy).toContain("Write your full answer now");
-    expect(copy).not.toContain("End your turn");
+    expect(answers[0]).toStartWith("The buttons are held");
+    expect(answers[1]).toBe(answers[0] ?? "");
     expect(steps).toBe(2);
     expect(text).toContain("Should I draft a yes for Tuesday?");
   });
