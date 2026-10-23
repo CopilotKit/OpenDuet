@@ -1,0 +1,346 @@
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { useMutation } from "@tanstack/react-query";
+import { type ComponentProps, useId, useRef, useState } from "react";
+import {
+  CHANNEL_COLOUR_LABELS,
+  CHANNEL_GLYPHS,
+  CHANNEL_ICON_LABELS,
+  ChannelGlyph,
+  channelColour,
+} from "@/components/duet/channel-look";
+import { appConfig } from "@/lib/generated/application-config";
+import {
+  archiveDuetChannelMutationOptions,
+  createDuetChannelMutationOptions,
+  type DuetChannelPatch,
+  updateDuetChannelMutationOptions,
+} from "@/lib/duet-channels/mutations";
+import {
+  CHANNEL_COLOURS,
+  CHANNEL_ICONS,
+  type ChannelColour,
+  type ChannelIcon,
+  type DuetChannel,
+  MAX_CHANNEL_NAME,
+  MAX_CHANNEL_PURPOSE,
+  NEW_CHANNEL_COLOUR,
+  NEW_CHANNEL_ICON,
+} from "@/lib/duet-channels/queries";
+import { cn } from "@/lib/utils";
+import { queryClient } from "@/query-client";
+
+/** The look a new channel starts with, before the person picks one: mail, in the third colour. */
+export const NEW_CHANNEL_LOOK: { icon: ChannelIcon; colour: ChannelColour } = {
+  icon: NEW_CHANNEL_ICON,
+  colour: NEW_CHANNEL_COLOUR,
+};
+
+/** The purpose field's placeholder, with the product's own name in it. */
+export const PURPOSE_QUESTION = `What should ${appConfig.brand.productName} know about this channel?`;
+
+/** A name is needed; a purpose is not. Each within its length. */
+export function channelDraftReady(draft: { name: string; purpose: string }) {
+  const name = draft.name.trim();
+  return (
+    name.length > 0 &&
+    name.length <= MAX_CHANNEL_NAME &&
+    draft.purpose.trim().length <= MAX_CHANNEL_PURPOSE
+  );
+}
+
+/** A pill on glass, for the sheet's top bar and Change icon. */
+function GlassPill({ className, ...props }: ComponentProps<"button">) {
+  return (
+    <button
+      className={cn(
+        "duet-glass inline-flex h-11 min-w-[86px] items-center justify-center rounded-full px-4 font-medium text-[17px] text-duet-ink shadow-duet-glass outline-none transition-[opacity,transform] focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40",
+        className,
+      )}
+      type="button"
+      {...props}
+    />
+  );
+}
+
+/**
+ * New channel, as a sheet that rises over the app: Cancel, the title and Create along the top; the
+ * channel's icon, big, in its colour, which changes the moment a person taps; Change icon, which
+ * opens a grid of line icons stroked in the chosen colour and a row of nine dots; then its name and
+ * its purpose. Create waits for a name. The purpose is optional; it is what the Bot is told about
+ * the channel on every turn there.
+ *
+ * The same sheet edits a channel from its own screen (`channel` set): "Edit channel" and Save, with
+ * Archive or Unarchive at its foot.
+ */
+export function ChannelSheet({
+  botId,
+  channel,
+  onClose,
+  onSaved,
+  onArchived,
+}: {
+  botId: string;
+  /** The channel being edited. Absent, the sheet makes a new one. */
+  channel?: DuetChannel;
+  onClose: () => void;
+  /** Made or saved, with the channel as the server now has it. */
+  onSaved: (channel: DuetChannel) => void;
+  /** Archived or brought back from the sheet. */
+  onArchived?: (channel: DuetChannel) => void;
+}) {
+  const editing = channel !== undefined;
+  const [icon, setIcon] = useState<ChannelIcon>(
+    channel?.icon ?? NEW_CHANNEL_LOOK.icon,
+  );
+  const [colour, setColour] = useState<ChannelColour>(
+    channel?.colour ?? NEW_CHANNEL_LOOK.colour,
+  );
+  const [name, setName] = useState(channel?.name ?? "");
+  const [purpose, setPurpose] = useState(channel?.purpose ?? "");
+  const [picking, setPicking] = useState(false);
+  const nameField = useRef<HTMLInputElement>(null);
+  const purposeField = useRef<HTMLTextAreaElement>(null);
+  const create = useMutation(createDuetChannelMutationOptions(queryClient));
+  const update = useMutation(updateDuetChannelMutationOptions(queryClient));
+  const archive = useMutation(archiveDuetChannelMutationOptions(queryClient));
+  const busy = create.isPending || update.isPending || archive.isPending;
+  const error = create.error ?? update.error ?? archive.error;
+  const ready = channelDraftReady({ name, purpose });
+  const pickerId = useId();
+  const nameId = useId();
+  const purposeId = useId();
+  const title = editing ? "Edit channel" : "New channel";
+
+  const save = () => {
+    if (!ready || busy) return;
+    if (!channel) {
+      create.mutate(
+        { botId, name: name.trim(), purpose: purpose.trim(), icon, colour },
+        { onSuccess: onSaved },
+      );
+      return;
+    }
+    const patch: DuetChannelPatch = {};
+    if (name.trim() !== channel.name) patch.name = name.trim();
+    if (purpose.trim() !== (channel.purpose ?? ""))
+      patch.purpose = purpose.trim();
+    if (icon !== channel.icon) patch.icon = icon;
+    if (colour !== channel.colour) patch.colour = colour;
+    update.mutate({ id: channel.id, patch }, { onSuccess: onSaved });
+  };
+
+  return (
+    <DialogPrimitive.Root
+      onOpenChange={(next) => {
+        if (!next && !busy) onClose();
+      }}
+      open
+    >
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Backdrop className="duet-veil fixed inset-0 z-50 transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
+        <DialogPrimitive.Popup
+          className={cn(
+            "duet-face fixed inset-x-0 top-[max(env(safe-area-inset-top),12px)] bottom-0 z-50 mx-auto flex w-full max-w-[430px] flex-col overflow-y-auto rounded-t-[38px] bg-duet-surface px-4 pb-[max(env(safe-area-inset-bottom),16px)] text-duet-ink shadow-duet-raised outline-none",
+            "transition-[opacity,translate] duration-300 ease-out data-ending-style:translate-y-8 data-ending-style:opacity-0 data-starting-style:translate-y-8 data-starting-style:opacity-0 motion-reduce:transition-none",
+          )}
+          initialFocus={editing ? undefined : nameField}
+        >
+          <form
+            className="flex flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              save();
+            }}
+          >
+            <div className="mt-4 grid h-11 grid-cols-[1fr_auto_1fr] items-center gap-2">
+              <GlassPill
+                className="justify-self-start"
+                disabled={busy}
+                onClick={onClose}
+              >
+                Cancel
+              </GlassPill>
+              <DialogPrimitive.Title className="font-semibold text-[17px]">
+                {title}
+              </DialogPrimitive.Title>
+              <GlassPill
+                aria-busy={busy || undefined}
+                className="justify-self-end"
+                disabled={busy || !ready}
+                type="submit"
+              >
+                {create.isPending || update.isPending ? (
+                  <span
+                    aria-label={editing ? "Saving" : "Creating"}
+                    className="size-4 animate-spin rounded-full border-2 border-duet-ink-3 border-t-duet-ink motion-reduce:animate-none"
+                    role="status"
+                  />
+                ) : editing ? (
+                  "Save"
+                ) : (
+                  "Create"
+                )}
+              </GlassPill>
+            </div>
+            {error ? (
+              <p
+                className="type-label mt-3 px-1 text-center text-duet-red"
+                role="alert"
+              >
+                {error.message}
+              </p>
+            ) : null}
+
+            <div className="mt-10 flex flex-col items-center gap-3">
+              <span data-testid="channel-preview">
+                <ChannelGlyph
+                  colour={colour}
+                  icon={icon}
+                  size={64}
+                  stroke={1.6}
+                />
+              </span>
+              <GlassPill
+                aria-controls={pickerId}
+                aria-expanded={picking}
+                className="h-[34px] min-w-0 text-[15px]"
+                onClick={() => setPicking((open) => !open)}
+              >
+                Change icon
+              </GlassPill>
+            </div>
+
+            <div className="mt-4" hidden={!picking} id={pickerId}>
+              {/*
+               * Native radios, one set per question, so the keyboard moves through a set with its
+               * arrows as any radio group does. Each is hidden behind what it draws. Every glyph is
+               * stroked in the chosen colour, so a new colour recolours the grid.
+               */}
+              <fieldset className="grid grid-cols-8 justify-items-center gap-y-1">
+                <legend className="sr-only">Icon</legend>
+                {CHANNEL_ICONS.map((option) => {
+                  const Glyph = CHANNEL_GLYPHS[option];
+                  const on = option === icon;
+                  return (
+                    <label
+                      className="grid size-11 cursor-pointer place-items-center rounded-[10px] has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-duet-violet/40"
+                      key={option}
+                      style={{
+                        color: channelColour(colour),
+                        boxShadow: on
+                          ? "inset 0 0 0 2px var(--duet-ink)"
+                          : undefined,
+                      }}
+                    >
+                      <input
+                        aria-label={CHANNEL_ICON_LABELS[option]}
+                        checked={on}
+                        className="sr-only"
+                        name={`${pickerId}-icon`}
+                        onChange={() => setIcon(option)}
+                        type="radio"
+                        value={option}
+                      />
+                      <Glyph size={26} stroke={1.8} />
+                    </label>
+                  );
+                })}
+              </fieldset>
+              <fieldset className="mt-3 flex items-center">
+                <legend className="sr-only">Colour</legend>
+                {CHANNEL_COLOURS.map((option) => {
+                  const on = option === colour;
+                  return (
+                    <label
+                      className="grid h-11 min-w-0 flex-1 cursor-pointer place-items-center rounded-full has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-duet-violet/40"
+                      key={option}
+                    >
+                      <input
+                        aria-label={CHANNEL_COLOUR_LABELS[option]}
+                        checked={on}
+                        className="sr-only"
+                        name={`${pickerId}-colour`}
+                        onChange={() => setColour(option)}
+                        type="radio"
+                        value={option}
+                      />
+                      <span
+                        className="block size-7 rounded-full"
+                        style={{
+                          backgroundColor: channelColour(option),
+                          boxShadow: on
+                            ? "0 0 0 3px var(--duet-surface), 0 0 0 5px var(--duet-ink)"
+                            : undefined,
+                        }}
+                      />
+                    </label>
+                  );
+                })}
+              </fieldset>
+            </div>
+
+            <label
+              className="mt-6 flex h-14 items-center gap-3 rounded-full bg-duet-tile px-4 focus-within:ring-3 focus-within:ring-duet-violet/25"
+              htmlFor={nameId}
+            >
+              <span className="shrink-0 text-[16px] text-duet-ink-2">Name</span>
+              <input
+                autoComplete="off"
+                className="min-w-0 flex-1 bg-transparent text-[17px] text-duet-ink outline-none placeholder:text-duet-ink-3"
+                disabled={busy}
+                enterKeyHint="next"
+                id={nameId}
+                maxLength={MAX_CHANNEL_NAME}
+                onChange={(event) => setName(event.target.value)}
+                onKeyDown={(event) => {
+                  // Return moves on to the purpose, rather than creating the channel half told.
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    purposeField.current?.focus();
+                  }
+                }}
+                placeholder="Q4 planning"
+                ref={nameField}
+                value={name}
+              />
+            </label>
+            <label
+              className="mt-5 px-4 text-[14px] text-duet-ink-2"
+              htmlFor={purposeId}
+            >
+              Purpose
+            </label>
+            <textarea
+              className="mt-1.5 min-h-24 w-full resize-none rounded-[22px] bg-duet-tile px-4 py-3 text-[17px] text-duet-ink leading-[23px] outline-none placeholder:text-duet-ink-3 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
+              disabled={busy}
+              id={purposeId}
+              maxLength={MAX_CHANNEL_PURPOSE}
+              onChange={(event) => setPurpose(event.target.value)}
+              placeholder={PURPOSE_QUESTION}
+              ref={purposeField}
+              rows={3}
+              value={purpose}
+            />
+            {channel && onArchived ? (
+              <button
+                className="type-label mt-6 self-center rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+                disabled={busy}
+                onClick={() =>
+                  archive.mutate(
+                    { id: channel.id, archived: channel.archivedAt === null },
+                    { onSuccess: onArchived },
+                  )
+                }
+                type="button"
+              >
+                {channel.archivedAt === null
+                  ? "Archive channel"
+                  : "Unarchive channel"}
+              </button>
+            ) : null}
+          </form>
+        </DialogPrimitive.Popup>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}

@@ -17,6 +17,7 @@ import {
 import { useConversationBusy } from "@/lib/tasks/use-task";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
+import { ChannelTagOf } from "./channel-tag";
 import { DuetIcon } from "./icons";
 import { TaskStatusPill } from "./task-card";
 import { noticedLine, TaskReportView } from "./task-report";
@@ -119,7 +120,10 @@ function TaskBody({ task }: { task: TaskRecord }) {
           {noticedLine(task)}
         </p>
         <div className="mt-2.5 flex items-center justify-between gap-2.5">
-          <TaskStatusPill status={status} />
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+            <TaskStatusPill status={status} />
+            <ChannelTagOf channelId={task.fromChannelId} />
+          </span>
           <RowButton
             busy={resolve.isPending}
             label={done ? "Reopen this task" : "Mark this task done"}

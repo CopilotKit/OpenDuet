@@ -93,6 +93,11 @@ export type ProactiveSuggestion = {
   sourceApp: string | null;
   sourceRef: string | null;
   sourceLink: string | null;
+  /**
+   * The OpenDuet channel `add_tasks` ran in, or null: Everything, or research's own card. Optional
+   * only so a suggestion can be written without one; every row read back carries it.
+   */
+  fromChannelId?: string | null;
   status: SuggestionStatus;
   deliveredAt: Date | null;
   resolvedAt: Date | null;

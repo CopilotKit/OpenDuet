@@ -1,8 +1,10 @@
-import { useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { AttentionNotifier } from "@/components/bot-profile/attention";
 import { SelfHostBanner } from "@/components/layout/self-host-banner";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
+import { useDuetChannels } from "@/lib/duet-channels/use-channel";
+import { ChannelSheet } from "./channel-sheet";
 import { ChatPresenceProvider } from "./chat-presence";
 import { FinishedForYou } from "./finished-for-you";
 import { ShellHeader } from "./header";
@@ -22,6 +24,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   });
   const tab = tabForPath(pathname);
   const [menuOpen, setMenuOpen] = useState(false);
+  // New channel, pressed in the menu: the sheet stands on its own once the menu has closed.
+  const [newChannel, setNewChannel] = useState(false);
+  const { bot } = useDuetChannels();
+  const navigate = useNavigate();
   // Any navigation closes the menu, including a conversation picked from inside it.
   const [shownPath, setShownPath] = useState(pathname);
   if (shownPath !== pathname) {
@@ -64,7 +70,27 @@ export function AppShell({ children }: { children: ReactNode }) {
             </main>
           </>
         )}
-        <MenuSheet onOpenChange={setMenuOpen} open={menuOpen} />
+        <MenuSheet
+          onNewChannel={() => {
+            setMenuOpen(false);
+            setNewChannel(true);
+          }}
+          onOpenChange={setMenuOpen}
+          open={menuOpen}
+        />
+        {newChannel && bot ? (
+          <ChannelSheet
+            botId={bot.id}
+            onClose={() => setNewChannel(false)}
+            onSaved={(channel) => {
+              setNewChannel(false);
+              void navigate({
+                to: "/channels/$channelId",
+                params: { channelId: channel.id },
+              });
+            }}
+          />
+        ) : null}
       </div>
     </ChatPresenceProvider>
   );

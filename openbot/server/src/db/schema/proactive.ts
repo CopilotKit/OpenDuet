@@ -13,7 +13,7 @@ import type {
   ProactiveRunStatus,
   SuggestionStatus,
 } from "../../proactive/types";
-import { agents, users } from "./core";
+import { agents, channels, users } from "./core";
 
 /**
  * Background research by one of a person's Bots.
@@ -92,6 +92,14 @@ export const proactiveSuggestions = pgTable(
     sourceApp: text("source_app"),
     sourceRef: text("source_ref"),
     sourceLink: text("source_link"),
+    /**
+     * The OpenDuet channel the person asked for this card in, through `add_tasks`, or null. Carried
+     * until Start makes it a task, which takes it as its own `from_channel_id`, so the task wears
+     * the channel's colour too. Research's own cards are never asked for in a channel.
+     */
+    fromChannelId: text("from_channel_id").references(() => channels.id, {
+      onDelete: "set null",
+    }),
     status: text("status").$type<SuggestionStatus>().notNull().default("open"),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),

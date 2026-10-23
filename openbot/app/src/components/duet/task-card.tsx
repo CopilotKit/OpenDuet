@@ -33,17 +33,21 @@ export function TaskStatusPill({ status }: { status: TaskStatus }) {
 export function TaskRow({
   title,
   status,
+  channel,
 }: {
   title: string;
   /** Null while the task has not been read yet: the row draws without a pill rather than a guess. */
   status: TaskStatus | null;
+  /** The tag of the channel it was asked for in, beside the pill. */
+  channel?: ReactNode;
 }) {
   return (
     <CardRow
       detail={
-        status ? (
-          <span className="mt-1.5 flex">
-            <TaskStatusPill status={status} />
+        status || channel ? (
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            {status ? <TaskStatusPill status={status} /> : null}
+            {channel}
           </span>
         ) : undefined
       }
@@ -62,10 +66,13 @@ export function TaskRow({
 export function TaskCard({
   title,
   status,
+  channel,
   link,
 }: {
   title: string;
   status: TaskStatus | null;
+  /** The tag of the channel it was asked for in. */
+  channel?: ReactNode;
   /** Wraps the card in whatever opens the task: a router link, given the card's content and class. */
   link: (props: { className: string; children: ReactNode }) => ReactNode;
 }) {
@@ -74,7 +81,7 @@ export function TaskCard({
       "group block w-full rounded-[22px] outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
     children: (
       <DuetCard className="transition-transform duration-150 motion-safe:group-active:scale-[0.985]">
-        <TaskRow status={status} title={title} />
+        <TaskRow channel={channel} status={status} title={title} />
       </DuetCard>
     ),
   });

@@ -109,6 +109,10 @@ import {
   type PluginStore,
 } from "./plugins/store";
 import { REFUSAL_MARKER, vendorAnswer } from "./plugins/tools";
+import {
+  createDuetChannelRoutes,
+  type DuetChannelStore,
+} from "./openduet/channels";
 import { createPageRoutes, type PageStore } from "./openduet/pages";
 import type { TaskReportReader } from "./openduet/task-report";
 import {
@@ -454,6 +458,8 @@ export function createApp(
       intake?: TaskIntake;
       /** A task's report, read from its conversation. See openduet/task-report.ts. */
       report?: TaskReportReader;
+      /** The drawer's channels. See openduet/channels.ts. */
+      channels?: DuetChannelStore;
     };
   },
   /**
@@ -1687,6 +1693,11 @@ export function createApp(
         coworker.openduet.intake,
         coworker.openduet.report,
       ),
+    );
+  if (coworker?.openduet?.channels)
+    app.route(
+      "/api/openduet/channels",
+      createDuetChannelRoutes(coworker.openduet.channels, requireUser),
     );
   if (coworker?.memory)
     app.route(

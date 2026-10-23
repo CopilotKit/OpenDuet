@@ -28,6 +28,7 @@ import {
   channelMemberships,
   channels,
   intelligenceChannelMappings,
+  openduetChannels,
   openduetTasks,
 } from "../db/schema";
 import {
@@ -73,12 +74,21 @@ export type ChannelSummary = AgentChannel & {
    * and lists them under Tasks instead.
    */
   taskId: string | null;
+  /**
+   * Whether this conversation is one of the person's OpenDuet channels, with a look of its own
+   * (openduet/channels.ts). Chat and `direct` leave those out, as they leave out a task's: a channel
+   * the person talked in last must not become their conversation with the Bot.
+   */
+  openduetChannel: boolean;
 };
 
 /** The task a channel belongs to, if any: at most one, by the task table's unique channel index. */
 const TASK_OF_CHANNEL = sql<
   string | null
 >`(select ${openduetTasks.id} from ${openduetTasks} where ${openduetTasks.channelId} = ${channels.id})`;
+
+/** Whether a channel has an OpenDuet look, which makes it a channel rather than Chat. */
+const IS_OPENDUET_CHANNEL = sql<boolean>`exists (select 1 from ${openduetChannels} where ${openduetChannels.channelId} = ${channels.id})`;
 
 /** What a client that ran an agent reports back about the message it just saw. */
 export type ChannelActivity = {
@@ -249,7 +259,8 @@ export type ChannelStore = {
   ): Promise<void>;
 };
 
-const PRIVATE_AGENT_CHANNEL_DESCRIPTION = "Private agent channel.";
+/** What a conversation made here is described as, until somebody gives it a purpose. */
+export const PRIVATE_AGENT_CHANNEL_DESCRIPTION = "Private agent channel.";
 const MAX_CHANNEL_NAME_CODE_POINTS = 120;
 const MAX_ACTIVITY_GRAPHEMES = 200;
 
@@ -391,6 +402,9 @@ export function createChannelStore(
                  * would turn into whichever task ran last.
                  */
                 sql`${TASK_OF_CHANNEL} is null`,
+                // Nor one of the person's OpenDuet channels, for the same reason: a channel is a
+                // workstream of its own, and the answer to a hop belongs in their one thread.
+                sql`not ${IS_OPENDUET_CHANNEL}`,
               ),
             )
             .orderBy(...ROSTER_ORDER)
@@ -532,6 +546,7 @@ export function createChannelStore(
           pinnedAt: channelMemberships.pinnedAt,
           lastReadAt: channelMemberships.lastReadAt,
           taskId: TASK_OF_CHANNEL,
+          openduetChannel: IS_OPENDUET_CHANNEL,
         })
         .from(channels)
         .innerJoin(
@@ -592,6 +607,7 @@ export function createChannelStore(
           pinned: row.pinnedAt !== null,
           lastReadAt: row.lastReadAt,
           taskId: row.taskId,
+          openduetChannel: row.openduetChannel,
         });
       }
       return { channels: [...summaries.values()], nextCursor };
@@ -1288,6 +1304,7 @@ function channelSummaryDto(channel: ChannelSummary) {
     // Serialised as ISO-8601 like lastMessageAt, so the browser can compare the two as strings.
     lastReadAt: channel.lastReadAt?.toISOString() ?? null,
     taskId: channel.taskId,
+    openduetChannel: channel.openduetChannel,
   };
 }
 

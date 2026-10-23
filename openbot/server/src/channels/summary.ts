@@ -8,6 +8,10 @@
  * event, so a missed sweep costs two seconds where a missed event would cost the name entirely.
  */
 import { and, asc, eq, isNull, notExists, sql } from "drizzle-orm";
+import {
+  describeChannelHello,
+  readChannelHello,
+} from "@openbot/shared/channel-hello";
 import { describeCheckIn, readCheckIn } from "@openbot/shared/check-in";
 import { readFirstDay } from "@openbot/shared/first-day";
 import { readFiring } from "@openbot/shared/routine-firing";
@@ -308,12 +312,15 @@ async function openingOf(
   // them. A check-in the Bot started has its own frame and what it found under it, and a task's
   // conversation has its frame around the person's ask. Unwrapped before any of them can become the
   // title, same as the transcript unwraps them before they can become what a person reads.
+  // A channel's hello is the same: it names the channel, and the person typed none of it.
   const checkIn = readCheckIn(rawAsked);
+  const hello = readChannelHello(rawAsked);
   const asked =
     readFirstDay(rawAsked) ??
     readFiring(rawAsked) ??
     readTaskBrief(rawAsked) ??
-    (checkIn ? describeCheckIn(checkIn) : rawAsked);
+    (checkIn ? describeCheckIn(checkIn) : null) ??
+    (hello ? describeChannelHello(hello) : rawAsked);
   const replied = answer ? textOf(answer.content) : "";
 
   return oneLine(

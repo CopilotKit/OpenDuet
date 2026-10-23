@@ -465,6 +465,7 @@ describe("GET /api/openduet/tasks/:id/report", () => {
     suggestionId: null,
     sourceApp: null,
     sourceLink: null,
+    fromChannelId: null,
     status: "ready_for_review",
     resolvedAt: null,
     createdAt: "2026-10-23T09:41:00.000Z",

@@ -88,6 +88,8 @@ export type TaskSink = (input: {
   ownerUserId: string;
   agentId: string;
   tasks: AskedTask[];
+  /** The channel they were asked for in, or null for Everything. */
+  fromChannelId: string | null;
 }) => Promise<{ id: string; title: string }[]>;
 
 /** Starts a task in a conversation of its own. The server's assembly provides it; see wiring.ts. */
@@ -109,7 +111,13 @@ export function taskTools(options: {
   save: TaskSink;
   /** Absent, `start_task` is not held: there is nowhere to run one. */
   start?: TaskStarter | undefined;
+  /**
+   * The channel the run calling a tool is in, read when it executes, or null for Everything. What a
+   * task started or added there is tagged with. Absent reads null. See openduet/run-channel.ts.
+   */
+  channel?: () => string | null;
 }): GrantedTool[] {
+  const channel = options.channel ?? (() => null);
   const parameters = z
     .object({
       tasks: z
@@ -121,7 +129,7 @@ export function taskTools(options: {
     .strict();
   return [
     ...(options.start
-      ? [startTaskTool({ ...options, start: options.start })]
+      ? [startTaskTool({ ...options, start: options.start, channel })]
       : []),
     {
       name: ADD_TASKS_TOOL,
@@ -142,6 +150,7 @@ export function taskTools(options: {
           ownerUserId: options.actorId,
           agentId: options.botId,
           tasks: parsed.data.tasks,
+          fromChannelId: channel(),
         });
         return JSON.stringify({
           added,
@@ -198,6 +207,7 @@ function startTaskTool(options: {
   botId: string;
   initiator: AuditInitiator;
   start: TaskStarter;
+  channel: () => string | null;
 }): GrantedTool {
   return {
     name: START_TASK_TOOL,
@@ -217,7 +227,7 @@ function startTaskTool(options: {
       const task = await options.start({
         ownerUserId: options.actorId,
         agentId: options.botId,
-        task: parsed.data,
+        task: { ...parsed.data, fromChannelId: options.channel() },
       });
       return JSON.stringify({
         taskId: task.id,

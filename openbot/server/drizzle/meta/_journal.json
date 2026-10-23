@@ -449,6 +449,13 @@
       "when": 1792713497963,
       "tag": "0063_openduet_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1792724734568,
+      "tag": "0064_openduet_channels",
+      "breakpoints": true
     }
   ]
 }

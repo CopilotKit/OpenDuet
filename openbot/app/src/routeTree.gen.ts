@@ -55,6 +55,7 @@ import { Route as AuthedAppCapabilitiesMemoryRouteImport } from './routes/_authe
 import { Route as AuthedAppCapabilitiesSkillsRouteImport } from './routes/_authed/_app/capabilities.skills'
 import { Route as AuthedAppChannelChannelIdRouteImport } from './routes/_authed/_app/channel/$channelId'
 import { Route as AuthedAppChannelNewRouteImport } from './routes/_authed/_app/channel/new'
+import { Route as AuthedAppChannelsChannelIdRouteImport } from './routes/_authed/_app/channels.$channelId'
 import { Route as AuthedAppConnectionsIndexRouteImport } from './routes/_authed/_app/connections.index'
 import { Route as AuthedAppConnectionsKeyRouteImport } from './routes/_authed/_app/connections.$key'
 import { Route as AuthedAppGroupChannelIdRouteImport } from './routes/_authed/_app/group/$channelId'
@@ -320,6 +321,12 @@ const AuthedAppChannelNewRoute = AuthedAppChannelNewRouteImport.update({
   path: '/channel/new',
   getParentRoute: () => AuthedAppRoute,
 } as any)
+const AuthedAppChannelsChannelIdRoute =
+  AuthedAppChannelsChannelIdRouteImport.update({
+    id: '/channels/$channelId',
+    path: '/channels/$channelId',
+    getParentRoute: () => AuthedAppRoute,
+  } as any)
 const AuthedAppConnectionsIndexRoute =
   AuthedAppConnectionsIndexRouteImport.update({
     id: '/connections/',
@@ -528,6 +535,7 @@ export interface FileRoutesByFullPath {
   '/capabilities/skills': typeof AuthedAppCapabilitiesSkillsRoute
   '/channel/$channelId': typeof AuthedAppChannelChannelIdRoute
   '/channel/new': typeof AuthedAppChannelNewRoute
+  '/channels/$channelId': typeof AuthedAppChannelsChannelIdRoute
   '/connections/$key': typeof AuthedAppConnectionsKeyRoute
   '/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/group/new': typeof AuthedAppGroupNewRoute
@@ -600,6 +608,7 @@ export interface FileRoutesByTo {
   '/capabilities/skills': typeof AuthedAppCapabilitiesSkillsRoute
   '/channel/$channelId': typeof AuthedAppChannelChannelIdRoute
   '/channel/new': typeof AuthedAppChannelNewRoute
+  '/channels/$channelId': typeof AuthedAppChannelsChannelIdRoute
   '/connections/$key': typeof AuthedAppConnectionsKeyRoute
   '/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/group/new': typeof AuthedAppGroupNewRoute
@@ -678,6 +687,7 @@ export interface FileRoutesById {
   '/_authed/_app/capabilities/skills': typeof AuthedAppCapabilitiesSkillsRoute
   '/_authed/_app/channel/$channelId': typeof AuthedAppChannelChannelIdRoute
   '/_authed/_app/channel/new': typeof AuthedAppChannelNewRoute
+  '/_authed/_app/channels/$channelId': typeof AuthedAppChannelsChannelIdRoute
   '/_authed/_app/connections/$key': typeof AuthedAppConnectionsKeyRoute
   '/_authed/_app/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/_authed/_app/group/new': typeof AuthedAppGroupNewRoute
@@ -755,6 +765,7 @@ export interface FileRouteTypes {
     | '/capabilities/skills'
     | '/channel/$channelId'
     | '/channel/new'
+    | '/channels/$channelId'
     | '/connections/$key'
     | '/group/$channelId'
     | '/group/new'
@@ -827,6 +838,7 @@ export interface FileRouteTypes {
     | '/capabilities/skills'
     | '/channel/$channelId'
     | '/channel/new'
+    | '/channels/$channelId'
     | '/connections/$key'
     | '/group/$channelId'
     | '/group/new'
@@ -904,6 +916,7 @@ export interface FileRouteTypes {
     | '/_authed/_app/capabilities/skills'
     | '/_authed/_app/channel/$channelId'
     | '/_authed/_app/channel/new'
+    | '/_authed/_app/channels/$channelId'
     | '/_authed/_app/connections/$key'
     | '/_authed/_app/group/$channelId'
     | '/_authed/_app/group/new'
@@ -1267,6 +1280,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAppChannelNewRouteImport
       parentRoute: typeof AuthedAppRoute
     }
+    '/_authed/_app/channels/$channelId': {
+      id: '/_authed/_app/channels/$channelId'
+      path: '/channels/$channelId'
+      fullPath: '/channels/$channelId'
+      preLoaderRoute: typeof AuthedAppChannelsChannelIdRouteImport
+      parentRoute: typeof AuthedAppRoute
+    }
     '/_authed/_app/connections/': {
       id: '/_authed/_app/connections/'
       path: '/connections'
@@ -1612,6 +1632,7 @@ interface AuthedAppRouteChildren {
   AuthedAppIndexRoute: typeof AuthedAppIndexRoute
   AuthedAppChannelChannelIdRoute: typeof AuthedAppChannelChannelIdRoute
   AuthedAppChannelNewRoute: typeof AuthedAppChannelNewRoute
+  AuthedAppChannelsChannelIdRoute: typeof AuthedAppChannelsChannelIdRoute
   AuthedAppConnectionsKeyRoute: typeof AuthedAppConnectionsKeyRoute
   AuthedAppGroupChannelIdRoute: typeof AuthedAppGroupChannelIdRoute
   AuthedAppGroupNewRoute: typeof AuthedAppGroupNewRoute
@@ -1649,6 +1670,7 @@ const AuthedAppRouteChildren: AuthedAppRouteChildren = {
   AuthedAppIndexRoute: AuthedAppIndexRoute,
   AuthedAppChannelChannelIdRoute: AuthedAppChannelChannelIdRoute,
   AuthedAppChannelNewRoute: AuthedAppChannelNewRoute,
+  AuthedAppChannelsChannelIdRoute: AuthedAppChannelsChannelIdRoute,
   AuthedAppConnectionsKeyRoute: AuthedAppConnectionsKeyRoute,
   AuthedAppGroupChannelIdRoute: AuthedAppGroupChannelIdRoute,
   AuthedAppGroupNewRoute: AuthedAppGroupNewRoute,

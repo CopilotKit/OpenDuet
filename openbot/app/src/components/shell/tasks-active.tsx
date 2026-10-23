@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { ApprovalCard, PillButton } from "@/components/approvals/approval-card";
+import { ChannelTagOf } from "@/components/duet/channel-tag";
 import { DuetIcon } from "@/components/duet/icons";
 import { DuetCard, Rule, Tile, type TileTone } from "@/components/duet/kit";
 import type { AgentProfile } from "@/lib/agents/queries";
@@ -392,6 +393,7 @@ function TaskLine({
         <p className="type-label mt-1 font-medium text-duet-ink-3">
           {item.tag}
         </p>
+        <ChannelTagOf channelId={task.fromChannelId} className="mt-1.5" />
       </Link>
     </div>
   );

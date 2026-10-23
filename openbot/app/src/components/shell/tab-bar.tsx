@@ -26,6 +26,8 @@ const TABS: {
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
+  // A channel is a conversation like Chat's, under the same header and tab bar.
+  if (/^\/channels\/[^/]+$/.test(path)) return "chat";
   // A task opens over the Tasks list, so the list's tab stays current under it.
   if (path === "/tasks" || /^\/tasks\/[^/]+$/.test(path)) return "tasks";
   if (path === "/make" || /^\/make\/[^/]+$/.test(path)) return "make";

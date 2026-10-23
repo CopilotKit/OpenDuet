@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { DuetIcon } from "@/components/duet/icons";
+import { ChannelTagOf } from "@/components/duet/channel-tag";
 import { DuetCard, Tile } from "@/components/duet/kit";
 import type { AgentProfile } from "@/lib/agents/queries";
 import { cancelFollowUpMutationOptions } from "@/lib/bot-lifecycle/mutations";
@@ -245,6 +246,7 @@ function UpNextCard({
             ))}
           </p>
         ) : null}
+        <ChannelTagOf channelId={suggestion.fromChannelId} className="mt-1.5" />
         {error ? (
           <p className="type-label mt-1 text-duet-red" role="alert">
             {error}

@@ -51,6 +51,7 @@ export function createTaskThreads(deps: {
         suggestionId: input.suggestionId,
         sourceApp: input.sourceApp,
         sourceLink: input.sourceLink,
+        fromChannelId: input.fromChannelId ?? null,
       });
       return { id: task.id, channelId: task.channelId, title: task.title };
     },

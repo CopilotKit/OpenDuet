@@ -2,6 +2,7 @@ import { useRenderTool } from "@copilotkit/react-core/v2";
 import { Link, useRouter } from "@tanstack/react-router";
 import { z } from "zod";
 import { ToolLine } from "@/components/channels/tool-line";
+import { ChannelTagOf } from "@/components/duet/channel-tag";
 import { TaskCard } from "@/components/duet/task-card";
 import { START_TASK_TOOL } from "@/lib/channels/task-brief";
 import { readToolName } from "@/lib/plugins/tool-name";
@@ -68,6 +69,7 @@ export function ChatTaskCard({ started }: { started: StartedTask }) {
           </a>
         )
       }
+      channel={<ChannelTagOf channelId={task?.fromChannelId} />}
       status={status}
       title={task?.title ?? started.title}
     />
