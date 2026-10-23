@@ -115,14 +115,15 @@ function SuggestionFor({ bot }: { bot: ChatBot }) {
     >
       <DuetCard
         aria-label={`${bot.name} could take this on`}
-        className="px-4 py-3"
+        // Capped so large text never lets the card cover the thread above it: it scrolls inside.
+        className="max-h-[30dvh] overflow-y-auto overscroll-contain px-4 py-3"
         glass
         role="region"
       >
         <p className="type-label font-semibold text-duet-violet">
           {bot.name} could take this on
         </p>
-        <p className="type-row mt-0.5 font-semibold [overflow-wrap:anywhere]">
+        <p className="type-row mt-0.5 line-clamp-3 font-semibold [overflow-wrap:anywhere]">
           {suggestion.title}
         </p>
         {suggestion.detail ? (
