@@ -4,7 +4,7 @@ import {
   queryOptions,
 } from "@tanstack/react-query";
 import { client } from "@/lib/client";
-import { proactiveKeys } from "@/lib/proactive";
+import { taskKeys } from "@/lib/tasks/queries";
 export type ApprovalDecision =
   | "allow_once"
   | "allow_always"
@@ -249,7 +249,7 @@ export const revokeTeamApprovalRuleMutationOptions = (
 const settleAnswer = (queryClient: QueryClient) => () =>
   Promise.all([
     settle(queryClient)(),
-    queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.all }),
   ]);
 /** Allow once, always allow, deny, or "I did it myself" on one waiting action. */
 export const decideApprovalMutationOptions = (queryClient: QueryClient) =>

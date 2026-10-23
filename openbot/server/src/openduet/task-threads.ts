@@ -5,10 +5,11 @@ import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import type { AgentActor } from "../agents/profile-types";
 import { PERSON_INITIATOR } from "../audit";
 import type { ChannelStore } from "../channels/routes";
-import type {
-  ProactiveEngineDeps,
-  ProactiveScope,
-  TaskThreads,
+import {
+  type ProactiveEngineDeps,
+  type ProactiveScope,
+  replyTail,
+  type TaskThreads,
 } from "../proactive/engine";
 import { plainFailure, type TaskStore } from "./task-store";
 
@@ -143,8 +144,18 @@ export function createTaskTurn(deps: {
         );
       }
       const result = await turn;
+      /*
+       * Recorded as how the reply ends, its next step, rather than how it starts: a task's
+       * conversation is never listed by its preview, and Tasks shows this line after the task's
+       * status (`TaskRecord.next`). The preview keeps only its first 200 characters, which for a
+       * long reply would be its opening, not where it leaves things.
+       */
       if (result.replyText)
-        await record(result.replyText, scope.agentId, `${input.runId}:reply`);
+        await record(
+          replyTail(result.replyText) ?? result.replyText,
+          scope.agentId,
+          `${input.runId}:reply`,
+        );
     } catch (error) {
       if (!(error instanceof HeadlessToolSuspension)) {
         if (input.final)

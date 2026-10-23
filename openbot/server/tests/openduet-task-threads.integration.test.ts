@@ -462,6 +462,47 @@ describe("status", () => {
   const statusOf = async (id: string) =>
     (await taskStore.get(owner.id, id)).status;
 
+  test("carries the run's own next step: the Bot's last sentence, the person's reply quoted, never the ask", async () => {
+    const opened = await threads.open({
+      ownerUserId: owner.id,
+      agentId: bot,
+      title: `Next ${randomUUID()}`,
+      why: null,
+      origin: "asked",
+      suggestionId: null,
+      sourceApp: null,
+      sourceLink: null,
+    });
+    const nextOf = async () => (await taskStore.get(owner.id, opened.id)).next;
+    expect(await nextOf()).toBeNull();
+    const at = Date.now();
+    // The ask the turn starts on is the task, not a step.
+    await channelStore.recordActivity(
+      owner,
+      opened.channelId,
+      { text: "Draft a reply to Danny.", agentId: null, at: new Date(at) },
+      { id: `task-${opened.id}:input` },
+    );
+    expect(await nextOf()).toBeNull();
+    await channelStore.recordActivity(owner, opened.channelId, {
+      text: "I drafted the reply. **Send the reply to Danny?** It tells him Friday works.",
+      agentId: bot,
+      at: new Date(at + 1_000),
+    });
+    expect(await nextOf()).toBe("Send the reply to Danny?");
+    await channelStore.recordActivity(owner, opened.channelId, {
+      text: "Make it shorter",
+      agentId: null,
+      at: new Date(at + 2_000),
+    });
+    expect(await nextOf()).toBe("“Make it shorter”");
+    // Read the same way on the list.
+    expect(
+      (await taskStore.list(owner.id)).find((task) => task.id === opened.id)
+        ?.next,
+    ).toBe("“Make it shorter”");
+  });
+
   test("is worked out from the queue, the approval inbox and the question queue, never stored", async () => {
     const task = await freshTask();
     // Opened, and its turn not queued yet: just started.

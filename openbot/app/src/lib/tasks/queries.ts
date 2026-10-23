@@ -41,6 +41,12 @@ export type TaskRecord = {
   failure: string | null;
   /** When it failed, alongside `failure`. */
   failedAt: string | null;
+  /**
+   * The run's own next step, one line: the last sentence or question of the Bot's newest words, or
+   * the person's reply in quotes while it is worked on. Null before anything was said; absent on a
+   * server from before it was sent.
+   */
+  next?: string | null;
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;

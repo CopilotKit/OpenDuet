@@ -123,10 +123,19 @@ export function TaskButton({
  * Try again, under a failed task's row: its turn runs once more in its own conversation, and the
  * row reads Working until that run ends.
  */
-export function TryTaskAgain({ taskId }: { taskId: string }) {
+export function TryTaskAgain({
+  taskId,
+  className = "pr-4 pb-3 pl-[69px]",
+}: {
+  taskId: string;
+  /** Its inset, lined up with the title of whatever row it sits under. */
+  className?: string;
+}) {
   const again = useMutation(tryTaskAgainMutationOptions(queryClient));
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pr-4 pb-3 pl-[69px]">
+    <div
+      className={cn("flex flex-wrap items-center gap-x-3 gap-y-1", className)}
+    >
       <TaskButton
         busy={again.isPending}
         label="Try this task again"

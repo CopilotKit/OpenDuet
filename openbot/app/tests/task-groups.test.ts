@@ -121,7 +121,7 @@ test("a task's own approval or question makes it Needs input and is not listed a
   );
   expect(needs).toEqual({
     rosa: "Allow it to send email, or refuse",
-    sam: "Answer its question",
+    sam: "Which deck?",
   });
 });
 

@@ -1,15 +1,14 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Fragment, type ReactNode, useEffect, useState } from "react";
-import { ApprovalCard, PillButton } from "@/components/approvals/approval-card";
+import { type ReactNode, useEffect, useState } from "react";
+import { ApprovalCard } from "@/components/approvals/approval-card";
 import { ChannelTagOf } from "@/components/duet/channel-tag";
 import { DuetIcon } from "@/components/duet/icons";
-import { DuetCard, Rule, Tile, type TileTone } from "@/components/duet/kit";
+import type { TileTone } from "@/components/duet/kit";
 import { TryTaskAgain } from "@/components/duet/task-card";
 import type { AgentProfile } from "@/lib/agents/queries";
 import { clockTime } from "@/lib/approval-view";
 import {
-  answerPersonQuestionMutationOptions,
   approvalInboxOptions,
   decideApprovalMutationOptions,
   type PersonQuestion,
@@ -42,8 +41,6 @@ import {
 } from "./activity-screen";
 import { useReportFinish } from "./chat-presence";
 
-/** How many things Resolved shows before "Show all". */
-export const RESOLVED_SHOWN = 5;
 /** How long a checked task stays where it is before it moves to Resolved, so its check is seen. */
 export const CHECK_HOLD_MS = 450;
 /** How often "Updated 1 min ago" is worked out again with nothing else changing. */
@@ -80,11 +77,13 @@ function useNow(): number {
 /**
  * Tasks' Active list: what is under way and what needs the person, grouped by what each thing needs
  * (`activeGroups`). Ready for review, then Needs input, Working and Resolved, each headed with its
- * count and when it last changed. A group with nothing in it is left out.
+ * count in grey. A group with nothing in it is left out, and Resolved starts folded.
  *
- * A task's row opens its page, and its check circle marks it done. The approvals and questions that
- * are not in any task are answered right here. Other work under way keeps its Stop, and finished
- * work is read-only.
+ * Every task is a flat row on the page (parity-spec S3b): its check, its title, and where it stands
+ * with the run's own next step. The row opens its page, and the check marks it done. A question not
+ * in any task is a row too, which opens a page to answer it; an approval not in any task keeps its
+ * card, with Allow once and Refuse on it. Other work under way keeps its Stop, and finished work is
+ * read-only.
  */
 export function ActiveView({
   agents,
@@ -105,13 +104,12 @@ export function ActiveView({
     enabled: Boolean(bot),
   });
   const decision = useMutation(decideApprovalMutationOptions(queryClient));
-  const answer = useMutation(answerPersonQuestionMutationOptions(queryClient));
   const stop = useMutation(stopHandoffMutationOptions(queryClient));
   const resolve = useMutation(
     resolveTaskMutationOptions(queryClient, { holdMs: CHECK_HOLD_MS }),
   );
   const now = useNow();
-  const [allResolved, setAllResolved] = useState(false);
+  const [resolvedOpen, setResolvedOpen] = useState(false);
 
   // Nothing until both lists are read: every group draws from them, and a half list is a flicker.
   if (tasks.isPending || inbox.isPending) return null;
@@ -203,17 +201,8 @@ export function ActiveView({
         );
       case "question":
         return (
-          <QuestionCard
+          <QuestionLine
             botName={botName(item.question.botId)}
-            busy={answer.isPending && answer.variables?.id === item.question.id}
-            error={
-              answer.variables?.id === item.question.id
-                ? (answer.error?.message ?? null)
-                : null
-            }
-            onAnswer={(response) =>
-              answer.mutate({ id: item.question.id, response })
-            }
             question={item.question}
           />
         );
@@ -223,7 +212,7 @@ export function ActiveView({
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-9">
       {problems.map((problem) => (
         <p className="type-sub px-1 text-duet-red" key={problem} role="alert">
           {problem}
@@ -232,14 +221,15 @@ export function ActiveView({
       {groups.length === 0 ? (
         <EmptyActive query={query} />
       ) : (
-        groups.map((group) => (
+        groups.map((group, index) => (
           <Group
-            collapsed={group.id === "resolved" && !allResolved}
             drawItem={drawItem}
             group={group}
             key={group.id}
             now={now}
-            onToggle={() => setAllResolved((all) => !all)}
+            onToggle={() => setResolvedOpen((open) => !open)}
+            open={group.id !== "resolved" || resolvedOpen}
+            updated={index === 0}
           />
         ))
       )}
@@ -266,96 +256,121 @@ function EmptyActive({ query }: { query: string }) {
 }
 
 /**
- * One group: its name, how many, and when it last changed, then its things. Rows share a card;
- * an approval or a question is a card of its own, as it carries its own answers. Resolved can fold
- * after its first few.
+ * One group (parity-spec S3a): its name and how many, in regular grey so the rows lead, then its
+ * rows straight on the page, with no card behind them. The first group also says, on the right,
+ * when the list last changed. Resolved is folded: its heading alone, with no count and a chevron,
+ * and pressing it shows its rows.
  */
 function Group({
   group,
   now,
-  collapsed,
+  open,
+  updated,
   onToggle,
   drawItem,
 }: {
   group: ActiveGroup<ActivityRow>;
   now: number;
-  /** Fold after `RESOLVED_SHOWN`, with a Show all. */
-  collapsed: boolean;
+  /** False for a folded Resolved. */
+  open: boolean;
+  /** Whether this heading carries the list's "Updated …". */
+  updated: boolean;
   onToggle: () => void;
   drawItem: (item: ActiveItem<ActivityRow>) => ReactNode;
 }) {
-  const foldable =
-    group.id === "resolved" && group.items.length > RESOLVED_SHOWN;
-  const shown =
-    foldable && collapsed ? group.items.slice(0, RESOLVED_SHOWN) : group.items;
+  const resolved = group.id === "resolved";
+  const stamp = updated ? (
+    <span className="type-sub shrink-0 text-duet-ink-2">
+      Updated {agoShort(group.updatedAt, now)}
+    </span>
+  ) : null;
   return (
-    <section aria-label={group.label} className="flex flex-col gap-2">
-      <h2 className="px-1">
-        <span className="type-row font-semibold text-duet-ink">
-          {group.label}
-        </span>{" "}
-        <span className="type-row font-semibold text-duet-ink-3 tabular-nums">
-          {group.items.length}
-        </span>{" "}
-        <span className="type-label font-medium text-duet-ink-3">
-          · Updated {agoShort(group.updatedAt, now)}
-        </span>
-      </h2>
-      {chunks(shown).map((chunk) =>
-        chunk.kind === "rows" ? (
-          <DuetCard key={chunk.items[0]?.key}>
-            <ul>
-              {chunk.items.map((item, index) => (
-                <Fragment key={item.key}>
-                  {index > 0 ? <Rule inset /> : null}
-                  <li>{drawItem(item)}</li>
-                </Fragment>
-              ))}
-            </ul>
-          </DuetCard>
-        ) : (
-          <div key={chunk.item.key}>{drawItem(chunk.item)}</div>
-        ),
-      )}
-      {foldable ? (
-        <button
-          className="type-label self-start rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 hover:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40"
-          onClick={onToggle}
-          type="button"
-        >
-          {collapsed ? `Show all ${group.items.length}` : "Show fewer"}
-        </button>
+    <section aria-label={group.label} className="flex flex-col gap-5">
+      <div className="flex min-h-11 items-center justify-between gap-3">
+        <h2 className="min-w-0 flex-1">
+          {resolved ? (
+            <button
+              aria-expanded={open}
+              className="-my-2 flex min-h-11 w-full items-center justify-between gap-2 rounded-lg text-left text-duet-ink-2 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40"
+              onClick={onToggle}
+              type="button"
+            >
+              <span className="type-row font-normal">{group.label}</span>
+              <DuetIcon
+                className={cn(
+                  "shrink-0 transition-transform motion-reduce:transition-none",
+                  open ? "-rotate-90" : "rotate-90",
+                )}
+                name="chevronRight"
+                size={18}
+                stroke={2}
+              />
+            </button>
+          ) : (
+            <span className="type-row font-normal text-duet-ink-2">
+              {group.label}{" "}
+              <span className="tabular-nums">{group.items.length}</span>
+            </span>
+          )}
+        </h2>
+        {stamp}
+      </div>
+      {open ? (
+        <ul className="flex flex-col gap-6">
+          {group.items.map((item) => (
+            <li key={item.key}>{drawItem(item)}</li>
+          ))}
+        </ul>
       ) : null}
     </section>
   );
 }
 
-type Chunk =
-  | { kind: "rows"; items: ActiveItem<ActivityRow>[] }
-  | { kind: "card"; item: ActiveItem<ActivityRow> };
-
-/** Runs of rows go on one card; an approval or a question stands alone. */
-function chunks(items: readonly ActiveItem<ActivityRow>[]): Chunk[] {
-  const out: Chunk[] = [];
-  for (const item of items) {
-    if (item.kind === "request" || item.kind === "question") {
-      out.push({ kind: "card", item });
-      continue;
-    }
-    const last = out.at(-1);
-    if (last?.kind === "rows") last.items.push(item);
-    else out.push({ kind: "rows", items: [item] });
-  }
-  return out;
-}
-
 const ROW_LINK =
   "-my-1 block min-w-0 flex-1 rounded-[12px] py-1 outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/25";
 
+/** The title of a row: bold, at most two lines. */
+function RowTitle({ children }: { children: ReactNode }) {
+  return (
+    <p className="type-row line-clamp-2 font-semibold text-duet-ink [overflow-wrap:anywhere]">
+      {children}
+    </p>
+  );
+}
+
 /**
- * A task: the check circle, the title, where it stands with the word in its colour and what it
- * needs next, and who asked for it. The row opens the task; the circle marks it done, or, on a done
- * one, reopens it.
+ * The one line under a row's title: the status word in its colour, then the next step in grey, cut
+ * with an ellipsis rather than wrapped (parity-spec S3b).
+ */
+function StatusLine({
+  status,
+  children,
+}: {
+  status: TaskStatus;
+  children: ReactNode;
+}) {
+  return (
+    <p
+      className="type-sub mt-1.5 truncate text-duet-ink-2"
+      data-status={status}
+    >
+      <span
+        className={cn(
+          STATE_TONE[status],
+          status === "working" && "tool-line-running",
+        )}
+      >
+        {TASK_STATUS_LABEL[status]}
+      </span>
+      {" · "}
+      {children}
+    </p>
+  );
+}
+
+/**
+ * A task as a flat row (parity-spec S3b): the check, the title, and where it stands with the run's
+ * own next step. The row opens the task; the check marks it done, or, on a done one, reopens it.
  */
 function TaskLine({
   item,
@@ -364,14 +379,14 @@ function TaskLine({
 }: {
   item: Extract<ActiveItem<ActivityRow>, { kind: "task" }>;
   busy: boolean;
-  /** `failed` puts the circle back if marking it done did not work. */
+  /** `failed` empties the check if marking it done did not work. */
   onCheck: (done: boolean, failed: () => void) => void;
 }) {
   const { task, status } = item;
   return (
     <>
-      <div className="flex items-start gap-3 px-4 py-3">
-        <CheckCircle
+      <div className="flex items-start gap-3">
+        <CheckBox
           busy={busy}
           done={status === "resolved"}
           onCheck={onCheck}
@@ -382,34 +397,26 @@ function TaskLine({
           params={{ taskId: task.id }}
           to="/tasks/$taskId"
         >
-          <p className="type-row line-clamp-2 font-semibold text-duet-ink [overflow-wrap:anywhere]">
-            {task.title}
-          </p>
-          <p className="type-sub mt-0.5 text-duet-ink-2" data-status={status}>
-            <span className={cn("font-semibold", STATE_TONE[status])}>
-              {TASK_STATUS_LABEL[status]}
-            </span>{" "}
-            · {item.need}
-          </p>
-          <p className="type-label mt-1 font-medium text-duet-ink-3">
-            {item.tag}
-          </p>
-          <ChannelTagOf channelId={task.fromChannelId} className="mt-1.5" />
+          <RowTitle>{task.title}</RowTitle>
+          <StatusLine status={status}>{item.need}</StatusLine>
+          <ChannelTagOf channelId={task.fromChannelId} className="mt-2" />
         </Link>
       </div>
       {/* Outside the link, so pressing it never opens the task. */}
-      {status === "failed" ? <TryTaskAgain taskId={task.id} /> : null}
+      {status === "failed" ? (
+        <TryTaskAgain className="pt-3 pl-[34px]" taskId={task.id} />
+      ) : null}
     </>
   );
 }
 
 /**
- * The round check on a task's row. Pressed, a check pops into it, the header's orb plays its
- * finish, and the task is marked done; the list holds it in place for `CHECK_HOLD_MS` first, so the
- * check is seen before the row moves to Resolved. On a done task it is filled, and pressing it
- * reopens the task.
+ * The check on a task's row: a 22px rounded square on a hairline, in a 44px target. Pressed, a check
+ * fills it, the header's orb plays its finish, and the task is marked done; the list holds it in
+ * place for `CHECK_HOLD_MS` first, so the check is seen before the row moves to Resolved. On a done
+ * task it is filled, and pressing it reopens the task.
  */
-function CheckCircle({
+function CheckBox({
   title,
   done,
   busy,
@@ -427,12 +434,7 @@ function CheckCircle({
     <button
       aria-label={done ? `Reopen ${title}` : `Mark ${title} done`}
       aria-pressed={filled}
-      className={cn(
-        "mt-0.5 grid size-[26px] shrink-0 place-items-center rounded-full transition-[background-color,box-shadow] duration-200 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 motion-reduce:transition-none",
-        filled
-          ? "bg-duet-green text-duet-card"
-          : "shadow-[inset_0_0_0_2px_var(--duet-ink-3)] hover:shadow-[inset_0_0_0_2px_var(--duet-ink-2)]",
-      )}
+      className="-m-[11px] grid size-11 shrink-0 place-items-center rounded-[10px] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40"
       disabled={busy || landing}
       onClick={() => {
         if (done) {
@@ -445,12 +447,54 @@ function CheckCircle({
       }}
       type="button"
     >
-      {filled ? (
-        <span className={landing ? "duet-check-land" : undefined}>
-          <DuetIcon name="check" size={15} stroke={3.2} />
-        </span>
-      ) : null}
+      <span
+        aria-hidden
+        className={cn(
+          "grid size-[22px] place-items-center rounded-[6px] transition-[background-color,box-shadow] duration-200 motion-reduce:transition-none",
+          filled
+            ? "bg-duet-ink text-duet-surface"
+            : "bg-duet-card shadow-[inset_0_0_0_1.5px_var(--duet-hair)]",
+        )}
+        data-check
+      >
+        {filled ? (
+          <span className={landing ? "duet-check-land" : undefined}>
+            <DuetIcon name="check" size={14} stroke={3} />
+          </span>
+        ) : null}
+      </span>
     </button>
+  );
+}
+
+/**
+ * A question a Bot asked outside any task, as a row: who asks, then "Needs input" and the question.
+ * It opens a page of its own to answer (`/tasks/questions/<id>`).
+ */
+function QuestionLine({
+  question,
+  botName,
+}: {
+  question: PersonQuestion;
+  botName: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span
+        aria-hidden
+        className="grid size-[22px] shrink-0 place-items-center text-duet-amber"
+      >
+        <DuetIcon name="question" size={20} stroke={2} />
+      </span>
+      <Link
+        className={cn(ROW_LINK, "hover:opacity-80")}
+        params={{ questionId: question.id }}
+        to="/tasks/questions/$questionId"
+      >
+        <RowTitle>{botName} asks</RowTitle>
+        <StatusLine status="needs_input">{question.question}</StatusLine>
+      </Link>
+    </div>
   );
 }
 
@@ -461,23 +505,18 @@ function CheckCircle({
 function OtherLine({ row }: { row: ActivityRow }) {
   const body = (
     <>
-      <p className="type-row line-clamp-2 font-semibold text-duet-ink [overflow-wrap:anywhere]">
-        {row.title}
-      </p>
-      <p className="type-sub mt-0.5 text-duet-ink-2 [overflow-wrap:anywhere]">
-        {row.detail}
-      </p>
-      <p className="type-label mt-1 font-medium text-duet-ink-3">
-        {clockTime(row.at)}
+      <RowTitle>{row.title}</RowTitle>
+      <p className="type-sub mt-1.5 truncate text-duet-ink-2">
+        {row.detail} · {clockTime(row.at)}
       </p>
     </>
   );
   return (
-    <div className="flex items-start gap-3 px-4 py-3">
+    <div className="flex items-start gap-3">
       <span
         aria-hidden
         className={cn(
-          "mt-0.5 grid size-[26px] shrink-0 place-items-center",
+          "grid size-[22px] shrink-0 place-items-center",
           ICON_TONE[row.tone],
         )}
       >
@@ -504,65 +543,5 @@ function OtherLine({ row }: { row: ActivityRow }) {
       )}
       {row.control ? <div className="shrink-0">{row.control}</div> : null}
     </div>
-  );
-}
-
-/** A question a Bot asked mid-run. The run resumes with the answer. */
-function QuestionCard({
-  question,
-  botName,
-  busy,
-  error,
-  onAnswer,
-}: {
-  question: PersonQuestion;
-  botName: string;
-  busy: boolean;
-  error: string | null;
-  onAnswer: (response: string) => void;
-}) {
-  const [draft, setDraft] = useState("");
-  return (
-    <DuetCard raised>
-      <div className="flex min-h-[54px] items-center gap-2.5 px-4 py-2.5">
-        <Tile icon="question" size={32} />
-        <p className="type-row min-w-0 flex-1 font-semibold">{botName} asks</p>
-        <span className="type-label shrink-0 font-medium text-duet-ink-3">
-          {clockTime(question.createdAt)}
-        </span>
-      </div>
-      <Rule />
-      <p className="type-row whitespace-pre-wrap px-4 pt-3 leading-6 [overflow-wrap:anywhere]">
-        {question.question}
-      </p>
-      {question.why ? (
-        <p className="type-label px-4 pt-1 text-duet-ink-2">{question.why}</p>
-      ) : null}
-      <form
-        className="flex flex-col gap-2 px-4 pt-3 pb-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (draft.trim()) onAnswer(draft);
-        }}
-      >
-        <textarea
-          aria-label="Your answer"
-          className="type-sub min-h-20 w-full resize-none rounded-2xl bg-duet-tile px-3 py-2.5 text-duet-ink outline-none placeholder:text-duet-ink-3 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="Your answer"
-          value={draft}
-        />
-        {error ? (
-          <p className="type-label text-duet-red" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <div className="flex">
-          <PillButton disabled={busy || !draft.trim()} primary type="submit">
-            Send answer
-          </PillButton>
-        </div>
-      </form>
-    </DuetCard>
   );
 }

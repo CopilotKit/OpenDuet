@@ -77,6 +77,19 @@ describe("a task's turn", () => {
     expect(turn.busy).toEqual([true, false]);
   });
 
+  test("records a long reply by how it ends, its next step, not how it starts", async () => {
+    const opening = "I read Danny's email and the thread before it. ".repeat(6);
+    const turn = turnWith(async () => ({
+      replyText: `${opening}\n\n- Draft A: short\n- Draft B: warm\n\nShall I send draft A? It keeps the Friday date.`,
+    }));
+    await turn.start();
+    expect(turn.said.at(-1)).toEqual({
+      text: "Shall I send draft A?",
+      agentId: "openduet",
+      id: "task-1:reply",
+    });
+  });
+
   test("that stops for Allow once ends waiting on the person, not failed", async () => {
     const turn = turnWith(async () => {
       throw new HeadlessToolSuspension(
