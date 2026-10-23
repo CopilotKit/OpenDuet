@@ -88,7 +88,8 @@ export function ToolLine({
           running && "tool-line-running",
         )}
       >
-        <span className="shrink-0">
+        {/* Cut with an ellipsis rather than run past its row: a summary can be long. */}
+        <span className="min-w-0 truncate">
           {refused
             ? `Blocked: ${label}`
             : failed
@@ -124,7 +125,7 @@ export function ToolLine({
       {/*
        * Indented to the label, past the hook and the glyph, so the detail reads as belonging to it.
        */}
-      <div className="mt-2 ml-[45px] max-h-80 overflow-auto border-duet-hair border-l pl-3 text-duet-ink-2 text-xs [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h4]:text-xs [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
+      <div className="mt-2 ml-[45px] max-h-80 overflow-auto border-duet-hair border-l pl-3 type-caption text-duet-ink-2 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h4]:text-xs [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
         {children}
       </div>
     </details>

@@ -254,15 +254,22 @@ export function stepDetails(step: ToolItem): StepDetails {
     return {
       ...outcome,
       kind: "tool",
-      label: ownToolLabel(name, outcome.pending) ?? humanise(name),
-      ...personOf(name),
+      label:
+        (outcome.failed || outcome.refused
+          ? null
+          : ownToolLabel(name, outcome.pending)) ?? humanise(name),
+      ...personOf(name, outcome),
       pages: 0,
     };
 
   const [, server = "", ...rest] = name.split("__");
   const role = researchRoleOfTool(server, rest.join("__"));
   // Running, a line says what is happening now ("Searching your email"); done, what happened.
-  const { label, detail } = readToolName(name, outcome.pending);
+  // A refused or failed step is named plainly ("Send your email"), never as though it happened.
+  const { label, detail } = readToolName(
+    name,
+    outcome.failed || outcome.refused ? "plain" : outcome.pending,
+  );
   const urls = role === "fetch" ? urlsOf(args) : [];
   const base = { ...outcome, label };
   if (role === "search") {
@@ -300,15 +307,24 @@ export function stepDetails(step: ToolItem): StepDetails {
     ...base,
     kind: "connector",
     ...(detail ? { detail } : {}),
-    ...personOf(name),
+    ...personOf(name, outcome),
     pages: 0,
     connector: connectorName(server),
   };
 }
 
-/** The done phrase for a step on the person's own things, for a summary to name. */
-function personOf(name: string): { person?: string } {
-  const person = personToolLabel(name);
+/**
+ * What a step did to the person's own things, for a summary to name, and only what is true of it:
+ * "Searched your email" once it finished, "Waiting for your OK to send your email" while a send
+ * waits on its card, and nothing for a step that was refused or failed, which the line counts as an
+ * issue instead.
+ */
+function personOf(
+  name: string,
+  outcome: { pending: boolean; failed: boolean; refused: boolean },
+): { person?: string } {
+  if (outcome.failed || outcome.refused) return {};
+  const person = personToolLabel(name, outcome.pending ? "waiting" : "done");
   return person ? { person } : {};
 }
 
@@ -329,7 +345,15 @@ function plural(count: number, one: string, many: string): string {
  * person's own fact.
  */
 export function summarise(steps: readonly StepDetails[]): string {
-  const of = (kind: StepKind) => steps.filter((step) => step.kind === kind);
+  /*
+   * Only what happened. A step that was refused or failed is counted as an issue beside the line,
+   * and one that never finished is not called done; a send waiting on its card is named by its
+   * waiting phrase (`person`).
+   */
+  const finished = steps.filter(
+    (step) => !step.failed && !step.refused && (!step.pending || step.person),
+  );
+  const of = (kind: StepKind) => finished.filter((step) => step.kind === kind);
   const phrases: string[] = [];
   if (of("search").length) phrases.push("searched the web");
   const read = of("fetch").reduce((sum, step) => sum + step.pages, 0);
@@ -340,7 +364,7 @@ export function summarise(steps: readonly StepDetails[]): string {
   else if (browser.length) phrases.push("used the browser");
   // What happened to the person's own things, in their words: "searched your email".
   for (const person of new Set(
-    steps.flatMap((step) => (step.person ? [step.person] : [])),
+    finished.flatMap((step) => (step.person ? [step.person] : [])),
   ))
     phrases.push(person.charAt(0).toLowerCase() + person.slice(1));
   const connectors = [
@@ -357,6 +381,8 @@ export function summarise(steps: readonly StepDetails[]): string {
     );
   const tools = of("tool").filter((step) => !step.person).length;
   if (tools) phrases.push(`used ${plural(tools, "tool", "tools")}`);
+  // Nothing finished: the first step, named plainly, with its issue beside it.
+  if (phrases.length === 0) return steps[0]?.label ?? "";
   const sentence = joinPhrases(phrases);
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }

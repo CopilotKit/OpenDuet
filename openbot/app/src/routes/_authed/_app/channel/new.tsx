@@ -170,9 +170,7 @@ function RouteComponent() {
             // the caret starts here whenever the recipient question is still open. A recipient
             // from the URL means the composer takes focus instead.
             autoFocus={!chosen}
-            placeholder={
-              selected.length ? "Add another Bot for a group…" : "Choose a Bot…"
-            }
+            placeholder={selected.length ? "Add a Bot…" : "Choose a Bot…"}
           />
         </ComboboxChips>
         {/* Allow max-w to constrain the popup even though its anchor is full-width. */}

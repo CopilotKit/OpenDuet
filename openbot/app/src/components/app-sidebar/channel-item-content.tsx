@@ -1,4 +1,4 @@
-import { IconPinFilled } from "@tabler/icons-react";
+import { DuetIcon } from "@/components/duet/icons";
 import { ChannelAvatar } from "@/components/channels/avatar";
 import type { MessageListEmphasis } from "@/lib/settings/message-list";
 
@@ -54,7 +54,11 @@ export function ChannelItemContent({
             <span className="size-2 shrink-0 rounded-full bg-duet-accent" />
           ) : null}
           {pinned ? (
-            <IconPinFilled className="size-3 shrink-0 text-muted-foreground/70" />
+            <DuetIcon
+              className="shrink-0 text-duet-ink-3"
+              name="pin"
+              size={12}
+            />
           ) : null}
         </div>
         <div

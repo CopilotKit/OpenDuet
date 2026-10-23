@@ -89,6 +89,19 @@ describe("what the pill says for the server's work", () => {
     ).toBe("Sending your email");
   });
 
+  test("a request still waiting is not counted, only one the person allowed", () => {
+    expect(
+      serverWorkPhrase(
+        true,
+        "thread-1",
+        inbox([
+          request({ status: "pending", decision: null, decidedAt: null }),
+        ]),
+        NOW,
+      ),
+    ).toBe(SERVER_WORKING);
+  });
+
   test("a message that goes nowhere with an address is not called an email", () => {
     expect(
       approvedActionPhrase(

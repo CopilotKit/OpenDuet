@@ -147,6 +147,36 @@ test("a summary names what happened to the person's own things, not the connecto
   ).toBe("Used Google Drive");
 });
 
+test("a summary never says a send happened before it did, or after it was refused", () => {
+  const read = call(
+    "r",
+    "mcp__google-workspace__gmail_read_message",
+    {},
+    '"{}"',
+  );
+  const send = (result?: string) =>
+    call("s", "mcp__google-workspace__gmail_send_reply", {}, result);
+  // Waiting on its card: no result yet.
+  expect(summarise([read, send()].map(stepDetails))).toBe(
+    "Read your email and waiting for your OK to send your email",
+  );
+  // Refused.
+  const refused = [read, send("Refused. The person said no.")].map(stepDetails);
+  expect(summarise(refused)).toBe("Read your email");
+  expect(refused[1]?.label).toBe("Send your email");
+  // A search that failed is not "searched".
+  const failed = [
+    call(
+      "f",
+      "mcp__google-workspace__gmail_search_messages",
+      {},
+      "Model tried to call unavailable tool 'mcp__google-workspace__gmail_search_messages'.",
+    ),
+  ].map(stepDetails);
+  expect(failed[0]?.failed).toBe(true);
+  expect(summarise(failed)).toBe("Search your email");
+});
+
 test("the tools CopilotKit has a renderer for are the ones the app draws", () => {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <CopilotKitContext.Provider

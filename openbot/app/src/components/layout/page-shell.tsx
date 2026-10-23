@@ -187,7 +187,10 @@ export function PageSection({
     <section className={cn("mt-12", className)}>
       {title ? (
         <div className="flex min-h-8 flex-row items-center justify-between gap-4">
-          <h2 className="type-nav font-semibold">{title}</h2>
+          {/* Section headers recede so the rows lead (parity-spec 2.3): the sub size, not bold. */}
+          <h2 className="type-sub font-medium text-muted-foreground">
+            {title}
+          </h2>
           {action}
         </div>
       ) : null}

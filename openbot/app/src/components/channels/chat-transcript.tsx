@@ -131,7 +131,7 @@ const BUBBLE_CONTENT =
 const AGENT_PROSE =
   "[&>div]:space-y-2.5 [&_ol]:list-outside [&_ol]:pl-5 [&_ul]:list-outside [&_ul]:pl-5 [&_li]:py-0.5";
 const AGENT_BUBBLE =
-  "max-w-[92%] *:data-[slot=bubble-content]:bg-duet-bubble *:data-[slot=bubble-content]:text-duet-ink";
+  "max-w-[82%] *:data-[slot=bubble-content]:bg-duet-bubble *:data-[slot=bubble-content]:text-duet-ink";
 const USER_BUBBLE = "max-w-[85%] *:data-[slot=bubble-content]:bg-duet-user";
 
 /** One shared empty array, so a screen without a queue does not hand down a new one per render. */
@@ -1619,7 +1619,6 @@ export function ServerToolLine({
   result?: string;
 }) {
   const running = result === undefined;
-  const { label, detail } = readToolName(name, running);
   /*
    * A refusal is not a result, and must not read like one.
    *
@@ -1630,6 +1629,11 @@ export function ServerToolLine({
   const answer = result === undefined ? undefined : asText(result);
   const refused = answer?.startsWith(REFUSAL_MARKER) ?? false;
   const failed = !refused && toolResultFailed(result);
+  // A refused or failed call is named plainly ("Send your email"), never as though it happened.
+  const { label, detail } = readToolName(
+    name,
+    refused || failed ? "plain" : running,
+  );
   /*
    * The marker is for this component, not for the reader. Left in, a refusal reads "Blocked" in the
    * label and then "Refused." again in the first two words of the body, which is the same fact three

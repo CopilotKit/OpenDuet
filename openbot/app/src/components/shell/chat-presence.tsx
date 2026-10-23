@@ -1,5 +1,9 @@
 import type { Message } from "@ag-ui/core";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   createContext,
   type Dispatch,
@@ -213,25 +217,20 @@ export function serverWorkPhrase(
   now = Date.now(),
 ): string | null {
   if (!busy) return null;
-  /*
-   * The newest action asked for in this thread, unless it was refused. Its decision may not be in
-   * the inbox this screen holds yet (the inbox polls), so a request still shown waiting counts: the
-   * server is busy in its thread, which is what a decision on it starts.
-   */
-  const at = (request: ApprovalRequest) =>
-    Date.parse(request.decidedAt ?? request.createdAt);
-  const newest = (inbox?.requests ?? [])
+  // The newest action the person allowed in this thread, if they allowed one just now.
+  const decided = (inbox?.requests ?? [])
     .filter(
       (request) =>
         request.action.threadId === threadId &&
-        now - at(request) < DECISION_WINDOW_MS,
+        (request.decision === "allow_once" ||
+          request.decision === "allow_always") &&
+        typeof request.decidedAt === "string" &&
+        now - Date.parse(request.decidedAt) < DECISION_WINDOW_MS,
     )
-    .sort((a, b) => at(b) - at(a))
+    .sort(
+      (a, b) => Date.parse(b.decidedAt ?? "") - Date.parse(a.decidedAt ?? ""),
+    )
     .at(0);
-  const decided =
-    newest && newest.decision !== "deny" && newest.decision !== "handled"
-      ? newest
-      : undefined;
   return decided ? approvedActionPhrase(decided) : SERVER_WORKING;
 }
 
@@ -258,7 +257,19 @@ export function useServerWork(
   busy: boolean,
   threadId: string | undefined,
 ): string | null {
+  const queryClient = useQueryClient();
   const inbox = useQuery({ ...approvalInboxOptions(), enabled: busy });
+  /*
+   * The inbox polls, so the decision that just started this run may not be in it yet. Read it
+   * again the moment the conversation goes busy, rather than guessing from a request still shown
+   * waiting.
+   */
+  useEffect(() => {
+    if (busy)
+      void queryClient.invalidateQueries({
+        queryKey: approvalInboxOptions().queryKey,
+      });
+  }, [busy, queryClient]);
   return serverWorkPhrase(busy, threadId, inbox.data);
 }
 

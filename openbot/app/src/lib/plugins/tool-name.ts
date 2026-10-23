@@ -22,11 +22,22 @@ export type ToolName = {
   detail?: string;
 };
 
-export function readToolName(name: string, running = false): ToolName {
-  const own = ownToolLabel(name, running);
-  if (own) return { label: own };
+/**
+ * How a step stands, for the words it is named in: still running ("Searching your email"), done
+ * ("Searched your email"), or neither (`"plain"`: "Search your email"), for a step that was refused
+ * or failed, so the line never says something happened that did not.
+ */
+export type ToolState = boolean | "plain";
+
+export function readToolName(
+  name: string,
+  running: ToolState = false,
+): ToolName {
+  const own = ownToolLabel(name, running === true);
+  if (own) return { label: running === "plain" ? humanise(name) : own };
   const parts = name.split("__");
-  if (parts.length < 3 || parts[0] !== "mcp") return { label: name };
+  // Not an MCP name and not one of this deployment's: still never the bare identifier.
+  if (parts.length < 3 || parts[0] !== "mcp") return { label: humanise(name) };
 
   const [, rawServer, ...rest] = parts;
   const server = rawServer ?? "";
@@ -37,7 +48,15 @@ export function readToolName(name: string, running = false): ToolName {
    * these lines carry no detail beside them.
    */
   const personal = PERSONAL_TOOLS[tool];
-  if (personal) return { label: running ? personal.running : personal.done };
+  if (personal)
+    return {
+      label:
+        running === "plain"
+          ? personal.plain
+          : running
+            ? personal.running
+            : personal.done,
+    };
   const broker = brokeredApp(server);
   /*
    * Research is named for what it did, not for who did it. `web_search_exa` would read "Web search
@@ -47,11 +66,12 @@ export function readToolName(name: string, running = false): ToolName {
   const role = researchRoleOfTool(server, tool);
   if (role)
     return {
-      label: running
-        ? role === "search"
-          ? STEP_PHRASES.searchWeb
-          : STEP_PHRASES.readWeb
-        : RESEARCH_ROLE_LABELS[role],
+      label:
+        running === true
+          ? role === "search"
+            ? STEP_PHRASES.searchWeb
+            : STEP_PHRASES.readWeb
+          : RESEARCH_ROLE_LABELS[role],
     };
   const label = humanise(tool);
 
@@ -120,6 +140,15 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Putting it together",
     done: "Put it together",
   },
+  // server/src/memory. Drawn as plain lines, so without these they read "recall_personal_memory".
+  recall_personal_memory: {
+    running: "Checking memory",
+    done: "Checked memory",
+  },
+  remember_personal_fact: {
+    running: "Saving to memory",
+    done: "Saved to memory",
+  },
 };
 
 /**
@@ -127,22 +156,31 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
  * them. Same shape as `OWN_TOOLS`: the running form is a phrase from the pill's vocabulary below, so
  * a line and the pill say the same thing at the same moment.
  */
-const PERSONAL_TOOLS: Record<string, { running: string; done: string }> = {
+const PERSONAL_TOOLS: Record<
+  string,
+  { running: string; done: string; plain: string; waiting?: string }
+> = {
   gmail_search_messages: {
     running: "Searching your email",
     done: "Searched your email",
+    plain: "Search your email",
   },
   gmail_read_message: {
     running: "Reading your email",
     done: "Read your email",
+    plain: "Read your email",
   },
   calendar_list_events: {
     running: "Checking your calendar",
     done: "Checked your calendar",
+    plain: "Check your calendar",
   },
+  // A send waits on the person's answer before it runs, and says so rather than "sent".
   gmail_send_reply: {
     running: "Sending your email",
     done: "Sent your email",
+    plain: "Send your email",
+    waiting: "Waiting for your OK to send your email",
   },
 };
 
@@ -218,14 +256,17 @@ export function stepPhrase(name: string): string | null {
  * A step named for what happened to the person's own things: their mail and calendar, or one of this
  * deployment's tools. Null for anything else, which a summary counts rather than names.
  */
-export function personToolLabel(name: string, running = false): string | null {
-  const own = ownToolLabel(name, running);
-  if (own) return own;
+export function personToolLabel(
+  name: string,
+  state: "running" | "done" | "waiting" = "done",
+): string | null {
+  const own = OWN_TOOLS[name];
+  if (own) return state === "waiting" ? null : own[state];
   const parts = name.split("__");
   if (parts.length < 3 || parts[0] !== "mcp") return null;
   const personal = PERSONAL_TOOLS[parts.slice(2).join("__")];
   if (!personal) return null;
-  return running ? personal.running : personal.done;
+  return state === "waiting" ? (personal.waiting ?? null) : personal[state];
 }
 
 /** One of this deployment's own tools in words, or null for any other name. */

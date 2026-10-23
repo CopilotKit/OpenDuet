@@ -574,3 +574,24 @@ body {
   display: inline-grid;
   place-items: center;
 }
+
+/*
+ * Every control a screen in the app's shell draws is at least 44px to tap (parity-spec 2.11): the
+ * configuration pages were built with 28px and 36px buttons, selects and fields for a desktop
+ * pointer, and they all open inside the shell on a phone now. The shared primitives mark themselves
+ * with `data-slot`, so one rule covers every page without a class on each control. A link drawn as
+ * a button sits inside a sentence and keeps its line height. A switch keeps its look and gets a 44px
+ * hit area of its own (`components/ui/switch.tsx`).
+ */
+.duet-touch
+:is(
+  [data-slot="button"]:not([data-variant="link"]),
+  [data-slot="select-trigger"],
+  [data-slot="input"],
+  [data-slot="input-group"]
+) {
+  min-height: var(--duet-target);
+}
+.duet-touch [data-slot="button"][data-size^="icon"] {
+  min-width: var(--duet-target);
+}

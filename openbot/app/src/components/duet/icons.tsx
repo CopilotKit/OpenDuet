@@ -51,7 +51,10 @@ export type DuetIconName =
   | "reply"
   | "search"
   | "alert"
-  | "file";
+  | "file"
+  | "pin"
+  | "pinOff"
+  | "trash";
 
 const PATHS: Record<DuetIconName, ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h10" />,
@@ -227,6 +230,24 @@ const PATHS: Record<DuetIconName, ReactNode> = {
     <>
       <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
       <path d="M12 9v4M12 17h.01" />
+    </>
+  ),
+  pin: (
+    <>
+      <path d="M12 17v5" />
+      <path d="M9 10.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2v.8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.8a2 2 0 0 0-1.1-1.7l-1.8-.9a2 2 0 0 1-1.1-1.8V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </>
+  ),
+  pinOff: (
+    <>
+      <path d="M12 17v5M15 9.3V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.9M2 2l20 20" />
+      <path d="M9 9v1.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.2v.8a1 1 0 0 0 1 1h11" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M10 11v6M14 11v6" />
     </>
   ),
   file: (

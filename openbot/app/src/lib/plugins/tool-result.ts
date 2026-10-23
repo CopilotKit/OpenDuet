@@ -129,6 +129,8 @@ export function toolResultFailed(result: string | undefined): boolean {
   const answer = asText(result);
   return (
     answer.startsWith("The vendor reported an error:") ||
-    answer.startsWith("That tool could not be called")
+    answer.startsWith("That tool could not be called") ||
+    // The model SDK's own answer when a call names a tool the run does not hold.
+    answer.includes("tried to call unavailable tool")
   );
 }

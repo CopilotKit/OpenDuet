@@ -137,6 +137,8 @@ function ChannelRow({
         name={channel.name}
         summary={channel.summary ?? undefined}
         lastMessage={channel.lastMessage ?? undefined}
+        threadId={channel.threadId}
+        said={channel.lastMessageAt !== null}
         lastMessageAt={
           channel.lastMessageAt
             ? relativeTime(channel.lastMessageAt)

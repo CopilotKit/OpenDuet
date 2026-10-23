@@ -98,9 +98,8 @@ describe("naming a tool call", () => {
     ).toEqual({ label: "Googlecalendar create event" });
   });
 
-  test("a component the app registered is left alone", () => {
-    // These names were chosen by somebody and are already what the reader should see.
-    expect(readToolName("showBarChart")).toEqual({ label: "showBarChart" });
+  test("a component the app registered reads as words, never as its identifier", () => {
+    expect(readToolName("showBarChart")).toEqual({ label: "Show bar chart" });
   });
 
   test("the server is dropped when a hyphenated server's words are already in the label", () => {
@@ -195,7 +194,27 @@ describe("this deployment's own tools", () => {
     expect(readToolName("add_tasks", false).label).toBe("Added to your Tasks");
   });
 
-  test("any other bare name is left exactly as it is", () => {
-    expect(readToolName("run_command", true)).toEqual({ label: "run_command" });
+  test("any other bare name reads as words, never as its identifier", () => {
+    expect(readToolName("run_command", true)).toEqual({ label: "Run command" });
+  });
+
+  test("memory reads as what it does to the person's memory", () => {
+    expect(readToolName("recall_personal_memory", true).label).toBe(
+      "Checking memory",
+    );
+    expect(readToolName("recall_personal_memory").label).toBe("Checked memory");
+    expect(readToolName("remember_personal_fact").label).toBe(
+      "Saved to memory",
+    );
+  });
+
+  test("a refused or failed call is named plainly, never as done", () => {
+    expect(
+      readToolName("mcp__google-workspace__gmail_send_reply", "plain").label,
+    ).toBe("Send your email");
+    expect(
+      readToolName("mcp__google-workspace__gmail_search_messages", "plain")
+        .label,
+    ).toBe("Search your email");
   });
 });
