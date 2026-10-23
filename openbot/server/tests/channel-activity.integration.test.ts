@@ -258,6 +258,8 @@ describe("channel activity", () => {
         createdAt: expect.any(Date),
         pinned: false,
         lastReadAt: null,
+        // An ordinary conversation, not an OpenDuet task's own.
+        taskId: null,
       },
     ]);
   });

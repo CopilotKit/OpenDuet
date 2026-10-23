@@ -9,7 +9,10 @@ import { Observable } from "rxjs";
 import { z } from "zod";
 import type { ApprovalRecord } from "../src/approvals/types";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
-import { createProactiveEngine } from "../src/proactive/engine";
+import {
+  createProactiveEngine,
+  type TaskThreads,
+} from "../src/proactive/engine";
 import { createPrivateShareCheck } from "../src/proactive/private-share";
 import {
   createReadOnlyClassifier,
@@ -23,6 +26,14 @@ import type { ProactiveSetting } from "../src/proactive/types";
 import { createTurnRunner, type RunnerLike } from "@openbot/toolkit/run-turn";
 import type { WorkQueue } from "../src/work/queue";
 import { serverTurnAdmission } from "../src/agents/turn-admission";
+
+/** These engines never start a task; one that tried would fail the test loudly. */
+const NO_TASKS: TaskThreads = {
+  open: async () => {
+    throw new Error("This test never opens a task.");
+  },
+  scope: async () => null,
+};
 
 const catalogue = (effects: Record<string, "read" | "write">) => ({
   listServers: async () => [
@@ -326,6 +337,7 @@ describe("proactive run", () => {
       notify: async (_scope, input) => {
         notified.push(input.text);
       },
+      tasks: NO_TASKS,
       startTask: async () => {
         writes.push("task");
       },
@@ -440,6 +452,7 @@ describe("proactive run", () => {
         threadId: "t",
       }),
       notify: async () => undefined,
+      tasks: NO_TASKS,
       startTask: async () => undefined,
       catalogue: {
         listServers: async () => [

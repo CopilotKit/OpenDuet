@@ -13,8 +13,14 @@
  * turn, in the person's own conversation, framed as a check-in it started (`shared/check-in.ts`) and
  * holding only `offer_task`, so it can say what it found and put each suggestion in the thread as a
  * card. It can still not act; the person starts a card or hides it.
+ *
+ * STARTED WORK IS A TASK. Start on a suggestion, and `start_task` from Chat, open a task: a
+ * conversation of its own with the Bot, and the record that names it (openduet/task-store.ts). The
+ * turn runs there, queued as `PROACTIVE_TASK_KIND` and picked up straight away, so Chat stays one
+ * thread with a card for each piece of work rather than splintering into it.
  */
 import { frameCheckIn } from "@openbot/shared/check-in";
+import { frameTaskBrief } from "@openbot/shared/task-brief";
 import { z } from "zod";
 import type { AuditInitiator } from "../audit";
 import type { MemoryStore } from "../memory/store";
@@ -58,6 +64,38 @@ export type ProactiveScope = {
   threadId: string;
 };
 
+/** How a task began. Chat's ask is `asked`; a Start pressed on a check-in's card is `check_in`. */
+export type TaskOrigin = "asked" | "suggestion" | "check_in";
+
+/** A task as the engine needs it: which one, its conversation, and its title. */
+export type OpenedTask = { id: string; channelId: string; title: string };
+
+/** Where a task lives: opened with a conversation of its own, and found again to run its turn. */
+export type TaskThreads = {
+  /** A new conversation with this Bot, and the task record that names it. */
+  open(input: {
+    ownerUserId: string;
+    agentId: string;
+    title: string;
+    why: string | null;
+    origin: TaskOrigin;
+    suggestionId: string | null;
+    sourceApp: string | null;
+    sourceLink: string | null;
+  }): Promise<OpenedTask>;
+  /** The task's own conversation, or null once the person can no longer reach it or its Bot. */
+  scope(ownerUserId: string, taskId: string): Promise<ProactiveScope | null>;
+};
+
+/** What `start_task` hands off from Chat: the ask in the person's words, and where it came from. */
+export type AskedTask = {
+  title: string;
+  instruction: string;
+  why?: string | undefined;
+  source?: string | undefined;
+  link?: string | undefined;
+};
+
 export type ProactiveEngineDeps = {
   store: ProactiveStore;
   memory: Pick<MemoryStore, "formMemory">;
@@ -75,7 +113,9 @@ export type ProactiveEngineDeps = {
     scope: ProactiveScope,
     input: { id: string; text: string; kind: "reply" },
   ): Promise<void>;
-  /** A person-started turn in their channel with this text as their message. */
+  /** Opens tasks and finds their conversations again. See `TaskThreads`. */
+  tasks: TaskThreads;
+  /** A person-started turn in a task's conversation with this text as their message. */
   startTask(
     scope: ProactiveScope,
     input: { runId: string; text: string; signal: AbortSignal },
@@ -201,6 +241,18 @@ export function suggestionNotice(
     ...(why ? [why] : []),
     ...(suggestion.sourceApp ? [`From ${suggestion.sourceApp}`] : []),
   ].join("\n");
+}
+
+/** The first paragraph of a suggestion's detail: why it matters, without the step after it. */
+function whyOf(detail: string): string | null {
+  return detail.split(/\n\s*\n/)[0]?.trim() || null;
+}
+
+/** What a started suggestion says to the Bot, as the person's ask: the title, the detail, the source. */
+function suggestionAsk(
+  suggestion: Pick<ProactiveSuggestion, "title" | "detail" | "sourceLink">,
+) {
+  return `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`;
 }
 
 export function createProactiveEngine(deps: ProactiveEngineDeps) {
@@ -520,10 +572,86 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     settingId: z.string().min(1),
     runId: z.string().min(1),
   });
+  /*
+   * A task's turn. A suggestion's carries its id, and the ask is read from it when the turn runs; an
+   * asked one carries the ask. One queued before tasks existed has no `taskId`, and gets its task
+   * when it runs, so started work never lands in Chat again.
+   */
   const taskSchema = z.object({
     ownerUserId: z.string().min(1),
-    suggestionId: z.string().min(1),
+    taskId: z.string().min(1).optional(),
+    suggestionId: z.string().min(1).optional(),
+    text: z.string().min(1).optional(),
   });
+
+  /** Opens the task a started suggestion becomes, in its own conversation with the suggesting Bot. */
+  function openFor(
+    ownerUserId: string,
+    suggestion: ProactiveSuggestion,
+    origin: TaskOrigin,
+  ) {
+    return deps.tasks.open({
+      ownerUserId,
+      agentId: suggestion.agentId,
+      title: suggestion.title,
+      why: whyOf(suggestion.detail),
+      origin,
+      suggestionId: suggestion.id,
+      sourceApp: suggestion.sourceApp,
+      sourceLink: suggestion.sourceLink,
+    });
+  }
+
+  /** Runs one queued task's turn in its own conversation, as the person's message. */
+  async function runTask(
+    payload: Record<string, unknown>,
+    signal: AbortSignal,
+  ) {
+    const work = taskSchema.parse(payload);
+    let ask = work.text;
+    let taskId = work.taskId;
+    if (work.suggestionId) {
+      const suggestion = await deps.store.suggestion(
+        work.ownerUserId,
+        work.suggestionId,
+      );
+      ask = suggestionAsk(suggestion);
+      taskId ??= (await openFor(work.ownerUserId, suggestion, "suggestion")).id;
+    }
+    if (!taskId || !ask)
+      throw new ProactiveRefusedError("This task has nothing to start.");
+    const scope = await deps.tasks.scope(work.ownerUserId, taskId);
+    if (!scope)
+      throw new ProactiveRefusedError(
+        "This Bot or its channel is no longer available to you.",
+      );
+    await deps.startTask(scope, {
+      runId: `task-${taskId}`,
+      text: frameTaskBrief(ask),
+      signal,
+    });
+  }
+
+  /*
+   * A task starts now, not at the next sweep a minute away: the person was just told "On it". Each
+   * start claims one queued turn, so tasks started together run side by side, one per start, and
+   * the sweep stays the backstop for any a crash left behind.
+   */
+  const kicked = new Set<Promise<unknown>>();
+  function startSoon() {
+    const run = drain(PROACTIVE_TASK_KIND, runTask)
+      .catch((error: unknown) => {
+        console.error(
+          JSON.stringify({
+            type: "proactive-task-error",
+            error: error instanceof Error ? error.name : "UnknownError",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      })
+      .finally(() => kicked.delete(run));
+    kicked.add(run);
+  }
 
   return {
     researchInstruction,
@@ -608,8 +736,15 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         "dismissed",
       );
     },
-    /** The person chose to act on it: a normal, person-started turn in their channel. */
-    async start(ownerUserId: string, suggestionId: string) {
+    /**
+     * The person chose to act on it: a task of its own, opened now, with a person-started turn in its
+     * conversation. `from` is where Start was pressed, so a check-in's card opens a `check_in` task.
+     */
+    async start(
+      ownerUserId: string,
+      suggestionId: string,
+      from: "suggestion" | "check_in" = "suggestion",
+    ): Promise<{ suggestion: ProactiveSuggestion; task: OpenedTask }> {
       const suggestion = await deps.store.suggestion(ownerUserId, suggestionId);
       const setting = await deps.store.get(ownerUserId, suggestion.settingId);
       if (
@@ -622,17 +757,51 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         throw new ProactiveRefusedError(
           "This Bot or its channel is no longer available to you.",
         );
+      // Only one Start wins: the suggestion moves from open to started once.
       const started = await deps.store.resolveSuggestion(
         ownerUserId,
         suggestionId,
         "started",
       );
+      const task = await openFor(ownerUserId, started, from);
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: suggestionId,
-        payload: { ownerUserId, suggestionId },
+        payload: { ownerUserId, suggestionId, taskId: task.id },
       });
-      return started;
+      startSoon();
+      return { suggestion: started, task };
+    },
+    /**
+     * `start_task`: work asked for in Chat, opened as a task with its own conversation and started
+     * there. No cap on how many a person has.
+     */
+    async startAsked(
+      ownerUserId: string,
+      agentId: string,
+      input: AskedTask,
+    ): Promise<OpenedTask> {
+      const task = await deps.tasks.open({
+        ownerUserId,
+        agentId,
+        title: input.title,
+        why: input.why ?? null,
+        origin: "asked",
+        suggestionId: null,
+        sourceApp: input.source ?? null,
+        sourceLink: input.link ?? null,
+      });
+      await deps.queue.offer({
+        kind: PROACTIVE_TASK_KIND,
+        key: `task:${task.id}`,
+        payload: { ownerUserId, taskId: task.id, text: input.instruction },
+      });
+      startSoon();
+      return task;
+    },
+    /** Settles once every task started straight away has finished its turn. For tests and shutdown. */
+    async idle() {
+      while (kicked.size > 0) await Promise.allSettled([...kicked]);
     },
     /** One scheduling pass: offer what is due, then run at most one research turn and one task. */
     async sweep() {
@@ -648,28 +817,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         const { settingId, runId } = payloadSchema.parse(payload);
         await run(settingId, runId, signal);
       });
-      await drain(PROACTIVE_TASK_KIND, async (payload, signal) => {
-        const { ownerUserId, suggestionId } = taskSchema.parse(payload);
-        const suggestion = await deps.store.suggestion(
-          ownerUserId,
-          suggestionId,
-        );
-        const setting = await deps.store.get(ownerUserId, suggestion.settingId);
-        const scope = await deps.resolveScope(
-          ownerUserId,
-          setting.channelId,
-          suggestion.agentId,
-        );
-        if (!scope)
-          throw new ProactiveRefusedError(
-            "This Bot or its channel is no longer available to you.",
-          );
-        await deps.startTask(scope, {
-          runId: `suggestion-${suggestion.id}`,
-          text: `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`,
-          signal,
-        });
-      });
+      await drain(PROACTIVE_TASK_KIND, runTask);
     },
   };
 }

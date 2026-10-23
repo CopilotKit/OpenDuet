@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { CHECK_IN_FRAME, frameCheckIn } from "@openbot/shared/check-in";
+import { frameTaskBrief, TASK_FRAME } from "@openbot/shared/task-brief";
 import { FIRST_DAY_FRAME, frameFirstDay } from "@openbot/shared/first-day";
 import { FIRING_FRAME, frameFiring } from "@openbot/shared/routine-firing";
 import { createAgentProfileStore } from "../src/agents/profile-store";
@@ -389,6 +390,32 @@ describe("naming a claimed conversation", () => {
     for (const line of CHECK_IN_FRAME) expect(excerptSeen).not.toContain(line);
     expect(excerptSeen).not.toContain("suggestionId");
     expect((await summaryOf(channel.id))?.summary).toBe("Priya's broken order");
+  });
+
+  test("titles a task's conversation from the person's ask, not the task frame", async () => {
+    const owner = await createUser();
+    const channel = await createUsedChannel(owner);
+    await offer(channel.id);
+
+    let excerptSeen = "";
+    await summariseClaimedChannels(
+      options({
+        // A task starts with the ask under its frame: see `shared/task-brief.ts`.
+        transcript: transcriptOf(
+          frameTaskBrief("Prepare notes for the Hearth & Co visit."),
+          "Here are your notes for Thursday.",
+        ),
+        title: async (excerpt) => {
+          excerptSeen = excerpt;
+          return "Hearth & Co visit notes";
+        },
+      }),
+    );
+
+    expect(excerptSeen).toContain(
+      "Asked: Prepare notes for the Hearth & Co visit.",
+    );
+    for (const line of TASK_FRAME) expect(excerptSeen).not.toContain(line);
   });
 
   test("two replicas racing for the same conversation name it once", async () => {

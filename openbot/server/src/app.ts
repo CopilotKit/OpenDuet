@@ -110,6 +110,7 @@ import {
 } from "./plugins/store";
 import { REFUSAL_MARKER, vendorAnswer } from "./plugins/tools";
 import { createPageRoutes, type PageStore } from "./openduet/pages";
+import { createTaskRoutes, type TaskStore } from "./openduet/task-store";
 import type { ProactiveEngine } from "./proactive/engine";
 import { createProactiveRoutes } from "./proactive/routes";
 import type { ProactiveStore } from "./proactive/store";
@@ -438,8 +439,11 @@ export function createApp(
     teamBots?: TeamBots;
     /** Pause, reset, Activity and attention for a person's own Bots. See agents/lifecycle.ts. */
     lifecycle?: BotLifecycleServices;
-    /** What OpenDuet made for the person: the Pages tab and the viewer. See openduet/pages.ts. */
-    openduet?: { pages: PageStore };
+    /**
+     * What OpenDuet made for the person, and the tasks it is working on: the Pages tab and the viewer,
+     * and Chat's task cards, the task page and Tasks. See openduet/pages.ts and openduet/task-store.ts.
+     */
+    openduet?: { pages: PageStore; tasks?: TaskStore };
   },
   /**
    * Whether to offer help self-hosting, which also hides it from a deployment that pays for
@@ -1662,6 +1666,11 @@ export function createApp(
     app.route(
       "/api/openduet/pages",
       createPageRoutes(coworker.openduet.pages, requireUser),
+    );
+  if (coworker?.openduet?.tasks)
+    app.route(
+      "/api/openduet/tasks",
+      createTaskRoutes(coworker.openduet.tasks, requireUser),
     );
   if (coworker?.memory)
     app.route(

@@ -253,6 +253,8 @@ import { createRoutineStore } from "./routines/store";
 import { createIntentRouter } from "./routing/classify";
 import { createModelCompleter } from "./routing/model";
 import { createPageStore } from "./openduet/pages";
+import { createTaskStore } from "./openduet/task-store";
+import { createTaskThreads, createTaskTurn } from "./openduet/task-threads";
 import { createOpenDuetTools } from "./openduet/wiring";
 import { reportIntelligenceEntitlement } from "./intelligence-entitlement-check";
 import { createSelfHostBanner } from "./self-host-banner";
@@ -1310,9 +1312,11 @@ const memoryDefaults = createMemoryDefaults({
   channelBots: async (ownerUserId, channelId) =>
     (await channelStore.get(await actorFor(ownerUserId), channelId))
       ?.agentIds ?? null,
-  // The same rule research delivery uses, read when a person speaks (long after it is defined).
+  // The same rule research delivery uses, read when a person speaks (long after it is defined). Never a
+  // task's own conversation: research writes to the person in Chat, and a task's turn speaks for them.
   canDeliver: async (ownerUserId, channelId, agentId) =>
-    (await deliveryScopeFor(ownerUserId, channelId, agentId)) !== null,
+    (await deliveryScopeFor(ownerUserId, channelId, agentId)) !== null &&
+    !(await openDuetTasks.isTaskConversation(ownerUserId, channelId)),
   mintThreadId: () => threadIdentity.mint(),
   // Read when a Bot turn starts, long after `teamBots` below is defined.
   publishedByAnother: (ownerUserId, agentId) =>
@@ -1357,12 +1361,16 @@ const wakeUpStore = createWakeUpStore(database, { auditStore: bootAuditStore });
 
 /**
  * OpenDuet's own tools: the morning brief, read through the plugin store as the person, reply chips,
- * and the pages it makes. See openduet/wiring.ts.
+ * the pages it makes and the tasks it starts. See openduet/wiring.ts.
  */
 const openDuetPages = createPageStore(database);
+const openDuetTasks = createTaskStore(database);
 const openDuetTools = createOpenDuetTools({
   database,
   pages: openDuetPages,
+  // Read when the tool runs, long after the engine below is made.
+  startTask: ({ ownerUserId, agentId, task }) =>
+    proactiveEngine.startAsked(ownerUserId, agentId, task),
   callTool: (input) => pluginStore.callTool(input),
   complete: chooseSkills,
   model: runtimeModel.defaultModel,
@@ -2085,33 +2093,21 @@ const proactiveEngine = createProactiveEngine({
   runTurn: proactiveRunTurn,
   resolveScope: deliveryScopeFor,
   notify: (scope, input) => deliveryNotifications(scope, input),
-  startTask: async (scope, input) => {
-    const actor = await actorFor(scope.ownerUserId);
-    await channelStore.recordActivity(
-      actor,
-      scope.channelId,
-      { text: input.text, agentId: null, at: new Date() },
-      { id: `${input.runId}:input` },
-    );
-    const result = await approvalContinuationRunner({
-      ...scope,
-      routineId: input.runId,
-      instruction: input.text,
-      userMessage: { id: input.runId, role: "user", content: input.text },
-      initiator: PERSON_INITIATOR,
-      signal: input.signal,
-    });
-    if (result.replyText)
-      await channelStore.recordActivity(
-        actor,
-        scope.channelId,
-        { text: result.replyText, agentId: scope.agentId, at: new Date() },
-        { id: `${input.runId}:reply` },
-      );
-  },
+  // Started work runs as a task, in a conversation of its own. See openduet/task-threads.ts.
+  tasks: createTaskThreads({
+    store: openDuetTasks,
+    channels: channelStore,
+    actorFor,
+    scopeFor: deliveryScopeFor,
+  }),
+  startTask: createTaskTurn({
+    channels: channelStore,
+    actorFor,
+    runTurn: approvalContinuationRunner,
+  }),
   /*
-   * The Bot writing first. The same turn as `startTask`, in the same conversation, except nobody
-   * spoke: no line is recorded for the person, the message is the framed check-in, and the initiator
+   * The Bot writing first, in the setting's conversation, which is Chat. Like a task's turn, except
+   * nobody spoke: no line is recorded for the person, the message is the framed check-in, and the initiator
    * is the check-in's, so the turn holds `offer_task` and nothing else. The reply is recorded as the
    * Bot's, which is what tells an open Chat to read the thread again.
    */
@@ -2597,7 +2593,7 @@ const app = createApp(
     },
     memory: { store: personalMemoryStore, ingestion: memoryIngestion },
     proactive: { store: proactiveStore, engine: proactiveEngine },
-    openduet: { pages: openDuetPages },
+    openduet: { pages: openDuetPages, tasks: openDuetTasks },
     responsibilities: {
       store: responsibilityStore,
       engine: responsibilityEngine,

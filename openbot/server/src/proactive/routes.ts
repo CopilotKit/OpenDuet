@@ -77,13 +77,20 @@ export function createProactiveRoutes(
       ),
     }),
   );
+  /*
+   * Starting one opens it as a task, in a conversation of its own (engine.ts). A check-in's card says
+   * so with `{ "from": "check_in" }`; every other Start sends nothing.
+   */
   routes.post("/suggestions/:id/start", async (context) =>
-    context.json({
-      suggestion: await engine.start(
+    context.json(
+      await engine.start(
         context.var.actor.id,
         context.req.param("id"),
+        (await optionalBody(context.req.raw))?.from === "check_in"
+          ? "check_in"
+          : "suggestion",
       ),
-    }),
+    ),
   );
   routes.post("/suggestions/:id/dismiss", async (context) =>
     context.json({
@@ -103,4 +110,16 @@ async function body(request: Request): Promise<unknown> {
   } catch {
     throw new ProactiveRefusedError("The settings could not be read.");
   }
+}
+
+/** A body that may be absent. Present, it has to be JSON. */
+async function optionalBody(
+  request: Request,
+): Promise<Record<string, unknown> | null> {
+  if (!request.headers.get("content-type")?.includes("application/json"))
+    return null;
+  const value = await body(request);
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
