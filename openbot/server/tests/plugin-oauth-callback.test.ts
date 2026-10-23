@@ -555,3 +555,129 @@ describe("a callback whose own checks failed", () => {
     expect(recorded).toEqual([]);
   });
 });
+
+/*
+ * Onboarding's setup checklist offers Connect for Gmail. Somebody who has not finished onboarding is
+ * sent back to its first step from any other page, so the flow returns to the checklist itself,
+ * whether it worked or not.
+ */
+describe("a consent started in onboarding", () => {
+  async function startedFromOnboarding(
+    hono: ReturnType<typeof app>,
+    returnTo:
+      | "onboarding"
+      | "onboarding-apps"
+      | "settings-setup" = "onboarding",
+  ) {
+    const started = await hono.request(
+      `http://t/api/plugins/servers/google-workspace/connect?returnTo=${returnTo}`,
+      { method: "POST" },
+    );
+    const { authorizationUrl } = (await started.json()) as {
+      authorizationUrl: string;
+    };
+    return new URL(authorizationUrl).searchParams.get("state") ?? "";
+  }
+
+  test("comes back to the checklist", async () => {
+    const recorded: Recorded[] = [];
+    const hono = app({ recorded });
+    const state = await startedFromOnboarding(hono);
+
+    await withWillingVendor(async () => {
+      const response = await hono.request(callbackUrl(state));
+      expect(response.headers.get("location")).toBe(
+        "https://app.example/onboarding?step=setup",
+      );
+    });
+    expect(recorded).toHaveLength(1);
+  });
+
+  test("a refusal after the state is read comes back to the checklist too", async () => {
+    const recorded: Recorded[] = [];
+    const hono = app({ recorded, personHasAccess: async () => false });
+    const state = await startedFromOnboarding(hono);
+
+    const response = await hono.request(callbackUrl(state));
+    expect(response.headers.get("location")).toBe(
+      "https://app.example/onboarding?step=setup&connected=failed",
+    );
+    expect(recorded).toEqual([]);
+  });
+
+  test("one started on the Connect your apps step comes back to that step, either way", async () => {
+    const recorded: Recorded[] = [];
+    const hono = app({ recorded });
+    const state = await startedFromOnboarding(hono, "onboarding-apps");
+    await withWillingVendor(async () => {
+      const response = await hono.request(callbackUrl(state));
+      expect(response.headers.get("location")).toBe(
+        "https://app.example/onboarding?step=apps",
+      );
+    });
+    expect(recorded).toHaveLength(1);
+
+    const refusing = app({ recorded: [], personHasAccess: async () => false });
+    const refused = await startedFromOnboarding(refusing, "onboarding-apps");
+    const response = await refusing.request(callbackUrl(refused));
+    expect(response.headers.get("location")).toBe(
+      "https://app.example/onboarding?step=apps&connected=failed",
+    );
+  });
+
+  /*
+   * Cancel on the vendor's consent: the state comes back with `error=access_denied` and no code.
+   * The person goes back to the step they pressed Connect on, not to a page the onboarding gate
+   * would bounce them out of.
+   */
+  test.each([
+    [
+      "onboarding",
+      "https://app.example/onboarding?step=setup&connected=failed",
+    ],
+    [
+      "onboarding-apps",
+      "https://app.example/onboarding?step=apps&connected=failed",
+    ],
+    ["settings-setup", "https://app.example/settings/setup?connected=failed"],
+  ] as const)(
+    "a consent declined from %s comes back to that screen, saying so",
+    async (returnTo, location) => {
+      const recorded: Recorded[] = [];
+      const hono = app({ recorded });
+      const state = await startedFromOnboarding(hono, returnTo);
+
+      const response = await hono.request(
+        `${CALLBACK}?error=access_denied&state=${encodeURIComponent(state)}`,
+      );
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe(location);
+      expect(recorded).toEqual([]);
+    },
+  );
+
+  test("Settings › Setup's Connect comes back to Setup", async () => {
+    const recorded: Recorded[] = [];
+    const hono = app({ recorded });
+    const state = await startedFromOnboarding(hono, "settings-setup");
+    await withWillingVendor(async () => {
+      const response = await hono.request(callbackUrl(state));
+      expect(response.headers.get("location")).toBe(
+        "https://app.example/settings/setup",
+      );
+    });
+    expect(recorded).toHaveLength(1);
+  });
+
+  test("a declined consent with no state still goes to the list", async () => {
+    const hono = app({ recorded: [] });
+    const response = await hono.request(`${CALLBACK}?error=access_denied`);
+    expect(response.headers.get("location")).toBe(FAILED);
+  });
+
+  test("a state nobody can read still goes to the list", async () => {
+    const hono = app({ recorded: [] });
+    const response = await hono.request(callbackUrl("not-a-state"));
+    expect(response.headers.get("location")).toBe(FAILED);
+  });
+});

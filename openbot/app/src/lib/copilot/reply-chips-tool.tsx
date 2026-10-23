@@ -45,14 +45,21 @@ export function ReplyChips({
   toolCallId,
   replies,
 }: {
-  toolCallId: string;
+  /**
+   * The call that offered them, which keeps them live only on the Bot's latest turn. Absent for
+   * chips the app draws itself, such as the first day's (`FirstDayReplies` in chat-transcript.tsx),
+   * whose caller draws them only while they answer the latest turn.
+   */
+  toolCallId?: string;
   replies: readonly string[];
 }) {
   const conversation = useConversationSend();
   const [tapped, setTapped] = useState<string | null>(null);
   // Nowhere to send to, such as CopilotKit's own chat: the Bot's question still reads on its own.
   if (!conversation) return null;
-  const live = tapped === null && conversation.isLatestTurn(toolCallId);
+  const live =
+    tapped === null &&
+    (toolCallId === undefined || conversation.isLatestTurn(toolCallId));
   return (
     // A fieldset is a group to a screen reader, named by its label, so the chips are heard as one set.
     <fieldset
