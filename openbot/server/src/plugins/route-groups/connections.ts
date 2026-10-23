@@ -17,6 +17,7 @@ import {
   authorizationUrlFor,
   type ConnectOrigin,
   challengeFor,
+  connectOriginFrom,
   connectedAccountsUrlFor,
   createVerifier,
   redirectUriFor,
@@ -842,8 +843,7 @@ export function mountConnectionRoutes({
      * than something carried into a sealed state. See {@link ConnectOrigin}: a destination that could
      * name another origin is an open redirect with a consent screen in front of it.
      */
-    const returnTo =
-      context.req.query("returnTo") === "admin" ? "admin" : "settings";
+    const returnTo = connectOriginFrom(context.req.query("returnTo"));
 
     const verifier = createVerifier();
     return context.json({

@@ -45,12 +45,14 @@ skills:
     instructions: >-
       Read the person's recent mail with gmail_search_messages and this week's calendar with
       calendar_list_events, opening a message with gmail_read_message only when its subject is not
-      enough. Then write two short parts. First, what you think they do: their work, the people and
-      companies they deal with most, and what is coming up, using only what the tools returned.
-      Second, three ways you can help, each one line and each tied to something you saw. End by
-      asking them to correct anything that is off. If mail or calendar is not connected, say which
-      one and that it can be connected on the Connections page, and never guess at what you could
-      not read.
+      enough. Then answer in three parts, with a blank line between them. First, who they are and
+      what they do, in plain sentences with no bold or headings and at most 450 characters: their
+      work, the people and companies they deal with most, and what is coming up, using only what
+      the tools returned. Second, "How I'll help:" and three bullets, one line each and under 60
+      characters, each tied to something you saw. Third, end with this sentence on its own: "If any
+      of these sound off, just let me know and I'll learn." If mail or calendar is not connected, say
+      which one and that it can be connected on the Connections page, and never guess at what you
+      could not read.
     tools:
       - google-workspace/gmail_search_messages
       - google-workspace/gmail_read_message
