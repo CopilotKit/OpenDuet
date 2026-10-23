@@ -65,6 +65,13 @@ function runTsc(): string {
   const result = Bun.spawnSync({
     cmd: ["bunx", "tsc", "--noEmit", "--pretty", "false", "-p", project],
     cwd: repoRoot,
+    // The suite outgrew Node's default heap on GitHub's runners: tsc died with "heap out of
+    // memory" on most pull requests, which reads as a type error nobody made.
+    env: {
+      ...process.env,
+      NODE_OPTIONS:
+        `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=6144`.trim(),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
