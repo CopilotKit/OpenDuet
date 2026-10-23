@@ -120,6 +120,33 @@ test("a tool step is named in words and counted as tools", () => {
   ).toBe("Searched the web and used 2 tools");
 });
 
+test("a summary names what happened to the person's own things, not the connector", () => {
+  const gw = (id: string, tool: string) =>
+    call(id, `mcp__google-workspace__${tool}`, {}, '"{}"');
+  expect(
+    summarise(
+      [gw("a", "gmail_search_messages"), gw("b", "calendar_list_events")].map(
+        stepDetails,
+      ),
+    ),
+  ).toBe("Searched your email and checked your calendar");
+  expect(
+    summarise(
+      [gw("a", "gmail_search_messages"), gw("c", "gmail_search_messages")].map(
+        stepDetails,
+      ),
+    ),
+  ).toBe("Searched your email");
+  // A connector with no words of its own is still named by the app it reached.
+  expect(
+    summarise(
+      [call("d", "mcp__google-drive__search_files", {}, '"x"')].map(
+        stepDetails,
+      ),
+    ),
+  ).toBe("Used Google Drive");
+});
+
 test("the tools CopilotKit has a renderer for are the ones the app draws", () => {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <CopilotKitContext.Provider

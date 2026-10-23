@@ -48,7 +48,10 @@ export type DuetIconName =
   | "moon"
   | "phone"
   | "shieldLock"
-  | "reply";
+  | "reply"
+  | "search"
+  | "alert"
+  | "file";
 
 const PATHS: Record<DuetIconName, ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h10" />,
@@ -214,6 +217,24 @@ const PATHS: Record<DuetIconName, ReactNode> = {
     </>
   ),
   reply: <path d="M6 4v7a4 4 0 0 0 4 4h9M15 11l4 4-4 4" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20.5 20.5-4.5-4.5" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9v4M12 17h.01" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M14.5 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-12z" />
+      <path d="M14 2.5v4a1.5 1.5 0 0 0 1.5 1.5h4" />
+    </>
+  ),
   shieldLock: (
     <>
       <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />

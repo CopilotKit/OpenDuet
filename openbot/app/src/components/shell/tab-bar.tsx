@@ -41,7 +41,7 @@ export function TabBar({ current }: { current: ShellTab }) {
   return (
     <nav
       aria-label="Main"
-      className="duet-face duet-glass absolute inset-x-0 bottom-[22px] z-20 mx-auto flex h-16 w-[300px] max-w-[calc(100%-32px)] gap-0.5 rounded-[32px] p-[5px] shadow-duet-glass"
+      className="duet-face duet-glass absolute inset-x-0 bottom-[22px] z-20 mx-auto flex h-16 w-[344px] max-w-[calc(100%-32px)] gap-0.5 rounded-[32px] p-[5px] shadow-duet-glass"
     >
       {TABS.map((tab) => {
         const on = tab.id === current;
@@ -57,7 +57,7 @@ export function TabBar({ current }: { current: ShellTab }) {
             aria-current={on ? "page" : undefined}
             aria-label={badge ? `${tab.label}, ${badge} waiting` : tab.label}
             className={cn(
-              "relative flex flex-1 flex-col items-center justify-center gap-px rounded-[27px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
+              "relative flex flex-1 flex-col items-center justify-center gap-px rounded-[27px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
               on
                 ? "bg-duet-tile text-duet-ink"
                 : "text-duet-ink-2 hover:text-duet-ink",
@@ -67,7 +67,10 @@ export function TabBar({ current }: { current: ShellTab }) {
           >
             <DuetIcon name={tab.icon} size={20} stroke={on ? 2.1 : 1.9} />
             <span
-              className={cn("type-label", on ? "font-semibold" : "font-medium")}
+              className={cn(
+                "type-caption",
+                on ? "font-semibold" : "font-medium",
+              )}
             >
               {tab.label}
             </span>

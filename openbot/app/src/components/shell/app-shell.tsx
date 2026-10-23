@@ -3,7 +3,11 @@ import { type ReactNode, type TouchEvent, useRef, useState } from "react";
 import { AttentionNotifier } from "@/components/bot-profile/attention";
 import { SelfHostBanner } from "@/components/layout/self-host-banner";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
-import { ChatPresenceProvider, useChatServerBusy } from "./chat-presence";
+import {
+  ChatPresenceProvider,
+  useChatServerBusy,
+  useServerWork,
+} from "./chat-presence";
 import { FinishedForYou } from "./finished-for-you";
 import { PageHeader, ShellHeader, useBack } from "./header";
 import { MenuSheet } from "./menu-sheet";
@@ -33,10 +37,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // One socket for the app: it keeps the conversation list and its working dots live.
   useChannelEvents();
   // Work the server runs in Chat that this screen did not start, for the pill and the orb.
-  const chatServerBusy = useChatServerBusy(tab === "chat");
+  const chat = useChatServerBusy(tab === "chat");
+  const chatServerWork = useServerWork(chat.busy, chat.threadId);
 
   return (
-    <ChatPresenceProvider serverBusy={chatServerBusy}>
+    <ChatPresenceProvider serverWork={chatServerWork}>
       <div className="flex h-svh flex-col overflow-hidden bg-duet-surface">
         <AttentionNotifier />
         <FinishedForYou />

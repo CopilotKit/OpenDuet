@@ -1,4 +1,5 @@
 import { IconDeviceMobile, IconSend } from "@tabler/icons-react";
+import { appConfig } from "@/lib/generated/application-config";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
 import {
@@ -34,7 +35,7 @@ export function NativeDevices() {
   const error = reach.error ?? remove.error;
   return (
     <PageSection
-      description="Sign in to the OpenBot app on your phone and turn on notifications to add it here."
+      description={`Sign in to the ${appConfig.brand.productName} app on your phone and turn on notifications to add it here.`}
       title="Your devices"
     >
       {error ? (

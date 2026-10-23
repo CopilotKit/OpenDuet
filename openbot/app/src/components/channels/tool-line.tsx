@@ -83,7 +83,7 @@ export function ToolLine({
       </span>
       <span
         className={cn(
-          "type-label inline-flex min-w-0 items-baseline gap-1.5 font-semibold",
+          "type-sub inline-flex min-w-0 items-baseline gap-1.5 font-medium",
           tone,
           running && "tool-line-running",
         )}
@@ -112,7 +112,7 @@ export function ToolLine({
       {/*
        * The summary IS the line. No marker of its own: the chevron after the label says it opens.
        */}
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 [&::-webkit-details-marker]:hidden">
         {text}
         <span
           aria-hidden

@@ -42,7 +42,6 @@ export const Channel = memo(function Channel({
   name,
   summary,
   lastMessage,
-  lastMessageAt,
   pinned,
   unread,
   busy,
@@ -55,6 +54,7 @@ export const Channel = memo(function Channel({
   summary?: string;
   /** Used as the thread title until the conversation has been named. */
   lastMessage?: string;
+  /** Not drawn: the menu shows no times (parity-spec 2.13). Kept so callers need not change. */
   lastMessageAt?: string;
   pinned: boolean;
   unread: boolean;
@@ -133,7 +133,7 @@ export const Channel = memo(function Channel({
               name={name}
               title={title}
               displayedTitle={threadTitle}
-              lastMessageAt={lastMessageAt}
+              // No time on a menu row (parity-spec 2.13): times live on Tasks and the task page.
               emphasis={emphasis}
               busy={busy}
               unread={unread}

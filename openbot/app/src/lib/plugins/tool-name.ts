@@ -214,6 +214,20 @@ export function stepPhrase(name: string): string | null {
   return STEP_PHRASES.working;
 }
 
+/**
+ * A step named for what happened to the person's own things: their mail and calendar, or one of this
+ * deployment's tools. Null for anything else, which a summary counts rather than names.
+ */
+export function personToolLabel(name: string, running = false): string | null {
+  const own = ownToolLabel(name, running);
+  if (own) return own;
+  const parts = name.split("__");
+  if (parts.length < 3 || parts[0] !== "mcp") return null;
+  const personal = PERSONAL_TOOLS[parts.slice(2).join("__")];
+  if (!personal) return null;
+  return running ? personal.running : personal.done;
+}
+
 /** One of this deployment's own tools in words, or null for any other name. */
 export function ownToolLabel(name: string, running = false): string | null {
   const own = OWN_TOOLS[name];

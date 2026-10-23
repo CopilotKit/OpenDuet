@@ -1,4 +1,5 @@
 import { IconEyeCheck, IconHandStop, IconTerminal2 } from "@tabler/icons-react";
+import { appConfig } from "@/lib/generated/application-config";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
@@ -123,8 +124,9 @@ export function ApprovalSettings() {
                   >
                     {enforced ? "An admin requires this. " : ""}
                     Before a Bot does something that could affect your accounts
-                    or share information, OpenBot checks it against your request
-                    and your rules. If it can't tell, it asks you.
+                    or share information, {appConfig.brand.productName} checks
+                    it against your request and your rules. If it can't tell, it
+                    asks you.
                   </ItemDescription>
                 </ItemContent>
                 <ItemActions>
@@ -154,8 +156,8 @@ export function ApprovalSettings() {
                       inbox.data.preferences.hostCommands
                       ? `An admin limits this to "${HOST_LABELS[inbox.data.hostCommands]}". `
                       : ""}
-                    The OpenBot desktop app still shows you each command before
-                    it runs.
+                    The {appConfig.brand.productName} desktop app still shows
+                    you each command before it runs.
                   </ItemDescription>
                 </ItemContent>
                 <ItemActions>

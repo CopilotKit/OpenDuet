@@ -26,8 +26,9 @@ export function ChannelItemContent({
   pinned?: boolean;
   revealing?: boolean;
 }) {
-  const primaryText = `text-[0.9rem] leading-5 tracking-[-1%] ${unread ? "font-semibold" : "font-medium"}`;
-  const secondaryText = "text-[12px] leading-4 text-muted-foreground";
+  // On the type scale (parity-spec 2.3): the line that leads at the sub size, the other a caption.
+  const primaryText = `type-sub ${unread ? "font-semibold" : "font-medium"}`;
+  const secondaryText = "type-caption text-muted-foreground";
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -46,11 +47,11 @@ export function ChannelItemContent({
           >
             {name}
           </span>
-          <span className="shrink-0 whitespace-nowrap text-[12px] leading-4 text-muted-foreground/70">
+          <span className="type-caption shrink-0 whitespace-nowrap text-muted-foreground">
             {lastMessageAt}
           </span>
           {unread ? (
-            <span className="size-2 shrink-0 rounded-full bg-primary" />
+            <span className="size-2 shrink-0 rounded-full bg-duet-accent" />
           ) : null}
           {pinned ? (
             <IconPinFilled className="size-3 shrink-0 text-muted-foreground/70" />

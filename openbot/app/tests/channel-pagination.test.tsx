@@ -212,14 +212,14 @@ test("message emphasis updates mounted rows from the account preferences cache",
   const view = renderSidebar();
   const agent = await view.findByText("Recent conversation");
   const thread = view.getByText("New conversation");
-  expect(thread.className).toContain("text-[0.9rem]");
+  expect(thread.className).toContain("type-sub");
   act(() =>
     clients[0]?.setQueryData(userPreferencesQueryOptions("user").queryKey, {
       messageListEmphasis: "agent",
       selfHostBannerDismissed: false,
     }),
   );
-  await waitFor(() => expect(agent.className).toContain("text-[0.9rem]"));
+  await waitFor(() => expect(agent.className).toContain("type-sub"));
   expect(thread.className).toContain("text-muted-foreground");
 });
 

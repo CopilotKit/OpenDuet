@@ -562,3 +562,15 @@ body {
 :where(div:has(> iframe.websandbox__frame)) {
   min-height: 200px;
 }
+
+/*
+ * The buttons Streamdown draws on a code block or a table (Copy, Download, Full screen) are 24px
+ * icons. A finger needs 44 (parity-spec 2.11), so each gets that much room around its icon. They live
+ * in a dependency's markup, which is why this is a rule on its attribute rather than a class.
+ */
+[data-streamdown] button {
+  min-width: var(--duet-target);
+  min-height: var(--duet-target);
+  display: inline-grid;
+  place-items: center;
+}
