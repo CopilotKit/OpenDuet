@@ -32,10 +32,10 @@ import {
  * - Any call once a set was held or shown this turn is REFUSED, so one row is drawn per turn.
  *
  * WHY HELD AND NOT REFUSED. Refusing the early call, and telling the Bot to answer and call again,
- * was tried first, live, with five wordings and twenty turns. The answer came every time, and the
- * second call almost never did: the Bot put the choices in prose and stopped, so the person lost
- * the chips. Its early call already names the choices it means to offer; holding it keeps them and
- * still gets the answer written first.
+ * was tried first, live, with five wordings over 22 turns. Once it said nothing was on screen, the
+ * answer came every time, and the second call almost never did: the Bot put the choices in prose and
+ * stopped, so the person lost the chips. Its early call already names the choices it means to offer;
+ * holding it keeps them and still gets the answer written first.
  *
  * A refusal starts with "Refused.", which the app reads as "draw nothing".
  *
