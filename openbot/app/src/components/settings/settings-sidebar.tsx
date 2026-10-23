@@ -4,6 +4,7 @@ import {
   IconChecks,
   IconKey,
   IconLayoutGrid,
+  IconListCheck,
   IconSettings,
 } from "@tabler/icons-react";
 import { Link, type LinkOptions } from "@tanstack/react-router";
@@ -39,6 +40,12 @@ const ITEMS: {
     /* `/settings` prefixes every other route here, and would otherwise light up on all of them. */
     exact: true,
     linkOptions: { to: "/settings" },
+  },
+  {
+    /* The checklist onboarding ends on: what is set up, and what still needs doing. */
+    title: "Setup",
+    icon: IconListCheck,
+    linkOptions: { to: "/settings/setup" },
   },
   {
     /* Where updates go for every Bot at once; how much each Bot sends is on that Bot's page. */

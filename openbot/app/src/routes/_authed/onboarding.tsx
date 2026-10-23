@@ -1,9 +1,14 @@
 import { WEB_HARNESSES } from "@openbot/shared/harnesses";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import {
+  createFileRoute,
+  redirect,
+  useLocation,
+  useNavigate,
+  useRouter,
+} from "@tanstack/react-router";
+import { motion } from "motion/react";
 import * as React from "react";
-import useMeasure from "react-use-measure";
 import { AbstractAvatar } from "@/components/agents/abstract-avatar";
 import { HarnessMark } from "@/components/agents/harness-mark";
 import { MicOrb } from "@/components/duet/mic-orb";
@@ -12,18 +17,131 @@ import { DesktopIllustration } from "@/components/computer/desktop-illustration"
 import { ComputerPlaceholder } from "@/components/computer/placeholder";
 import { SELF_HOST_URL } from "@/components/layout/self-host-banner";
 import { IllustrationFrame } from "@/components/onboarding/illustration-frame";
+import { ConnectAppsStep } from "@/components/onboarding/connect-apps-step";
 import { LaptopIllustration } from "@/components/onboarding/laptop-illustration";
+import { useNotifyStep } from "@/components/onboarding/notify-step";
+import {
+  type OnboardingStep,
+  OnboardingWizard,
+} from "@/components/onboarding/onboarding-wizard";
 import { OrganizationFlow } from "@/components/onboarding/organization-flow";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { SetupChecklist } from "@/components/onboarding/setup-checklist";
+import { buttonVariants } from "@/components/ui/button";
+import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
 import { currentUserQueryOptions, needsOnboarding } from "@/lib/auth/queries";
 import { deploymentCapabilitiesQueryOptions } from "@/lib/deployment/queries";
 import { appConfig } from "@/lib/generated/application-config";
-import { completeOnboardingMutationOptions } from "@/lib/onboarding/mutations";
+import {
+  advanceOnboardingMutationOptions,
+  completeOnboardingMutationOptions,
+} from "@/lib/onboarding/mutations";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 
+/**
+ * Every step, by id, with the number the server stores for it.
+ *
+ * `POST /api/me/onboarding` keeps a step as an integer, so each id has a number of its own. A
+ * number per id, never a position in the list: the three local-evaluation steps join the list only
+ * for somebody trying OpenDuet alone, and a position would mean a different step to them than to
+ * everybody else. 0 is the server's "not started".
+ */
+const STEP_NUMBER = {
+  welcome: 1,
+  computer: 2,
+  roster: 3,
+  local: 4,
+  agents: 5,
+  organization: 6,
+  apps: 7,
+  notify: 8,
+  setup: 9,
+} as const;
+type StepId = keyof typeof STEP_NUMBER;
+
+const isStepId = (value: unknown): value is StepId =>
+  typeof value === "string" && Object.hasOwn(STEP_NUMBER, value);
+
+/** The step a stored number names, or null for "not started" and for a number no step has. */
+function stepForNumber(step: number | undefined): StepId | null {
+  const found = Object.entries(STEP_NUMBER).find(([, at]) => at === step);
+  return found ? (found[0] as StepId) : null;
+}
+
+/**
+ * The step Next was pressed on, kept in the history entry it pushed (`onboardingFrom`). Kept in the
+ * entry rather than in memory, so it survives a reload: the bar's Back after a reload still pops the
+ * entry instead of adding a second one for the same step.
+ */
+type OnboardingEntry = { onboardingFrom?: unknown };
+
+/**
+ * A consent in flight: the step it left from and the history entry it left, in this tab's session
+ * storage so it survives the trip to the vendor and back.
+ */
+const CONSENT_KEY = "openduet-onboarding-consent";
+type ConsentDeparture = { step: StepId; entry: string | null };
+
+/** The key TanStack Router gives the current history entry, or null. */
+function currentEntryKey(): string | null {
+  const state = window.history.state as { __TSR_key?: unknown } | null;
+  return typeof state?.__TSR_key === "string" ? state.__TSR_key : null;
+}
+
+/** Leaves for a vendor's consent from a step, noting where from. */
+function leaveForConsent(step: StepId, url: string) {
+  try {
+    sessionStorage.setItem(
+      CONSENT_KEY,
+      JSON.stringify({ step, entry: currentEntryKey() }),
+    );
+  } catch {
+    // Storage refused: the return still lands on the step, Back just isn't rewritten.
+  }
+  window.location.assign(url);
+}
+
+/** The consent this tab left for, if there is one. Read only; dropped once it has been used. */
+function readConsentDeparture(): ConsentDeparture | null {
+  try {
+    const raw = sessionStorage.getItem(CONSENT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { step?: unknown; entry?: unknown };
+    if (!isStepId(parsed.step)) return null;
+    return {
+      step: parsed.step,
+      entry: typeof parsed.entry === "string" ? parsed.entry : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function dropConsentDeparture() {
+  try {
+    sessionStorage.removeItem(CONSENT_KEY);
+  } catch {
+    // Nothing to drop.
+  }
+}
+
 export const Route = createFileRoute("/_authed/onboarding")({
+  /*
+   * WHERE SOMEBODY IS LIVES IN THE ADDRESS. `?step=<id>` is the step on screen, so a reload stays
+   * on it, browser Back and Forward walk the steps, and a consent started on a step comes back to
+   * it (`?step=apps` or `?step=setup`; see `connectedAccountsUrlFor` on the server).
+   * `?connected=failed` says that consent did not go through, and is dropped once read. Anything
+   * else is ignored.
+   */
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { step?: StepId; connected?: "failed" } => ({
+    // Named even when absent: the router lays this over the raw search, so a key left out would
+    // keep whatever was typed into the address.
+    step: isStepId(search.step) ? search.step : undefined,
+    connected: search.connected === "failed" ? "failed" : undefined,
+  }),
   beforeLoad: async ({ context }) => {
     const user = await context.queryClient.ensureQueryData(
       currentUserQueryOptions(),
@@ -269,32 +387,133 @@ function OrganizationStep() {
   );
 }
 
-const STEPS: Array<() => React.ReactNode> = [
-  () => <WelcomeStep />,
-  () => <ComputerUseStep />,
-  () => <RosterStep />,
-];
+/**
+ * The last step: what this deployment has, and what still needs setting up.
+ *
+ * Nothing on it stops somebody finishing. A required gap is said plainly and the button below still
+ * works, because nobody can set a server's environment from a browser.
+ */
+function SetupStep({
+  openPage,
+  leaveFor,
+  notice,
+}: {
+  openPage: (path: string) => void;
+  leaveFor: (url: string) => void;
+  notice?: string;
+}) {
+  return (
+    <div className="mx-auto flex w-full max-w-md flex-col items-center">
+      <h1 className="type-big text-center font-semibold text-duet-ink">
+        Check your setup
+      </h1>
+      <p className="type-sub mt-2.5 max-w-sm text-center text-duet-ink-2">
+        See what's ready and what needs setting up.
+      </p>
+      <div className="h-6" />
+      <SetupChecklist
+        leaveFor={leaveFor}
+        notice={notice}
+        openPage={openPage}
+        returnTo="onboarding"
+      />
+    </div>
+  );
+}
 
-/** A pane arrives from the side the journey is moving toward, and leaves out the other. */
-const variants = {
-  initial: (direction: number) => ({ x: `${110 * direction}%`, opacity: 0 }),
-  active: { x: "0%", opacity: 1 },
-  exit: (direction: number) => ({ x: `${-110 * direction}%`, opacity: 0 }),
-};
+const STEPS: OnboardingStep[] = [
+  { id: "welcome", render: () => <WelcomeStep /> },
+  { id: "computer", render: () => <ComputerUseStep /> },
+  { id: "roster", render: () => <RosterStep /> },
+];
 
 function RouteComponent() {
   const navigate = useNavigate();
+  const router = useRouter();
+  const location = useLocation();
+  const search = Route.useSearch();
   const complete = useMutation(completeOnboardingMutationOptions(queryClient));
+  const advance = useMutation(advanceOnboardingMutationOptions(queryClient));
+  const me = useQuery(currentUserQueryOptions());
 
-  // Browser state on purpose: the step is not persisted while the wizard is being designed.
-  const [step, setStep] = React.useState(0);
-  const [direction, setDirection] = React.useState(1);
-  // The way out: set once the completion is saved, it fades the whole page and then navigates.
-  const [leaving, setLeaving] = React.useState(false);
-  const [ref, bounds] = useMeasure();
+  // A failed consent is told once, on the step it came back to: not after a reload, and not after
+  // the person has moved on and come back.
+  const [failedOn, setFailedOn] = React.useState(() =>
+    search.connected === "failed" && isStepId(search.step) ? search.step : null,
+  );
 
   /*
-   * The last three slides are for somebody evaluating OpenBot locally, never for an organization's people:
+   * BACK FROM A CONSENT. Leaving for Google's consent leaves its page in this tab's history, so
+   * browser Back right after the return used to land on Google rather than on the step before. The
+   * browser keeps that entry whatever this page does, so the return rewrites the entries after it:
+   * the one it arrived on becomes the step before, and the step itself is pushed on top, from it.
+   * Back then walks to the step before, as it would had the person pressed Next to get here, and
+   * Google's page is one further back. Not on a return to the very entry that left, which is the
+   * person pressing Back on the vendor's page rather than finishing there.
+   */
+  const [returned, setReturned] = React.useState<StepId | null>(() => {
+    const departure = readConsentDeparture();
+    if (!departure || departure.step !== search.step) return null;
+    return departure.entry !== null && departure.entry === currentEntryKey()
+      ? null
+      : departure.step;
+  });
+
+  /*
+   * The step on screen: the address's, else the one the server saved, else the first. Arriving
+   * without one (from the gate's redirect, say) writes it into the address in place, so the entry
+   * the person lands on already names its step. `connected` is dropped the same way, and only it.
+   */
+  const saved = stepForNumber(me.data?.onboarding?.step);
+  const asked = isStepId(search.step) ? search.step : undefined;
+  const current: StepId = asked ?? saved ?? "welcome";
+  React.useEffect(() => {
+    if (returned !== null) return;
+    if (asked !== undefined && search.connected === undefined) return;
+    navigate({ to: "/onboarding", search: { step: current }, replace: true });
+  }, [navigate, current, asked, search.connected, returned]);
+
+  // Saved wherever the person goes, by Next, Back, the browser or a consent's return.
+  const savedStep = me.data?.onboarding?.step;
+  const { mutate: save } = advance;
+  React.useEffect(() => {
+    if (savedStep === undefined || savedStep === STEP_NUMBER[current]) return;
+    save(STEP_NUMBER[current]);
+  }, [current, savedStep, save]);
+
+  /*
+   * NEXT PUSHES, AND BACK RETURNS THROUGH HISTORY WHEN IT CAN. Next adds an entry carrying the step
+   * it was pressed on, so browser Back walks back a step. The bar's Back pops that entry when it was
+   * pushed from the step behind, and otherwise (arriving by a link, say) replaces this entry with
+   * the step behind, so history never holds the same step twice in a row.
+   */
+  const cameFrom = (location.state as OnboardingEntry).onboardingFrom;
+  const move = (to: string, way: "forward" | "back") => {
+    if (!isStepId(to)) return;
+    setFailedOn(null);
+    if (way === "back" && cameFrom === to) {
+      router.history.back();
+      return;
+    }
+    const state: Record<string, unknown> =
+      way === "forward" ? { onboardingFrom: current } : {};
+    navigate({
+      to: "/onboarding",
+      search: { step: to },
+      replace: way === "back",
+      state,
+    });
+  };
+
+  // The way out: set once the completion is saved, it fades the whole page and then navigates. The
+  // destination is home, or the page a checklist row was opened for.
+  const [leaving, setLeaving] = React.useState<string | null>(null);
+  const finish = (to = "/") =>
+    complete.mutate(undefined, { onSuccess: () => setLeaving(to) });
+
+  /*
+   * The three local slides, before the checklist, are for somebody evaluating OpenBot locally, never
+   * for an organization's people:
    * the server says single-user mode, which an organization's deployment, always behind sign-in,
    * cannot be in. Until the answer arrives they are left out, so a slow or failed request never
    * shows an organization's employees a page about deploying OpenBot themselves.
@@ -303,21 +522,84 @@ function RouteComponent() {
    * Intelligence entitlement, and the stack `copilotkit local` installs runs on an enterprise
    * evaluation licence, so every CLI evaluator, the person these slides are for, would never see them.
    */
-  const { data: capabilities } = useQuery(deploymentCapabilitiesQueryOptions());
-  const steps = capabilities?.localEvaluation
-    ? [
-        ...STEPS,
-        () => <LocalStep />,
-        () => <AgentsStep />,
-        () => <OrganizationStep />,
-      ]
-    : STEPS;
-  const last = step === steps.length - 1;
+  const { data: capabilities, isPending: asking } = useQuery(
+    deploymentCapabilitiesQueryOptions(),
+  );
+  const { data: agents } = useQuery(agentListQueryOptions());
+  const notify = useNotifyStep(
+    primaryBot(agents)?.name ?? appConfig.brand.productName,
+  );
+  const steps: OnboardingStep[] = [
+    ...STEPS,
+    ...(capabilities?.localEvaluation
+      ? [
+          { id: "local", render: () => <LocalStep /> },
+          { id: "agents", render: () => <AgentsStep /> },
+          { id: "organization", render: () => <OrganizationStep /> },
+        ]
+      : []),
+    /*
+     * The two optional steps, before the checklist as in Duet. Continue and Not now both move on,
+     * and Not now writes nothing; the checklist after them says what was left.
+     */
+    {
+      id: "apps",
+      render: () => (
+        <ConnectAppsStep
+          failed={failedOn === "apps"}
+          leaveFor={(url) => leaveForConsent("apps", url)}
+        />
+      ),
+      primaryLabel: "Continue",
+      secondary: { label: "Not now" },
+      optional: true,
+    },
+    notify,
+    {
+      id: "setup",
+      render: () => (
+        <SetupStep
+          notice={
+            failedOn === "setup"
+              ? "Couldn't connect your Gmail and Calendar. Try again."
+              : undefined
+          }
+          // Onboarding cannot stay open behind another page, so opening one finishes it first.
+          openPage={(path) => finish(path)}
+          leaveFor={(url) => leaveForConsent("setup", url)}
+        />
+      ),
+    },
+  ];
 
-  const go = (to: number) => {
-    setDirection(to > step ? 1 : -1);
-    setStep(to);
-  };
+  // A local-evaluation step in the address waits for the answer that puts it in the list, rather
+  // than drawing step 1 for a moment and then jumping.
+  const waiting =
+    asking &&
+    (current === "local" || current === "agents" || current === "organization");
+
+  // The rewrite described at `returned`, once the list of steps is known. The order as one string,
+  // so the effect runs when the list changes rather than on every render that rebuilds it.
+  const order = steps.map((step) => step.id).join(" ");
+  React.useEffect(() => {
+    if (returned === null || asking) return;
+    dropConsentDeparture();
+    setReturned(null);
+    const ids = order.split(" ");
+    const at = ids.indexOf(returned);
+    const before = ids[at - 1];
+    if (at === -1 || !isStepId(before)) return;
+    /*
+     * Through the history itself, flushed between the two: the router queues history writes and
+     * folds a replace followed by a push into one push, which left the arrival entry as it was.
+     */
+    const href = (step: StepId) =>
+      router.buildLocation({ to: "/onboarding", search: { step } }).href;
+    router.history.replace(href(before), {});
+    router.history.flush();
+    const state: Record<string, unknown> = { onboardingFrom: before };
+    router.history.push(href(returned), state);
+  }, [returned, asking, order, router]);
 
   return (
     // Outside `_app` on purpose: no sidebar and no chrome until onboarding is done.
@@ -326,85 +608,32 @@ function RouteComponent() {
     // over a half-faded wizard.
     <motion.div
       animate={{ opacity: leaving ? 0 : 1 }}
-      className={`min-h-svh overflow-hidden flex flex-col items-center justify-center w-full ${leaving ? "pointer-events-none" : ""}`}
+      className={`min-h-svh w-full ${leaving ? "pointer-events-none" : ""}`}
       initial={false}
       onAnimationComplete={() => {
         if (leaving) {
-          navigate({ to: "/" });
+          navigate({ to: leaving as "/" });
         }
       }}
       transition={{ duration: 0.5, ease: "easeInOut" }}
     >
-      <div className="mx-auto w-full max-w-2xl px-4">
-        <MotionConfig transition={{ duration: 0.5, type: "spring", bounce: 0 }}>
-          {/* The frame follows each pane's height, so the buttons glide instead of jumping. */}
-          <motion.div
-            animate={{ height: bounds.height > 0 ? bounds.height : "auto" }}
-            className="overflow-hidden"
-          >
-            <div ref={ref}>
-              <AnimatePresence
-                custom={direction}
-                initial={false}
-                mode="popLayout"
-              >
-                <motion.div
-                  animate="active"
-                  custom={direction}
-                  exit="exit"
-                  initial="initial"
-                  key={step}
-                  variants={variants}
-                >
-                  {steps[step]?.()}
-                </motion.div>
-              </AnimatePresence>
-
-              {complete.error ? (
-                <p className="mt-4 text-destructive text-sm" role="alert">
-                  {complete.error.message}
-                </p>
-              ) : null}
-
-              <motion.div
-                className="mt-20 flex flex-col items-center justify-center max-w-xs gap-4 w-full mx-auto"
-                layout
-              >
-                <Button
-                  className="w-full"
-                  disabled={complete.isPending}
-                  onClick={() => {
-                    if (last) {
-                      complete.mutate(undefined, {
-                        onSuccess: () => setLeaving(true),
-                      });
-                    } else {
-                      go(step + 1);
-                    }
-                  }}
-                  size="lg"
-                >
-                  {complete.isPending
-                    ? "Saving…"
-                    : last
-                      ? "Get started"
-                      : "Continue"}
-                </Button>
-                {step !== 0 && (
-                  <Button
-                    className="w-full"
-                    onClick={() => go(step - 1)}
-                    variant="secondary"
-                    size="lg"
-                  >
-                    Back
-                  </Button>
-                )}
-              </motion.div>
-            </div>
-          </motion.div>
-        </MotionConfig>
-      </div>
+      {waiting ? null : (
+        <OnboardingWizard
+          finishLabel={`Start using ${appConfig.brand.productName}`}
+          finishing={complete.isPending}
+          onMove={move}
+          stepId={current}
+          notice={
+            complete.error ? (
+              <p className="type-sub text-center text-duet-red" role="alert">
+                {complete.error.message}
+              </p>
+            ) : null
+          }
+          onFinish={() => finish()}
+          steps={steps}
+        />
+      )}
     </motion.div>
   );
 }

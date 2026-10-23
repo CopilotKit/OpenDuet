@@ -167,6 +167,26 @@ const flown = () =>
 describe("dragging the suggestion card", () => {
   const TITLE = "Answer Rosa about the glaze substitute";
 
+  test("the card is what the swipe blurs, crisp at rest, with its Start and Hide marks on it", async () => {
+    serve([suggestion("s1", "openduet", TITLE)]);
+    const view = inChat(<ChatSuggestionCard />);
+    const title = await view.findByText(TITLE);
+    const content = title.closest<HTMLElement>("[data-swipe-content]");
+    if (!content)
+      throw new Error("the card is not inside the swipe's content layer");
+    // The whole card, glass and all, so a drag blurs every word of it. At rest, no filter at all.
+    expect(content.querySelector("[role=region]")).toBeTruthy();
+    expect(content.style.filter).toBe("none");
+    const layer = content.parentElement as HTMLElement;
+    for (const side of ["start", "hide"]) {
+      const mark = layer.querySelector<HTMLElement>(
+        `[data-swipe-mark="${side}"]`,
+      );
+      expect(mark?.getAttribute("aria-hidden")).toBe("true");
+      expect(mark?.style.opacity).toBe("0");
+    }
+  });
+
   test("dragged right past the threshold, it starts and says so", async () => {
     const calls = serve([suggestion("s1", "openduet", TITLE)]);
     const view = inChat(<ChatSuggestionCard />);

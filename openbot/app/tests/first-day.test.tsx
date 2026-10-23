@@ -16,13 +16,19 @@ import * as ChannelChatModule from "@/components/channels/channel-chat";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
 import {
   FIRST_DAY_PLAN,
+  FIRST_DAY_PLAN_WITHOUT_MAIL,
+  FIRST_DAY_REQUEST_WITHOUT_MAIL,
+  firstDayPlan,
   firstDayWelcome,
   firstNameOf,
 } from "@/components/channels/first-day-greeting";
 import { takeFirstMessage } from "@/components/channels/transcript-messages";
 import { ChatPresenceProvider } from "@/components/shell/chat-presence";
 import { ChatScreen } from "@/components/shell/chat-screen";
-import { FIRST_DAY_REQUEST } from "@/components/shell/first-day";
+import {
+  FIRST_DAY_CLOSE,
+  FIRST_DAY_REQUEST,
+} from "@/components/shell/first-day";
 import { agentKeys } from "@/lib/agents/queries";
 import { type AuthenticatedUser, authKeys } from "@/lib/auth/queries";
 import { frameFirstDay } from "@/lib/channels/first-day";
@@ -49,6 +55,10 @@ type Request = { method: string; path: string; body: unknown };
 let requests: Request[] = [];
 let answerMe: () => Promise<Response>;
 let answerCreate: () => Promise<Response>;
+/** What app access says about Gmail and Calendar on the Bot. Ready unless a test says otherwise. */
+let answerGmail: () => Promise<Response> = async () =>
+  Response.json({ app: { key: "google-workspace", state: "ready" } });
+const GMAIL_PATH = "/api/plugins/for/openduet/apps/google-workspace";
 
 const BOT = {
   id: "openduet",
@@ -102,6 +112,8 @@ afterEach(() => {
   requests = [];
   window.localStorage.clear();
   appQueryClient.removeQueries({ queryKey: authKeys.currentUser() });
+  answerGmail = async () =>
+    Response.json({ app: { key: "google-workspace", state: "ready" } });
 });
 
 afterAll(async () => {
@@ -117,6 +129,7 @@ function serve() {
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
     requests.push({ method, path, body });
     if (path === "/api/me") return answerMe();
+    if (path === GMAIL_PATH) return answerGmail();
     if (path === "/api/route" && method === "POST")
       return Response.json({
         agentId: BOT.id,
@@ -229,8 +242,40 @@ describe("what Chat asks for on the first day", () => {
     expect(FIRST_DAY_REQUEST).toMatch(/^Get to know me\./);
     expect(FIRST_DAY_REQUEST).toContain("mail");
     expect(FIRST_DAY_REQUEST).toContain("calendar");
-    expect(FIRST_DAY_REQUEST).toContain("three ways");
-    expect(FIRST_DAY_REQUEST).toContain("correct");
+    // S11.1's three parts, with the lines the transcript splits them at.
+    expect(FIRST_DAY_REQUEST).toContain(
+      "three parts, with a blank line between them",
+    );
+    expect(FIRST_DAY_REQUEST).toContain("no bold or headings");
+    expect(FIRST_DAY_REQUEST).toContain("at most 450 characters");
+    expect(FIRST_DAY_REQUEST).toContain('"How I\'ll help:"');
+    // Under 60 asked, so the answer lands under S11.1's 70: asked for 70, bullets ran to 80.
+    expect(FIRST_DAY_REQUEST).toContain("under 60 characters");
+    expect(FIRST_DAY_REQUEST).toContain(FIRST_DAY_CLOSE);
+    // And nothing about reply buttons, which made the model reach for them.
+    expect(FIRST_DAY_REQUEST).not.toMatch(/repl|button|tap/i);
+  });
+});
+
+describe("what Chat asks for when it can't read mail", () => {
+  test("no reading, what it can do now, and the card to connect", () => {
+    expect(FIRST_DAY_REQUEST_WITHOUT_MAIL).toMatch(/^Get to know me\./);
+    expect(FIRST_DAY_REQUEST_WITHOUT_MAIL).toContain("aren't connected");
+    expect(FIRST_DAY_REQUEST_WITHOUT_MAIL).toContain("don't try to read them");
+    // Named by its id, so the card's tool can find it.
+    expect(FIRST_DAY_REQUEST_WITHOUT_MAIL).toContain(
+      "show me the card to connect them: it is one app, google-workspace, but don't write that id to me.",
+    );
+  });
+
+  test("its plan promises no mail, and every other request keeps the mail plan", () => {
+    expect(firstDayPlan(FIRST_DAY_REQUEST_WITHOUT_MAIL)).toBe(
+      FIRST_DAY_PLAN_WITHOUT_MAIL,
+    );
+    expect(FIRST_DAY_PLAN_WITHOUT_MAIL).not.toMatch(/check your|read your/);
+    expect(firstDayPlan(FIRST_DAY_REQUEST)).toBe(FIRST_DAY_PLAN);
+    // A first day sent before the choice existed is drawn as it was sent.
+    expect(firstDayPlan("Get to know me.")).toBe(FIRST_DAY_PLAN);
   });
 });
 
@@ -286,6 +331,33 @@ describe("the transcript on the first day", () => {
     expect(view.container.textContent).not.toContain(FIRST_DAY_REQUEST);
   });
 
+  test("draws the plan that went with the request, so no mail is promised without it", async () => {
+    appQueryClient.setQueryData(
+      authKeys.currentUser(),
+      userNamed("transcript-no-mail", "Maya Chen"),
+    );
+    const view = render(
+      <ChatTranscript
+        messages={[
+          {
+            id: "first-day-no-mail",
+            role: "user",
+            content: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, {
+              mail: false,
+            }),
+          },
+        ]}
+      />,
+    );
+    await settleReactWork();
+
+    expect(view.getByText(FIRST_DAY_PLAN_WITHOUT_MAIL)).toBeTruthy();
+    expect(view.queryByText(FIRST_DAY_PLAN)).toBeNull();
+    expect(view.container.textContent).not.toContain(
+      FIRST_DAY_REQUEST_WITHOUT_MAIL,
+    );
+  });
+
   test("says no name when the account's name is only an email address", async () => {
     appQueryClient.setQueryData(
       authKeys.currentUser(),
@@ -334,6 +406,68 @@ describe("Chat on the first day", () => {
     expect(takeFirstMessage(CREATED.id)).toBe(frameFirstDay(FIRST_DAY_REQUEST));
     await settleReactWork();
     expect(routed()).toHaveLength(1);
+  });
+
+  test("with Gmail and Calendar not connected, it asks for what it can do, not for mail", async () => {
+    answerGmail = async () =>
+      Response.json({
+        app: { key: "google-workspace", state: "not_connected" },
+      });
+    answerCreate = async () => Response.json({ channel: CREATED });
+    const view = openChat([], { user: userNamed("no-mail", "Maya") });
+
+    await view.findByTestId("ongoing-chat");
+    expect(routed()).toHaveLength(1);
+    expect(routed()[0]?.body).toMatchObject({
+      text: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+    });
+    expect(takeFirstMessage(CREATED.id)).toBe(
+      frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+    );
+  });
+
+  test("draws the plan without mail while that conversation is being made", async () => {
+    answerGmail = async () =>
+      Response.json({ app: { key: "google-workspace", state: "not_granted" } });
+    const creating = held();
+    answerCreate = () => creating.promise;
+    const view = openChat([], { user: userNamed("no-mail-drawing", "Maya") });
+
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(view.getByText(FIRST_DAY_PLAN_WITHOUT_MAIL)).toBeTruthy();
+    expect(view.queryByText(FIRST_DAY_PLAN)).toBeNull();
+
+    await act(async () => creating.settle(Response.json({ channel: CREATED })));
+    await view.findByTestId("ongoing-chat");
+    takeFirstMessage(CREATED.id);
+  });
+
+  test("a Gmail state that could not be read promises no mail either", async () => {
+    answerGmail = async () => Response.json({ error: "nope" }, { status: 503 });
+    answerCreate = async () => Response.json({ channel: CREATED });
+    const view = openChat([], { user: userNamed("gmail-unread", "Maya") });
+
+    await view.findByTestId("ongoing-chat");
+    expect(takeFirstMessage(CREATED.id)).toBe(
+      frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+    );
+  });
+
+  test("waits for whether it can read mail before it greets", async () => {
+    const gmail = held();
+    answerGmail = () => gmail.promise;
+    answerCreate = async () => Response.json({ channel: CREATED });
+    const view = openChat([], { user: userNamed("waits-for-gmail", "Maya") });
+
+    await settleReactWork();
+    expect(routed()).toHaveLength(0);
+    await act(async () =>
+      gmail.settle(
+        Response.json({ app: { key: "google-workspace", state: "ready" } }),
+      ),
+    );
+    await view.findByTestId("ongoing-chat");
+    expect(takeFirstMessage(CREATED.id)).toBe(frameFirstDay(FIRST_DAY_REQUEST));
   });
 
   test("draws the greeting while the conversation is being made, with no Get to know me button", async () => {
