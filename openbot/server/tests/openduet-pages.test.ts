@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { FIX_SILENTLY } from "../src/openduet/page-content";
 import {
   PAGE_TOOL,
   type PageInput,
@@ -230,7 +231,7 @@ describe("the make_page tool", () => {
       expect(answer).toStartWith("Refused. make_page could not save this.");
       expect(answer).toContain(where);
       expect(answer).toEndWith(
-        "Fix it and call make_page again. Don't mention this to the person.",
+        `Fix it and call make_page again. ${FIX_SILENTLY}`,
       );
     }
   });

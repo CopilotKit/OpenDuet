@@ -9,22 +9,29 @@ import type { Database } from "../db/client";
 import { openduetPages } from "../db/schema/openduet";
 import { REFUSAL_MARKER } from "../plugins/tools";
 import {
+  closed,
+  ENFORCED,
+  FIX_SILENTLY,
+  type Limits,
+  line,
   MAX_BLOCKS,
   MAX_SLIDE_BLOCKS,
   MAX_SLIDES,
   MAX_SUMMARY,
   MAX_TITLE,
+  many,
   PAGE_KINDS,
   type PageBlock,
   type PageContent,
   type PageKind,
   type PageSlide,
-  pageBlockSchema,
-  pageSlideSchema,
+  pageBlockSchemaWith,
+  pageSlideSchemaWith,
   SLIDE_MAX_BARS,
   SLIDE_MAX_BULLETS,
   SLIDE_MAX_LIST,
   SLIDE_MAX_METRICS,
+  STATED,
 } from "./page-content";
 
 /*
@@ -69,13 +76,10 @@ export class PageNotFoundError extends Error {
   }
 }
 
-const inputSchema = z
-  .object({
-    id: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
+/** What `make_page` takes, with `limits` enforced (the parser) or only stated (the schema offered). */
+function inputSchemaWith(limits: Limits) {
+  const input = closed(limits, {
+    id: line(limits, 64)
       .optional()
       .describe(
         "To revise a page you already made, its id from that call's result. Leave it out to make a new one.",
@@ -85,38 +89,25 @@ const inputSchema = z
       .describe(
         '"page" for something to read or keep, "slides" for a deck to present.',
       ),
-    title: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_TITLE)
-      .describe(`A short name, at most ${MAX_TITLE} characters.`),
-    summary: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_SUMMARY)
+    title: line(limits, MAX_TITLE).describe(
+      `A short name, at most ${MAX_TITLE} characters.`,
+    ),
+    summary: line(limits, MAX_SUMMARY)
       .optional()
       .describe(
         `One line on what it is, at most ${MAX_SUMMARY} characters. Shown under the title in the Pages list.`,
       ),
-    blocks: z
-      .array(pageBlockSchema)
-      .min(1)
-      .max(MAX_BLOCKS)
+    blocks: many(limits, pageBlockSchemaWith(limits), MAX_BLOCKS)
       .optional()
       .describe(`A page's content, in order. Required for "page".`),
-    slides: z
-      .array(pageSlideSchema)
-      .min(1)
-      .max(MAX_SLIDES)
+    slides: many(limits, pageSlideSchemaWith(limits), MAX_SLIDES)
       .optional()
       .describe(
         `A deck's slides, in order, each a title and at most ${MAX_SLIDE_BLOCKS} blocks that read in full on a phone. Required for "slides".`,
       ),
-  })
-  .strict()
-  .superRefine((value, context) => {
+  });
+  if (!limits.enforce) return input;
+  return input.superRefine((value, context) => {
     if (value.kind === "page" && !value.blocks)
       context.addIssue({
         code: "custom",
@@ -142,26 +133,40 @@ const inputSchema = z
         message: 'A "slides" deck takes slides, not blocks.',
       });
   });
-export type PageInput = z.infer<typeof inputSchema>;
+}
+/** What `make_page` takes, every limit enforced: the parser `execute` runs. */
+export const pageInputSchema = inputSchemaWith(ENFORCED);
+export type PageInput = z.infer<typeof pageInputSchema>;
 
 /**
- * Why the input was refused, in a line the model can act on: where, and what was wrong there.
- * The first issue is enough. A model fixes one thing at a time, and a list of ten reads as noise.
- * A slide too full for a phone says how to split it (see `slideHeight` in page-content.ts).
+ * The schema the model is offered, and the one the AI SDK checks a call against before the tool
+ * runs. The same as `pageInputSchema` written out as JSON Schema, limits and all, but it checks only the
+ * shape: a call over a limit reaches `execute`, so the refusal the model reads is `refusalFor`'s.
+ */
+export const offeredInputSchema = inputSchemaWith(STATED);
+
+/** How many of a refusal's issues it names. A deck's slides fail apart, so it names more than one. */
+const MOST_ISSUES = 6;
+
+/**
+ * Why the input was refused, in lines the model can act on: where, and what was wrong there. Every
+ * slide that does not fit is named, so a deck is fixed in one retry rather than one per slide.
  *
- * The retry is between the model and the tool. The person sees one card when it lands, never a
- * line about a cap or a split.
+ * The retry is between the model and the tool, which is why it ends on `FIX_SILENTLY`. The slide
+ * refusals carry that line themselves; it is said once here.
  */
 function refusalFor(error: z.ZodError): string {
-  const issue = error.issues[0];
-  const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
-  return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${where}${issue?.message ?? "Invalid arguments."} Fix it and call ${PAGE_TOOL} again. Don't mention this to the person.`;
+  const lines = error.issues.slice(0, MOST_ISSUES).map((issue) => {
+    const where = issue.path.length ? `${issue.path.join(".")}: ` : "";
+    return `${where}${issue.message.replace(FIX_SILENTLY, "").trim()}`;
+  });
+  return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${lines.join(" ") || "Invalid arguments."} Fix it and call ${PAGE_TOOL} again. ${FIX_SILENTLY}`;
 }
 
 export function parsePageInput(
   input: unknown,
 ): { ok: true; value: PageInput } | { ok: false; refusal: string } {
-  const parsed = inputSchema.safeParse(input ?? {});
+  const parsed = pageInputSchema.safeParse(input ?? {});
   return parsed.success
     ? { ok: true, value: parsed.data }
     : { ok: false, refusal: refusalFor(parsed.error) };
@@ -293,11 +298,12 @@ export function pageTools(options: {
         'Use kind "page" with blocks for anything to read, and kind "slides" with slides for a deck to present.',
         "A dashboard is a page that starts with a text block holding one short headline sentence (under 90 characters), then a metrics block of up to 8 tiles, then anything else, such as a list block of what to look at next.",
         "Blocks: heading, text, bullets, metrics (label, value, optional note), bars (a bar chart of labelled numbers) and list (rows worth a closer look).",
-        `A slide is read on a phone, in full: a title and at most ${MAX_SLIDE_BLOCKS} blocks, with at most ${SLIDE_MAX_METRICS} metrics, ${SLIDE_MAX_BULLETS} bullets, ${SLIDE_MAX_LIST} list rows or ${SLIDE_MAX_BARS} bars, and less when blocks share a slide. Keep figures and bar labels short. When there is more, use more slides.`,
+        `A slide is read on a phone, in full: a title and at most ${MAX_SLIDE_BLOCKS} blocks, with at most ${SLIDE_MAX_METRICS} metrics, ${SLIDE_MAX_BULLETS} bullets, ${SLIDE_MAX_LIST} list rows or ${SLIDE_MAX_BARS} bars, and less when blocks share a slide: a chart or a list usually wants a slide of its own. Keep figures short. When there is more, use more slides rather than leave anything out.`,
+        'If a call is refused, fix what it names and call make_page again, silently: write nothing to the person until it is saved, never tell them about a limit, a split, what fits on a slide or a retry, and never switch to a page or to another tool instead of the deck they asked for. If a deck needs more slides than they asked for, say only how many it has, such as "It\'s 3 slides.", and never why.',
         "The app shows it as a card under your message, and the person opens it from there. So never paste its content into the chat: write one or two sentences about it, such as what it covers and how long it takes to read.",
         "To change one you already made, call it again with that page's id and the whole new content.",
       ].join(" "),
-      parameters: inputSchema,
+      parameters: offeredInputSchema,
       initiator: options.initiator,
       async execute(args) {
         const parsed = parsePageInput(args);

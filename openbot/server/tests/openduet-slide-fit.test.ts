@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { barsLayout, metricColumns, widthOf } from "@openbot/shared/slide-fit";
+import { z } from "zod";
 import {
+  FIX_SILENTLY,
   MAX_BARS,
   MAX_BULLETS,
   MAX_LIST,
@@ -11,7 +14,14 @@ import {
   SLIDE_MAX_METRICS,
   slideHeight,
 } from "../src/openduet/page-content";
-import { parsePageInput } from "../src/openduet/pages";
+import {
+  offeredInputSchema,
+  type PageInput,
+  pageInputSchema,
+  type PageRecord,
+  pageTools,
+  parsePageInput,
+} from "../src/openduet/pages";
 
 /*
  * A deck is only worth saving if every slide can be read in full on a phone. These tests hold the
@@ -136,13 +146,18 @@ describe("a deck the review made, which the viewer cut short", () => {
     expect(answer).toContain("slides.0: ");
     expect(answer).toContain("too full to read on a phone");
     expect(answer).toContain("new slide");
+    expect(answer).toContain("Use more slides rather than leave anything out.");
     expect(answer).toEndWith(
-      "Fix it and call make_page again. Don't mention this to the person.",
+      `Fix it and call make_page again. ${FIX_SILENTLY}`,
     );
+    // Said once, though the slide's own message carries it too.
+    expect(answer.split(FIX_SILENTLY)).toHaveLength(2);
   });
 
-  test("the chart slide with four long bullets is refused too", () => {
-    expect(refusal(deck(hearth))).toContain("slides.0: ");
+  test("every slide that doesn't fit is named in one refusal, so the deck is fixed in one retry", () => {
+    const answer = refusal(deck(ordersAtAGlance, hearth));
+    expect(answer).toContain("slides.0: ");
+    expect(answer).toContain("slides.1: ");
   });
 
   test("seven decision rows on one slide are refused, naming the most a slide holds", () => {
@@ -249,40 +264,76 @@ describe("what one slide holds", () => {
     ]);
   });
 
-  test("a figure too wide for its tile is refused rather than broken mid-number", () => {
+  test("figures too wide for half a slide take a whole-width tile each, rather than breaking", () => {
+    const wide = {
+      type: "metrics" as const,
+      items: [
+        { label: "Revenue", value: "$1,234,567.89" },
+        { label: "Orders", value: "1,204" },
+      ],
+    };
+    expect(metricColumns(wide)).toBe(1);
+    expect(parsePageInput(one(wide)).ok).toBe(true);
+    expect(
+      metricColumns({ type: "metrics", items: [wide.items[1], wide.items[1]] }),
+    ).toBe(2);
+  });
+
+  test("a figure too wide for even a whole-width tile is refused rather than broken mid-number", () => {
+    // Cyrillic counts at its widest glyph, about an em: 15 of these run past a whole tile.
+    const value = "Ж".repeat(15);
+    expect(widthOf(value, 18, "bold")).toBeGreaterThan(278);
     const answer = refusal(
-      one({
-        type: "metrics",
-        items: [
-          { label: "Revenue", value: "$1,234,567.89" },
-          { label: "Orders", value: "1,204" },
+      one({ type: "metrics", items: [{ label: "Revenue", value }] }),
+    );
+    expect(answer).toContain(`slides.0.blocks.0.items.0.value: "${value}"`);
+    expect(answer).toEndWith(FIX_SILENTLY);
+  });
+
+  test("a weekday chart with full day names is laid out in rows, not refused", () => {
+    const week = {
+      type: "bars" as const,
+      label: "Emails by day",
+      items: [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+      ].map((label, value) => ({ label, value: 10 + value })),
+    };
+    // At seven columns each is about 38px: "Mon" fits, "Wednesday" doesn't, so the bars lie in rows.
+    expect(barsLayout(week)).toBe("rows");
+    expect(
+      barsLayout({
+        ...week,
+        items: week.items.map((item) => ({
+          ...item,
+          label: item.label.slice(0, 3),
+        })),
+      }),
+    ).toBe("columns");
+    const parsed = parsePageInput(one(week));
+    if (!parsed.ok) throw new Error(parsed.refusal);
+    // Rows are taller than columns, and the measure counts them as rows.
+    expect(
+      slideHeight({ title: "Orders by day", blocks: [week] }),
+    ).toBeGreaterThan(
+      slideHeight({
+        title: "Orders by day",
+        blocks: [
+          {
+            ...week,
+            items: week.items.map((item) => ({
+              ...item,
+              label: item.label.slice(0, 3),
+            })),
+          },
         ],
       }),
     );
-    expect(answer).toContain("slides.0.blocks.0.items.0.value: ");
-    expect(answer).toContain("$1,234,567.89");
-  });
-
-  test("a bar label too wide for its bar is refused, saying to shorten it or use fewer bars", () => {
-    const answer = refusal(
-      one({
-        type: "bars",
-        items: [
-          "Monday",
-          "Tuesday",
-          "Wednesday",
-          "Thursday",
-          "Friday",
-          "Saturday",
-          "Sunday",
-        ].map((label, value) => ({ label, value })),
-      }),
-    );
-    // At seven bars a column is about 37px: "Mon" fits, "Monday" doesn't.
-    expect(answer).toContain(
-      'slides.0.blocks.0.items.0.label: "Monday" is too wide',
-    );
-    expect(answer).toContain("fewer bars");
   });
 
   test("a long title wraps rather than being refused, up to the 80-character cap", () => {
@@ -299,6 +350,17 @@ describe("the fit check's measure", () => {
     expect(SLIDE_FIT_HEIGHT).toBeLessThanOrEqual(298);
   });
 
+  test("Latin Extended, Greek and Cyrillic count at an em or more, so a word in them never reads short", () => {
+    for (let code = 0x0100; code <= 0x052f; code++) {
+      // Combining marks take no room of their own.
+      if (code >= 0x0300 && code <= 0x036f) continue;
+      expect(
+        widthOf(String.fromCodePoint(code), 13, "regular"),
+      ).toBeGreaterThanOrEqual(13);
+    }
+    expect(widthOf("é", 13, "regular")).toBeLessThan(13);
+  });
+
   test("more words make a taller slide, never a shorter one", () => {
     const short = slideHeight({
       title: "Orders",
@@ -309,5 +371,86 @@ describe("the fit check's measure", () => {
       blocks: [{ type: "text", text: "Weekends grew. ".repeat(12) }],
     });
     expect(long).toBeGreaterThan(short);
+  });
+});
+
+describe("what the model is offered, and what it reads when it is refused", () => {
+  /** A JSON Schema with every object's keys in order, so two can be compared as they mean. */
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([key, inner]) => [key, canonical(inner)]),
+          )
+        : value;
+
+  test("the offered schema states exactly the limits the parser enforces", () => {
+    const tool = pageTools({
+      save: async () => {
+        throw new Error("not saved");
+      },
+      initiator: { kind: "person" },
+    })[0];
+    expect(tool?.parameters).toBe(offeredInputSchema);
+    for (const io of ["input", "output"] as const) {
+      const offered = z.toJSONSchema(offeredInputSchema, { io });
+      const enforced = z.toJSONSchema(pageInputSchema, { io });
+      expect(JSON.stringify(canonical(offered))).toContain('"maxItems":5');
+      expect(canonical(offered)).toEqual(canonical(enforced));
+    }
+  });
+
+  test("a call over a slide's limits passes the offered schema, so the tool's own refusal is what the model reads", async () => {
+    const tooMany = deck({
+      title: "What needs a decision",
+      blocks: [
+        {
+          type: "list",
+          items: Array.from({ length: 7 }, (_, i) => ({ text: `Row ${i}` })),
+        },
+      ],
+    });
+    expect(offeredInputSchema.safeParse(tooMany).success).toBe(true);
+    const saved: PageInput[] = [];
+    const [tool] = pageTools({
+      save: async (input) => {
+        saved.push(input);
+        return {} as PageRecord;
+      },
+      initiator: { kind: "person" },
+    });
+    const answer = await tool?.execute(tooMany);
+    expect(saved).toEqual([]);
+    expect(answer).toStartWith("Refused. make_page could not save this.");
+    expect(answer).toContain(
+      `slides.0.blocks.0.items: A slide shows at most ${SLIDE_MAX_LIST} rows. Put the rest on a new slide.`,
+    );
+    expect(answer).toEndWith(FIX_SILENTLY);
+    expect(FIX_SILENTLY).toContain(
+      "never mention a limit, a split, what fits or a retry",
+    );
+    expect(FIX_SILENTLY).toContain(
+      "write nothing to them until the retry is saved",
+    );
+    expect(FIX_SILENTLY).toContain(
+      'say only how many slides it has, such as "It\'s 3 slides.", and never why',
+    );
+    expect(FIX_SILENTLY).toContain("a deck stays a deck");
+  });
+
+  test("the tool's description tells the model to retry silently and keep to a deck", () => {
+    const [tool] = pageTools({
+      save: async () => ({}) as PageRecord,
+      initiator: { kind: "person" },
+    });
+    expect(tool?.description).toContain(
+      "never tell them about a limit, a split, what fits on a slide or a retry",
+    );
+    expect(tool?.description).toContain(
+      "use more slides rather than leave anything out",
+    );
   });
 });

@@ -169,3 +169,75 @@ test("nothing on a slide is cut off: no clamp, ellipsis or hidden overflow anywh
     cleanup();
   }
 });
+
+test("a weekday chart with full day names lies in rows, every label and figure whole", () => {
+  const days = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+  ];
+  const view = render(
+    <SlideCard
+      slide={{
+        title: "Emails by day",
+        blocks: [
+          {
+            type: "bars",
+            items: days.map((label, index) => ({
+              label,
+              value: 1_200 + index,
+            })),
+          },
+        ],
+      }}
+    />,
+  );
+  const chart = view.getByRole("img");
+  expect(chart.getAttribute("data-layout")).toBe("rows");
+  for (const day of days) expect(view.getByText(day)).toBeTruthy();
+  expect(view.getAllByText("1.2K")).toHaveLength(days.length);
+  // Short labels still stand in columns.
+  cleanup();
+  const short = render(
+    <SlideCard
+      slide={{
+        title: "Emails by day",
+        blocks: [
+          {
+            type: "bars",
+            items: days.map((label, index) => ({
+              label: label.slice(0, 3),
+              value: 10 + index,
+            })),
+          },
+        ],
+      }}
+    />,
+  );
+  expect(short.getByRole("img").getAttribute("data-layout")).toBe("columns");
+});
+
+test("figures too wide for half a slide take a whole-width tile each", () => {
+  const view = render(
+    <SlideCard
+      slide={{
+        title: "Cash",
+        blocks: [
+          {
+            type: "metrics",
+            items: [
+              { label: "Revenue", value: "$1,234,567.89" },
+              { label: "Orders", value: "1,204" },
+            ],
+          },
+        ],
+      }}
+    />,
+  );
+  const tiles = view.getByText("$1,234,567.89").closest("ul");
+  expect(tiles?.className).toContain("grid-cols-1");
+});

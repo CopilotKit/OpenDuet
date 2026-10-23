@@ -581,18 +581,49 @@ const MAKE_PAGE = "make_page";
  * as common, and drawn where the call sits its chips would land above the question they answer. A
  * page is the same: the Bot makes it, then says a line about it, and the card belongs under the
  * line. A turn ends where the person next sends something, so both go just before that.
+ *
+ * A page the tool refused is left out altogether. It draws no card, and kept as an empty row it
+ * still took the thread's gap, so every retry pushed the card further from the Bot's line. So is
+ * whatever the Bot said between a refused call and its retry ("Two slides it is."): that is the Bot
+ * talking about the retry, which the person never sees. Said after a refusal it never retried, it
+ * stays.
  */
 export function repliesLast(
   items: readonly VisibleChatItem[],
 ): VisibleChatItem[] {
-  const ordered: VisibleChatItem[] = [];
+  /** A finished call whose answer is not a page: a refusal, or the runtime's own error. */
+  const refused = (result: string | undefined) => {
+    if (result === undefined) return false;
+    try {
+      let value: unknown = JSON.parse(result);
+      // A server tool's text can arrive JSON-encoded once more on the way through the runtime.
+      if (typeof value === "string") value = JSON.parse(value);
+      return !(value && typeof value === "object");
+    } catch {
+      return true;
+    }
+  };
+  let ordered: VisibleChatItem[] = [];
   let pages: VisibleChatItem[] = [];
   let replies: VisibleChatItem[] = [];
+  /** The Bot's words since a refused call in this turn, dropped if it calls again. */
+  let sinceRefusal: Set<VisibleChatItem> | null = null;
   for (const item of items) {
     if (item.kind === "tool" && item.toolCall.function.name === MAKE_PAGE) {
+      if (sinceRefusal) {
+        const retried = sinceRefusal;
+        ordered = ordered.filter((said) => !retried.has(said));
+      }
+      if (refused(item.result)) {
+        sinceRefusal = new Set();
+        continue;
+      }
+      sinceRefusal = null;
       pages.push(item);
       continue;
     }
+    if (item.kind === "text" && item.role === "assistant")
+      sinceRefusal?.add(item);
     if (
       item.kind === "tool" &&
       item.toolCall.function.name === SUGGEST_REPLIES
@@ -607,6 +638,7 @@ export function repliesLast(
       ordered.push(...pages, ...replies);
       pages = [];
       replies = [];
+      sinceRefusal = null;
     }
     ordered.push(item);
   }
