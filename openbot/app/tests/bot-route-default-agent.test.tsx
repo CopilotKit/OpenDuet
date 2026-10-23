@@ -21,10 +21,30 @@ import {
 import { type AgentProfile, agentKeys } from "@/lib/agents/queries";
 import { Route as BotRoute } from "@/routes/_authed/_app/bot";
 
-let originalRect: typeof HTMLElement.prototype.getBoundingClientRect;
+/*
+ * HTMLElement.prototype inherits getBoundingClientRect from Element.prototype. Putting the original
+ * back by assignment would leave an own copy on HTMLElement.prototype, and happy-dom's classes outlive
+ * this file, so a later file's stub on Element.prototype would never be reached. So the stub is
+ * removed, not overwritten.
+ */
+let ownRect: PropertyDescriptor | undefined;
+function restoreRect() {
+  if (ownRect)
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "getBoundingClientRect",
+      ownRect,
+    );
+  else
+    delete (HTMLElement.prototype as { getBoundingClientRect?: unknown })
+      .getBoundingClientRect;
+}
 beforeAll(() => {
   GlobalRegistrator.register();
-  originalRect = HTMLElement.prototype.getBoundingClientRect;
+  ownRect = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "getBoundingClientRect",
+  );
 });
 
 const originalFetch = global.fetch;
@@ -32,7 +52,7 @@ const originalFetch = global.fetch;
 afterEach(() => {
   cleanup();
   global.fetch = originalFetch;
-  HTMLElement.prototype.getBoundingClientRect = originalRect;
+  restoreRect();
 });
 
 afterAll(() => GlobalRegistrator.unregister());

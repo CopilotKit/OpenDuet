@@ -1,18 +1,5 @@
-import {
-  IconArchive,
-  IconBolt,
-  IconBox,
-  IconCalendarRepeat,
-  IconChevronRight,
-  IconLogout,
-  IconPlug,
-  IconPlus,
-  IconSettings,
-  IconShieldCheck,
-  IconShieldLock,
-  IconStack2,
-} from "@tabler/icons-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { IconArchive, IconChevronRight, IconStack2 } from "@tabler/icons-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, type LinkOptions, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useId, useState } from "react";
 import { BotsNavBadge } from "@/components/bot-profile/attention";
