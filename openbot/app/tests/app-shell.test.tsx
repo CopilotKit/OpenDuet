@@ -518,6 +518,80 @@ test("Archived opens on a click, lists what was put away with Unarchive, and is 
   expect(window.localStorage.getItem(ARCHIVED_STORAGE_KEY)).toBe("closed");
 });
 
+test("conversations from before channels are not channels: they sit under Archived as Earlier conversations, titled by their summary", async () => {
+  serving();
+  const user = userEvent.setup({ document });
+  const old = (
+    id: string,
+    summary: string | null,
+    lastMessage: string | null,
+    lastMessageAt: string,
+  ): DuetChannel => ({
+    ...channel(id, "OpenDuet", null, { icon: "folder", colour: "sky" }),
+    dressed: false,
+    summary,
+    lastMessage,
+    threadId: `${id}-thread`,
+    lastMessageAt,
+  });
+  const view = draw(
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
+    seedMenu("admin", true, [
+      kiln,
+      old(
+        "c-old-1",
+        "**Ship date** for Ana's mugs",
+        null,
+        "2026-10-19T10:00:00Z",
+      ),
+      old("c-old-2", null, "Which glaze for Rosa?", "2026-10-21T10:00:00Z"),
+      // Nothing was ever said in it: nothing to go back to.
+      { ...old("c-empty", null, null, ""), lastMessageAt: null },
+    ]),
+  );
+  const dialog = await view.findByRole("dialog");
+  const channels = await within(dialog).findByRole("list", {
+    name: "Channels",
+  });
+  // Only what was made as a channel is one; no row is named after the Bot.
+  expect(within(channels).getAllByRole("link")).toHaveLength(1);
+  expect(within(dialog).queryByRole("link", { name: "OpenDuet" })).toBeNull();
+  await user.click(archivedToggle(dialog));
+  const earlier = within(dialog).getByRole("list", {
+    name: "Earlier conversations",
+  });
+  const rows = within(earlier).getAllByRole("link");
+  // Most recently used first, each titled in plain words and opened as the conversation it is.
+  expect(rows.map((row) => row.textContent)).toEqual([
+    "Which glaze for Rosa?",
+    "Ship date for Ana's mugs",
+  ]);
+  expect(rows[1]?.getAttribute("href")).toBe("/channel/c-old-1");
+});
+
+test("New channel stays in reach under a long list of channels: only the channels scroll", async () => {
+  serving();
+  const many = Array.from({ length: 30 }, (_, index) =>
+    channel(`c-${index}`, `Channel ${index}`, null, {
+      icon: "folder",
+      colour: "sky",
+    }),
+  );
+  const view = draw(
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
+    seedMenu("admin", true, many),
+  );
+  const dialog = await view.findByRole("dialog");
+  const newChannel = await within(dialog).findByRole("button", {
+    name: "New channel",
+  });
+  const scroller = within(dialog).getByTestId("drawer-channels");
+  expect(scroller.className).toContain("overflow-y-auto");
+  expect(within(scroller).getAllByRole("link")).toHaveLength(30);
+  // Outside the part that scrolls, so it never moves below the fold with the channels.
+  expect(scroller.contains(newChannel)).toBe(false);
+});
+
 test("with no channels yet the drawer is Everything and New channel, and no Archived", async () => {
   serving();
   const view = draw(

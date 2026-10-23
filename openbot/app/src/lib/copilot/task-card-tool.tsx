@@ -2,20 +2,17 @@ import { useRenderTool } from "@copilotkit/react-core/v2";
 import { Link, useRouter } from "@tanstack/react-router";
 import { z } from "zod";
 import { ToolLine } from "@/components/channels/tool-line";
-import { ChannelTagOf } from "@/components/duet/channel-tag";
-import { TaskCard } from "@/components/duet/task-card";
+import { TaskLink } from "@/components/duet/task-card";
 import { START_TASK_TOOL } from "@/lib/channels/task-brief";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import { useTask } from "@/lib/tasks/use-task";
 
 /*
- * Draws the server's `start_task` tool (server/src/openduet/tasks.ts) as the card under the Bot's
- * "On it": the task's title, where it stands, and a chevron that opens it. The work happens in the
- * task's own conversation, so this card is all Chat shows of it. The pill is read from the person's
- * tasks and kept live (lib/tasks/queries.ts), so it moves from Working to Ready for review, or to
- * Failed with Try again, while the card sits in the thread. The transcript moves it to the end of its turn, under the Bot's words
- * (`repliesLast` in chat-messages.ts).
+ * Draws the server's `start_task` tool (server/src/openduet/tasks.ts) as one line under the Bot's
+ * "On it": the task's live glyph and its title, opening its page. The work happens in the task's own
+ * conversation, so this line is all Chat shows of it. The transcript moves it to the end of its
+ * turn, under the Bot's words (`repliesLast` in chat-messages.ts).
  */
 
 export { START_TASK_TOOL };
@@ -44,12 +41,16 @@ export function readStartedTask(result: unknown): StartedTask | null {
   }
 }
 
-/** The card for one started task, opening the task's page. */
+/**
+ * The line for one started task, under the Bot's "On it": its live glyph and title, opening the
+ * task's page. The glyph is read from the person's tasks and kept live (lib/tasks/queries.ts), so it
+ * moves from Working to Ready for review, or to Failed, while the line sits in the thread.
+ */
 export function ChatTaskCard({ started }: { started: StartedTask }) {
   const router = useRouter({ warn: false });
   const { task, status } = useTask(started.taskId);
   return (
-    <TaskCard
+    <TaskLink
       link={({ className, children }) =>
         router ? (
           <Link
@@ -69,10 +70,7 @@ export function ChatTaskCard({ started }: { started: StartedTask }) {
           </a>
         )
       }
-      failure={task?.failure ?? null}
-      channel={<ChannelTagOf channelId={task?.fromChannelId} />}
       status={status}
-      taskId={started.taskId}
       title={task?.title ?? started.title}
     />
   );

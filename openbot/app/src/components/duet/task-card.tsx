@@ -191,3 +191,95 @@ export function TaskCard({
     </DuetCard>
   );
 }
+
+/**
+ * A task's glyph on its link in Chat (parity-spec S5): a spinning ring while it works, an amber dot
+ * while it needs the person, a green check once it is ready for review, a grey check once done, and
+ * a red cross when it couldn't finish. Nothing until it has been read, rather than a guess.
+ */
+export function TaskGlyph({ status }: { status: TaskStatus | null }) {
+  if (status === null || status === "working")
+    return (
+      <span
+        aria-hidden
+        className="block size-[14px] animate-spin rounded-full border-[1.75px] border-duet-blue/25 border-t-duet-blue motion-reduce:animate-none"
+        data-glyph="working"
+      />
+    );
+  if (status === "needs_input")
+    return (
+      <span
+        aria-hidden
+        className="grid size-[14px] place-items-center"
+        data-glyph="needs_input"
+      >
+        <span className="block size-2 rounded-full bg-duet-amber" />
+      </span>
+    );
+  const tone =
+    status === "ready_for_review"
+      ? "text-duet-green"
+      : status === "failed"
+        ? "text-duet-red"
+        : "text-duet-ink-3";
+  return (
+    <span aria-hidden className={tone} data-glyph={status}>
+      <DuetIcon
+        name={status === "failed" ? "x" : "check"}
+        size={14}
+        stroke={2.6}
+      />
+    </span>
+  );
+}
+
+/**
+ * The line Chat draws under the Bot's "On it" (parity-spec Chat 5, S5): the transcript's hook, the
+ * task's live glyph and its title on one line, cut with an ellipsis. Not a card: no tile, no pill,
+ * no chevron. It opens the task's page; the caller supplies the link.
+ */
+export function TaskLink({
+  title,
+  status,
+  link,
+}: {
+  title: string;
+  status: TaskStatus | null;
+  /** Wraps the line in whatever opens the task: a router link, given its class and contents. */
+  link: (props: { className: string; children: ReactNode }) => ReactNode;
+}) {
+  return link({
+    className:
+      "duet-face flex min-h-11 max-w-full items-center gap-[7px] rounded-xl pl-1 outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 hover:opacity-80",
+    children: (
+      <>
+        <svg
+          aria-hidden
+          className="mb-[9px] shrink-0 text-duet-ink-3"
+          height={14}
+          viewBox="0 0 14 14"
+          width={14}
+        >
+          <path
+            d="M1 1v6a6 6 0 0 0 6 6h6"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth={1.2}
+          />
+        </svg>
+        <span className="grid shrink-0 place-items-center">
+          <TaskGlyph status={status} />
+        </span>
+        <span className="type-sub min-w-0 truncate text-duet-ink-2">
+          {title}
+        </span>
+        {status ? (
+          <span className="sr-only" data-status={status}>
+            {TASK_STATUS_LABEL[status]}
+          </span>
+        ) : null}
+      </>
+    ),
+  });
+}

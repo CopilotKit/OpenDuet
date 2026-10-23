@@ -150,6 +150,12 @@ test("Connect your apps has one Gmail and Calendar row, asked of the primary Bot
     name: "Connect Gmail and Google Calendar",
   });
   expect(connect.textContent).toContain("Gmail and Google Calendar");
+  // The apps' own marks, not a generic envelope.
+  expect(
+    [...connect.querySelectorAll("[data-logo]")].map((logo) =>
+      logo.getAttribute("data-logo"),
+    ),
+  ).toEqual(["gmail", "google-calendar"]);
   expect(requests).toContainEqual({
     path: "/api/plugins/for/openduet/apps/google-workspace",
     method: "GET",

@@ -423,7 +423,7 @@ test("the card's pill follows the task: Working, Needs input, then Ready for rev
   await waitFor(() => expect(pill()?.textContent).toBe("Working"));
 });
 
-test("a card whose task couldn't finish says why, and Try again runs it once more from Chat", async () => {
+test("Chat's task line is one line: the hook, a live glyph and the title, opening the task, with no card", async () => {
   tasks = [
     rosa({ status: "failed", failure: "a service it needed didn't answer" }),
   ];
@@ -439,25 +439,30 @@ test("a card whose task couldn't finish says why, and Try again runs it once mor
       />
     </QueryClientProvider>,
   );
-  const card = await view.findByRole("link", { name: /Draft a reply to Rosa/ });
+  const line = await view.findByRole("link", { name: /Draft a reply to Rosa/ });
+  expect(line.getAttribute("href")).toBe("/tasks/rosa");
   await waitFor(() =>
-    expect(card.querySelector("[data-status]")?.textContent).toBe("Failed"),
+    expect(line.querySelector("[data-glyph]")?.getAttribute("data-glyph")).toBe(
+      "failed",
+    ),
   );
-  expect(card.textContent).toContain(
-    "Couldn't finish: a service it needed didn't answer.",
-  );
-  const again = view.getByRole("button", { name: "Try this task again" });
-  expect(card.contains(again)).toBe(false);
-  fireEvent.click(again);
-  await waitFor(() =>
-    expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]),
-  );
-  await waitFor(() =>
-    expect(card.querySelector("[data-status]")?.textContent).toBe("Working"),
-  );
+  expect(line.querySelector("[data-status]")?.textContent).toBe("Failed");
+  // Why it failed and Try again belong to the task's page, not to Chat.
+  expect(line.textContent).not.toContain("Couldn't finish");
   expect(
     view.queryByRole("button", { name: "Try this task again" }),
   ).toBeNull();
+  // A line, not a card: no tile, no chevron, no second line.
+  expect(view.container.querySelector("[data-channel-tag]")).toBeNull();
+  expect(line.querySelectorAll("svg").length).toBeLessThanOrEqual(2);
+
+  tasks = [rosa({ status: "working" })];
+  await act(() => queryClient.invalidateQueries({ queryKey: taskKeys.all }));
+  await waitFor(() =>
+    expect(line.querySelector("[data-glyph]")?.getAttribute("data-glyph")).toBe(
+      "working",
+    ),
+  );
 });
 
 /** Opens the conversation folded under the task's report, as a person would to read it. */
@@ -492,33 +497,6 @@ const kilnChannel = {
   createdAt: "2026-10-22T09:00:00Z",
 };
 
-test("a task asked for in a channel wears its colour tag on Chat's card", async () => {
-  tasks = [rosa({ fromChannelId: "c-kiln" })];
-  serving();
-  const view = render(
-    <QueryClientProvider client={queryClient}>
-      <ChatTaskCard
-        started={{
-          taskId: "rosa",
-          channelId: "rosa-channel",
-          title: rosa().title,
-        }}
-      />
-    </QueryClientProvider>,
-  );
-  await waitFor(() =>
-    expect(
-      view.container.querySelector("[data-channel-tag]")?.textContent,
-    ).toBe("Kiln move"),
-  );
-  expect(
-    view.container
-      .querySelector("[data-channel-tag]")
-      ?.getAttribute("data-channel-tag"),
-  ).toBe("green");
-});
-
-/** The `/tasks/$taskId` route's component, against this test's route tree. */
 function TaskRoute() {
   const { taskId } = useParams({ strict: false }) as { taskId: string };
   const navigate = useNavigate();
