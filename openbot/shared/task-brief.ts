@@ -28,12 +28,28 @@ export function frameTaskBrief(ask: string): string {
 }
 
 /**
- * The ask back out of a framed message, or null if this was not one.
+ * The line between the ask and the person's reply, when they reply to a task that couldn't finish.
+ * The run gets the task and their words both; the transcript shows only their words.
+ */
+export const TASK_REPLY_LINE =
+  "The run before this one couldn't finish. The person replied to the task with this:";
+
+/** A reply to a failed task: the ask under the frame for the model, then the person's own words. */
+export function frameTaskReply(ask: string, reply: string): string {
+  return [...TASK_FRAME, "", ask, "", TASK_REPLY_LINE, "", reply].join("\n");
+}
+
+/**
+ * The ask back out of a framed message, or null if this was not one. For a reply to a failed task,
+ * the reply.
  *
  * Null means "not a task's first message" and nothing else, the contract `readFiring` keeps. A prefix
  * match on the whole frame, so a person quoting one of its lines still sees their own words.
  */
 export function readTaskBrief(text: string): string | null {
   if (!text.startsWith(PREFIX)) return null;
-  return text.slice(PREFIX.length);
+  const rest = text.slice(PREFIX.length);
+  // A reply to a failed task reads as the reply: that is what the person said.
+  const reply = rest.indexOf(`\n\n${TASK_REPLY_LINE}\n\n`);
+  return reply === -1 ? rest : rest.slice(reply + TASK_REPLY_LINE.length + 4);
 }

@@ -3,6 +3,7 @@ import { readCheckIn } from "./check-in";
 import { readFirstDay } from "./first-day";
 import {
   frameTaskBrief,
+  frameTaskReply,
   readTaskBrief,
   START_TASK_TOOL,
   TASK_FRAME,
@@ -23,6 +24,15 @@ describe("readTaskBrief", () => {
     expect(readTaskBrief(frameTaskBrief(ASK))).toBe(ASK);
     const multi = "Prepare notes.\n\nSource: https://mail.google.com/x";
     expect(readTaskBrief(frameTaskBrief(multi))).toBe(multi);
+  });
+
+  test("gives back only the person's words from a reply to a failed task, which still carries the ask", () => {
+    const framed = frameTaskReply(ASK, "Use the Oat Satin glaze.");
+    expect(framed).toContain(ASK);
+    expect(readTaskBrief(framed)).toBe("Use the Oat Satin glaze.");
+    expect(readTaskBrief(frameTaskReply(ASK, "Two lines.\n\nNo more."))).toBe(
+      "Two lines.\n\nNo more.",
+    );
   });
 
   test("says no to a message the person wrote, or one line of the frame quoted back", () => {

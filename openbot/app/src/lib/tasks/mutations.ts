@@ -25,13 +25,25 @@ export const resolveTaskMutationOptions = (queryClient: QueryClient) =>
  */
 export const tryTaskAgainMutationOptions = (queryClient: QueryClient) =>
   mutationOptions({
-    mutationFn: ({ id, reply }: { id: string; reply?: string }) =>
+    mutationFn: ({
+      id,
+      reply,
+      messageId,
+    }: {
+      id: string;
+      reply?: string;
+      /** The id the reply is drawn under, so the run records it as the same message. */
+      messageId?: string;
+    }) =>
       client<TaskRecord>(
         `/api/openduet/tasks/${encodeURIComponent(id)}/again`,
         "task",
         {
           method: "POST",
-          body: reply ? { reply } : {},
+          body: {
+            ...(reply ? { reply } : {}),
+            ...(messageId ? { messageId } : {}),
+          },
           fallback: "Couldn't run this task again. Try again in a moment.",
         },
       ),

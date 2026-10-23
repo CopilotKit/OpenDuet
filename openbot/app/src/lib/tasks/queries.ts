@@ -1,6 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
 import { client } from "@/lib/client";
-import { readThreadMessages } from "@/lib/copilot/thread-messages";
 
 /*
  * The person's tasks: work OpenDuet does in the background, each in a conversation of its own
@@ -31,9 +30,12 @@ export type TaskRecord = {
   sourceApp: string | null;
   sourceLink: string | null;
   status: TaskStatus;
-  /** Why its turn couldn't finish, in plain words, while it is `failed`. Null otherwise. */
+  /**
+   * Why its turn couldn't finish, in plain words, while it is `failed`, or marked done after failing.
+   * Null otherwise.
+   */
   failure: string | null;
-  /** When it failed, while it is `failed`. Null otherwise. */
+  /** When it failed, alongside `failure`. */
   failedAt: string | null;
   resolvedAt: string | null;
   createdAt: string;
@@ -64,20 +66,6 @@ export const taskListQueryOptions = () =>
       query.state.data?.some((task) => moving(task.status))
         ? LIVE_MS
         : QUIET_MS,
-  });
-
-/**
- * A failed task's conversation as the history store holds it, for the page to show while nothing
- * runs there. Read once on open; Try again replaces it with the live conversation.
- */
-export const failedConversationQueryOptions = (input: {
-  taskId: string;
-  threadId: string;
-  botId: string;
-}) =>
-  queryOptions({
-    queryKey: [...taskKeys.detail(input.taskId), "conversation"] as const,
-    queryFn: () => readThreadMessages(input.threadId, input.botId),
   });
 
 /** One task, kept live while it is under way. */

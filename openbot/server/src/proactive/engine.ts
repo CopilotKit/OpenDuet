@@ -20,7 +20,7 @@
  * thread with a card for each piece of work rather than splintering into it.
  */
 import { frameCheckIn } from "@openbot/shared/check-in";
-import { frameTaskBrief } from "@openbot/shared/task-brief";
+import { frameTaskBrief, frameTaskReply } from "@openbot/shared/task-brief";
 import { z } from "zod";
 import type { AuditInitiator } from "../audit";
 import type { MemoryStore } from "../memory/store";
@@ -101,7 +101,7 @@ export type TaskThreads = {
   scope(ownerUserId: string, taskId: string): Promise<ProactiveScope | null>;
   /**
    * What a failed task's turn was asked, and how many turns it has had. Throws unless the task is
-   * the person's and failed.
+   * the person's and failed, or was marked done after failing, which it then no longer is.
    */
   failedTurn(
     ownerUserId: string,
@@ -629,6 +629,8 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     again: z.boolean().optional(),
     /** What the person said with Try again: a reply typed on the failed task. */
     reply: z.string().min(1).optional(),
+    /** The id the person's reply was drawn under; its first run records the message with it. */
+    messageId: z.string().min(1).optional(),
     /**
      * How many runs this turn was queued with. A turn queued without it is from before retries,
      * when one failure was final, so it is never run a second time.
@@ -665,6 +667,15 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     attempt: number,
   ) {
     const work = taskSchema.parse(payload);
+    /*
+     * A turn from before retries failed once and was left, as final then. Run again now, it would
+     * act weeks late on whatever it was asked; refused instead, before anything is opened for it,
+     * so it stays failed with Try again where it has a task and opens none where it has not.
+     */
+    if (attempt > 1 && work.runs === undefined)
+      throw new ProactiveRefusedError(
+        "This turn failed before it could be tried again.",
+      );
     let ask = work.text;
     let taskId = work.taskId;
     if (work.suggestionId) {
@@ -677,14 +688,6 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     }
     if (!taskId || !ask)
       throw new ProactiveRefusedError("This task has nothing to start.");
-    /*
-     * A turn from before retries failed once and was left, as final then. Run again now, it would
-     * act weeks late on whatever it was asked; refused instead, so it stays failed with Try again.
-     */
-    if (attempt > 1 && work.runs === undefined)
-      throw new ProactiveRefusedError(
-        "This turn failed before it could be tried again.",
-      );
     const scope = await deps.tasks.scope(work.ownerUserId, taskId);
     if (!scope)
       throw new ProactiveRefusedError(
@@ -692,10 +695,14 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       );
     const rerun = work.again || attempt > 1;
     await deps.startTask(scope, {
-      runId: rerun
-        ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
-        : `task-${taskId}`,
-      text: frameTaskBrief(work.reply ? `${ask}\n\n${work.reply}` : ask),
+      runId:
+        work.messageId && attempt === 1
+          ? work.messageId
+          : rerun
+            ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
+            : `task-${taskId}`,
+      // A reply is the person's own message; the ask goes with it for the model, not in their bubble.
+      text: work.reply ? frameTaskReply(ask, work.reply) : frameTaskBrief(ask),
       signal,
       final: attempt >= TASK_RUNS,
     });
@@ -895,27 +902,37 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     /**
      * Try again: a task whose turn couldn't finish runs it once more, in the same conversation, as a
      * turn of its own beside the one that failed. Keyed on how many turns the task has had, so two
-     * presses at once queue one. A reply the person typed on the failed task goes with the ask, so
-     * the run has the task and their words both.
+     * at once run once and the second is refused. A reply the person typed on the failed task is
+     * their own message in the conversation, with the ask beside it for the model, so the run has
+     * the task and their words both.
      */
     async again(
       ownerUserId: string,
       taskId: string,
-      reply?: string,
+      input: { reply?: string; messageId?: string } = {},
     ): Promise<void> {
       const { ask, turns } = await deps.tasks.failedTurn(ownerUserId, taskId);
-      await deps.queue.offer({
+      const queued = await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: `task:${taskId}:again:${turns}`,
         payload: {
           ownerUserId,
           taskId,
           ...ask,
-          ...(reply ? { reply } : {}),
+          ...(input.reply ? { reply: input.reply } : {}),
+          ...(input.messageId ? { messageId: input.messageId } : {}),
           again: true,
           runs: TASK_RUNS,
         },
       });
+      /*
+       * Two at once: the other got there first. Said, not answered as done, so a reply that lost
+       * the race goes back to the person rather than vanishing.
+       */
+      if (queued !== "queued")
+        throw new ProactiveRefusedError(
+          "OpenDuet is already running this again.",
+        );
       startSoon();
     },
     /** Settles once every task started straight away has finished its turn. For tests and shutdown. */

@@ -59,6 +59,8 @@ const ASK = "Draft a reply to Rosa saying we'll take Oat Satin.";
 
 let tasks: TaskRecord[] = [];
 const posted: string[] = [];
+/** Runs the browser started against the runtime. */
+let runs = 0;
 /** What each Try again carried. */
 const againBodies: unknown[] = [];
 
@@ -111,6 +113,7 @@ function sse(events: unknown[]) {
 /** Every request the card, the page and the conversation make, answered from the fixtures above. */
 function serving() {
   posted.length = 0;
+  runs = 0;
   againBodies.length = 0;
   globalThis.fetch = Object.assign(
     async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -190,6 +193,10 @@ function serving() {
           mode: "sse",
           telemetryDisabled: true,
         });
+      if (/\/agent\/[^/]+\/run$/.test(path) || path.endsWith("/run")) {
+        runs += 1;
+        return NativeResponse.json({ error: "No runs here" }, { status: 500 });
+      }
       if (path.endsWith("/connect"))
         return sse([
           { type: "RUN_STARTED", threadId: conversation.threadId, runId: "j" },
@@ -358,6 +365,13 @@ test("a card whose task couldn't finish says why, and Try again runs it once mor
     view.queryByRole("button", { name: "Try this task again" }),
   ).toBeNull();
 });
+
+/** Types into the composer and presses Enter, as a person would. */
+function type(box: HTMLElement, text: string) {
+  box.textContent = text;
+  fireEvent.input(box);
+  fireEvent.keyDown(box, { key: "Enter" });
+}
 
 /** The `/tasks/$taskId` route's component, against this test's route tree. */
 function TaskRoute() {
@@ -529,17 +543,71 @@ test("a reply typed on a failed task runs it again with the person's words, neve
   ).toBeTruthy();
   expect(sheet.textContent).toContain("Your reply runs this task again.");
   const box = within(sheet).getByRole("textbox");
-  fireEvent.input(box, { target: { textContent: "Use the Oat Satin glaze." } });
-  box.textContent = "Use the Oat Satin glaze.";
-  fireEvent.input(box);
-  fireEvent.keyDown(box, { key: "Enter" });
+  // The task page's reply bar, with no attachment button while a reply runs the task.
+  expect(sheet.innerHTML).toContain("Reply to OpenDuet");
+  expect(
+    within(sheet).queryByRole("button", { name: "Attach a file" }),
+  ).toBeNull();
+  type(box, "Use the Oat Satin glaze.");
   await waitFor(() =>
     expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]),
   );
-  expect(againBodies).toEqual([{ reply: "Use the Oat Satin glaze." }]);
+  // The person's words, under the id the run records them with: drawn at once, as their own.
+  expect(againBodies).toEqual([
+    { reply: "Use the Oat Satin glaze.", messageId: expect.any(String) },
+  ]);
+  expect(within(sheet).getByText("Use the Oat Satin glaze.")).toBeTruthy();
   await waitFor(() =>
     expect(sheet.querySelector("[data-status]")?.textContent).toBe("Working"),
   );
+});
+
+test("while the task's own turn runs on the server, a reply waits in the queue and Stop is not drawn", async () => {
+  tasks = [rosa({ status: "working" })];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await within(sheet).findByText(ASK, undefined, { timeout: 5_000 });
+  const box = within(sheet).getByRole("textbox");
+  type(box, "Also say which one is most urgent.");
+  // Parked, not sent: nothing went to the Bot, and Try again was not asked for.
+  expect(
+    await within(sheet).findByText("Queued", undefined, { timeout: 2_000 }),
+  ).toBeTruthy();
+  expect(posted).toEqual([]);
+  expect(runs).toBe(0);
+  expect(
+    within(sheet).queryByRole("button", { name: "Stop the Bot" }),
+  ).toBeNull();
+});
+
+test("a task marked done after it failed still takes a reply as Try again", async () => {
+  tasks = [
+    rosa({
+      status: "resolved",
+      resolvedAt: "2026-10-22T10:00:00.000Z",
+      failure: "a service didn't answer",
+      failedAt: new Date("2026-10-22T09:47:00").toISOString(),
+    }),
+  ];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await within(sheet).findByText(ASK, undefined, { timeout: 5_000 });
+  expect(sheet.textContent).toContain("Your reply runs this task again.");
+  type(within(sheet).getByRole("textbox"), "Please do it now.");
+  await waitFor(() =>
+    expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]),
+  );
+  expect(againBodies[0]).toMatchObject({ reply: "Please do it now." });
 });
 
 test("when a task's conversation stops running a turn, where the task stands is read again at once", async () => {

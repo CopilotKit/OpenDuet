@@ -62,9 +62,12 @@ export type TaskRecord = {
   sourceApp: string | null;
   sourceLink: string | null;
   status: TaskStatus;
-  /** Why its turn couldn't finish, in plain words, while it is `failed`. Null otherwise. */
+  /**
+   * Why its turn couldn't finish, in plain words, while it is `failed`, or marked done after failing.
+   * Null otherwise.
+   */
   failure: string | null;
-  /** When it failed, while it is `failed`. Null otherwise. */
+  /** When it failed, alongside `failure`. */
   failedAt: string | null;
   resolvedAt: string | null;
   createdAt: string;
@@ -376,6 +379,7 @@ export function createTaskStore(
       working: state?.working ?? false,
       failed: (state?.failure ?? null) !== null,
     });
+    const failedOrDone = status === "failed" || status === "resolved";
     return {
       id: row.id,
       botId: row.botId,
@@ -387,9 +391,9 @@ export function createTaskStore(
       sourceApp: row.sourceApp,
       sourceLink: row.sourceLink,
       status,
-      failure: status === "failed" ? (state?.failure ?? null) : null,
-      failedAt:
-        status === "failed" ? (state?.failedAt?.toISOString() ?? null) : null,
+      // Kept while it is marked done, too: Reopen brings the failure back, and so may a reply.
+      failure: failedOrDone ? (state?.failure ?? null) : null,
+      failedAt: failedOrDone ? (state?.failedAt?.toISOString() ?? null) : null,
       resolvedAt: row.resolvedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -478,6 +482,9 @@ export function createTaskStore(
      * What a failed task's turn was asked to do, to run it again, and how many turns it has had:
      * the ask its newest turn carried, or, for one that never reached the queue, its suggestion or
      * its title. Refused unless it failed, so Try again never starts a second run beside a live one.
+     *
+     * A task marked done after it failed is taken too, for the person replying to it, and is no
+     * longer done: the run that follows is its, and it reads as that run goes.
      */
     async failedTurn(
       owner: string,
@@ -487,10 +494,14 @@ export function createTaskStore(
       turns: number;
     }> {
       const task = await one(owner, id);
-      if (task.status !== "failed")
+      const failed =
+        task.status === "failed" ||
+        (task.status === "resolved" && task.failure !== null);
+      if (!failed)
         throw new ProactiveRefusedError(
           "Only a task that couldn't finish can be tried again.",
         );
+      if (task.resolvedAt !== null) await setResolved(owner, id, false);
       const turns = await database
         .select({
           text: payload("text"),
@@ -519,15 +530,32 @@ export function createTaskStore(
   };
 }
 
+/** What a reply on a failed task carries: the person's words, and the id their message is drawn under. */
+export type TaskReply = { reply?: string; messageId?: string };
+
 /** Runs a failed task's turn again, with the person's reply when there is one: the engine's `again`. */
 export type TaskRetry = {
-  again(ownerUserId: string, taskId: string, reply?: string): Promise<unknown>;
+  again(
+    ownerUserId: string,
+    taskId: string,
+    input?: TaskReply,
+  ): Promise<unknown>;
 };
 
 /** The longest reply that goes with Try again. */
 const MAX_REPLY = 4000;
 const againSchema = z
-  .object({ reply: z.string().trim().max(MAX_REPLY).optional() })
+  .object({
+    reply: z.string().trim().max(MAX_REPLY).optional(),
+    /**
+     * The id the browser drew the reply under, so the message the run records is the same one and
+     * the reply is not drawn twice.
+     */
+    messageId: z
+      .string()
+      .regex(/^[A-Za-z0-9-]{8,64}$/)
+      .optional(),
+  })
   .strict();
 
 /** `/api/openduet/tasks`: the person's own tasks, as Chat's cards, the task page and Tasks read them. */
@@ -592,7 +620,10 @@ export function createTaskRoutes(
           { error: `Say it in at most ${MAX_REPLY} characters.` },
           400,
         );
-      await retry.again(owner, id, parsed.data.reply || undefined);
+      await retry.again(owner, id, {
+        ...(parsed.data.reply ? { reply: parsed.data.reply } : {}),
+        ...(parsed.data.messageId ? { messageId: parsed.data.messageId } : {}),
+      });
       return context.json({ task: await store.get(owner, id) });
     });
   return routes;

@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { frameTaskBrief, readTaskBrief } from "@openbot/shared/task-brief";
+import {
+  frameTaskBrief,
+  frameTaskReply,
+  readTaskBrief,
+} from "@openbot/shared/task-brief";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
@@ -33,7 +37,10 @@ import {
   type ProactiveScope,
 } from "../src/proactive/engine";
 import { createProactiveStore } from "../src/proactive/store";
-import { ProactiveNotFoundError } from "../src/proactive/types";
+import {
+  ProactiveNotFoundError,
+  ProactiveRefusedError,
+} from "../src/proactive/types";
 import type { WorkItem, WorkQueue } from "../src/work/queue";
 import { TEST_POOL, testDatabaseUrl } from "./support/database";
 
@@ -707,7 +714,10 @@ describe("a task whose turn fails", () => {
     expect((await taskStore.resolve(owner.id, task.id)).status).toBe(
       "resolved",
     );
-    expect((await taskStore.resolve(owner.id, task.id)).failure).toBeNull();
+    // Its failure stays on the record while it is done, so a reply can still run it.
+    expect((await taskStore.resolve(owner.id, task.id)).failure).toBe(
+      "the run took longer than 5 minutes",
+    );
     expect((await taskStore.reopen(owner.id, task.id)).status).toBe("failed");
 
     // Try again's turn is the newest, so it counts: working, then ready once it finished.
@@ -892,22 +902,83 @@ describe("a task whose turn fails", () => {
     );
   });
 
-  test("a reply on a failed task is Try again with the person's words beside the ask", async () => {
+  test("a reply on a failed task is Try again: the person's own message, with the ask beside it for the model", async () => {
     const task = await opened();
     await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
     const { engine, items, started } = engineFor();
-    await engine.again(owner.id, task.id, "Use the Oat Satin glaze.");
+    await engine.again(owner.id, task.id, {
+      reply: "Use the Oat Satin glaze.",
+      messageId: "reply-0123456789",
+    });
     await engine.idle();
     expect(started).toHaveLength(1);
     expect(started[0]?.text).toBe(
-      frameTaskBrief("Prepare the notes.\n\nUse the Oat Satin glaze."),
+      frameTaskReply("Prepare the notes.", "Use the Oat Satin glaze."),
     );
+    // Their bubble is their words, under the id the browser already drew it with.
+    expect(readTaskBrief(started[0]?.text ?? "")).toBe(
+      "Use the Oat Satin glaze.",
+    );
+    expect(started[0]?.runId).toBe("reply-0123456789");
     expect(
       items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}:again:1`)?.payload,
     ).toMatchObject({
       reply: "Use the Oat Satin glaze.",
       again: true,
       runs: 2,
+    });
+  });
+
+  test("marked done after failing, it keeps its failure, and a reply runs it and makes it not done", async () => {
+    const task = await opened();
+    await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
+    const done = await taskStore.resolve(owner.id, task.id);
+    expect(done).toMatchObject({
+      status: "resolved",
+      failure: "a service didn't answer",
+    });
+    expect(done.failedAt).not.toBeNull();
+    const { engine, started } = engineFor();
+    await engine.again(owner.id, task.id, { reply: "Please do it now." });
+    await engine.idle();
+    expect(started).toHaveLength(1);
+    expect((await taskStore.get(owner.id, task.id)).resolvedAt).toBeNull();
+    // Done and never failed has nothing to try again.
+    const fine = await opened();
+    await turnFor(fine.id, { attempts: 1, finishedAt: new Date() });
+    await taskStore.resolve(owner.id, fine.id);
+    await expect(engine.again(owner.id, fine.id)).rejects.toThrow(
+      "Only a task that couldn't finish can be tried again.",
+    );
+  });
+
+  test("a turn shaped as main queued it, from before tasks and retries, opens nothing and never runs again", async () => {
+    const { engine, items, started } = engineFor();
+    const suggestionId = `${prefix}-main-suggestion-${randomUUID()}`;
+    // Main's Start: keyed by the suggestion, no task, no run count, failed once and left.
+    items.set(`${PROACTIVE_TASK_KIND}:${suggestionId}`, {
+      kind: PROACTIVE_TASK_KIND,
+      key: suggestionId,
+      payload: { ownerUserId: owner.id, suggestionId },
+      attempts: 1,
+      finished: false,
+      claimed: false,
+    });
+    const tasksBefore = await database
+      .select({ id: openduetTasks.id })
+      .from(openduetTasks)
+      .where(eq(openduetTasks.ownerUserId, owner.id));
+    await engine.sweep().catch(() => undefined);
+    const tasksAfter = await database
+      .select({ id: openduetTasks.id })
+      .from(openduetTasks)
+      .where(eq(openduetTasks.ownerUserId, owner.id));
+    expect(tasksAfter).toHaveLength(tasksBefore.length);
+    expect(started).toHaveLength(0);
+    expect(items.get(`${PROACTIVE_TASK_KIND}:${suggestionId}`)).toMatchObject({
+      attempts: 2,
+      finished: false,
+      lastError: "This turn failed before it could be tried again.",
     });
   });
 
@@ -920,9 +991,18 @@ describe("a task whose turn fails", () => {
     await expect(engine.again(other.id, task.id)).rejects.toThrow(
       "Couldn't find that task.",
     );
-    await engine.again(owner.id, task.id);
-    // Pressed twice at once, it is one run.
-    await engine.again(owner.id, task.id);
+    // Pressed twice at once, it is one run, and the second is told so rather than answered as done.
+    const both = await Promise.allSettled([
+      engine.again(owner.id, task.id),
+      engine.again(owner.id, task.id),
+    ]);
+    expect(both.map((outcome) => outcome.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(
+      both.find((outcome) => outcome.status === "rejected")?.reason,
+    ).toBeInstanceOf(ProactiveRefusedError);
     await engine.idle();
     expect(started).toHaveLength(1);
     expect(started[0]?.scope.channelId).toBe(task.channelId);
@@ -975,10 +1055,19 @@ describe("a task whose turn fails", () => {
       body: JSON.stringify({ reply: "x".repeat(4001) }),
     });
     expect(tooLong.status).toBe(400);
+    const badId = await routes.request(`/${task.id}/again`, {
+      method: "POST",
+      headers: { "x-person": owner.id, "content-type": "application/json" },
+      body: JSON.stringify({ reply: "Hi", messageId: "<script>" }),
+    });
+    expect(badId.status).toBe(400);
     const accepted = await routes.request(`/${task.id}/again`, {
       method: "POST",
       headers: { "x-person": owner.id, "content-type": "application/json" },
-      body: JSON.stringify({ reply: "Use the Oat Satin glaze." }),
+      body: JSON.stringify({
+        reply: "Use the Oat Satin glaze.",
+        messageId: "reply-route-0001",
+      }),
     });
     expect(accepted.status).toBe(200);
     expect(((await accepted.json()) as { task: TaskRecord }).task.id).toBe(
@@ -987,8 +1076,9 @@ describe("a task whose turn fails", () => {
     await engine.idle();
     expect(started).toHaveLength(1);
     expect(readTaskBrief(started[0]?.text ?? "")).toBe(
-      "Prepare the notes.\n\nUse the Oat Satin glaze.",
+      "Use the Oat Satin glaze.",
     );
+    expect(started[0]?.runId).toBe("reply-route-0001");
     // And with no body, as the button sends it.
     const fresh = await opened();
     await turnFor(fresh.id, { attempts: 2, lastError: "fetch failed" });

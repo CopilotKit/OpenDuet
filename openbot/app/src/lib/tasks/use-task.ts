@@ -14,8 +14,9 @@ import {
 /**
  * Whether a turn is running in this conversation now, as the roster's working dot says.
  *
- * When the dot goes out, the tasks are read again at once: the turn has ended, so where the task
- * stands has changed, and the quiet poll would leave the old status up for half a minute.
+ * When the dot comes on or goes out, the tasks are read again at once: a turn started or ended, so
+ * where the task stands has changed, and the quiet poll would leave the old status up for half a
+ * minute. A page open in another tab learns this way that a reply elsewhere is running the task.
  */
 export function useConversationBusy(channelId: string | undefined): boolean {
   const roster = useInfiniteQuery(channelListQueryOptions());
@@ -24,7 +25,7 @@ export function useConversationBusy(channelId: string | undefined): boolean {
     : false;
   const was = useRef(busy);
   useEffect(() => {
-    if (was.current && !busy)
+    if (was.current !== busy)
       void queryClient.invalidateQueries({ queryKey: taskKeys.all });
     was.current = busy;
   }, [busy]);
