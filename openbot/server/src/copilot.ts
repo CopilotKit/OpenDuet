@@ -59,6 +59,13 @@ import {
   type LoadPersonalMemory,
   PersonalMemoryMiddleware,
 } from "./memory/tools";
+import { REPLIES_TOOL } from "./openduet/replies";
+import {
+  answerReplies,
+  noteToolStep,
+  type ToolExecution,
+  watchReplyTurn,
+} from "./openduet/reply-turn";
 import type { SelectableSkill, Selection } from "./plugins/selection";
 import {
   latestUserText,
@@ -463,14 +470,23 @@ export function builtInAgentConfiguration(
       ? {
           tools: allTools.map((tool) => ({
             ...tool,
-            execute: (args: unknown, execution?: { toolCallId?: string }) =>
-              executeNativeApprovalTool(
+            /*
+             * Every call is noted against its step before anything else, so a `suggest_replies`
+             * call can tell whether it shares that step with a read. See openduet/reply-turn.ts.
+             */
+            execute: (args: unknown, execution?: ToolExecution) => {
+              noteToolStep(tool.name, execution);
+              return executeNativeApprovalTool(
                 tool.name,
                 args,
                 execution?.toolCallId,
                 tools.find((granted) => granted.name === tool.name)?.initiator,
-                () => tool.execute(args),
-              ),
+                () =>
+                  tool.name === REPLIES_TOOL
+                    ? answerReplies(execution, () => tool.execute(args))
+                    : tool.execute(args),
+              );
+            },
           })),
           maxSteps: TOOL_STEPS,
         }
@@ -999,7 +1015,8 @@ async function buildAgent(
         learnedSkills,
       ),
       {
-        observe: observeModelConnection,
+        // The run's own events also tell the reply-chips guard what was written before each call.
+        observe: (run) => observeModelConnection(watchReplyTurn(run)),
         ...(loadAttachment
           ? {
               inline: (messages: AgentRunInput["messages"], threadId: string) =>

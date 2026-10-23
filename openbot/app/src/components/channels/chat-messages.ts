@@ -1,5 +1,6 @@
 import type { ActivityMessage, Message, ToolCall } from "@ag-ui/core";
 import { classifyAttachment } from "@/lib/channels/attachments";
+import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -573,6 +574,28 @@ const SUGGEST_REPLIES = "suggest_replies";
 const MAKE_PAGE = "make_page";
 
 /**
+ * How the runtime answers for a tool when it rejected the call's arguments before the tool ran, such
+ * as a reply too long for a chip. Not encoded, unlike a tool's own text.
+ */
+const RUNTIME_TOOL_ERROR = "Error:";
+
+/**
+ * Whether a `suggest_replies` call drew its chips: the server has answered it, and neither refused
+ * it (`REFUSAL_MARKER`: a second set in one turn, or replies it would not take) nor failed it. One
+ * test for the transcript and the chips' renderer both, so a call is never a row with no chips.
+ *
+ * A call the server held, because it came before the answer, is drawn: `repliesLast` puts it under
+ * the answer written after it.
+ */
+export function repliesShown(result: string | undefined): boolean {
+  if (result === undefined) return false;
+  const answer = asText(result);
+  return (
+    !answer.startsWith(REFUSAL_MARKER) && !answer.startsWith(RUNTIME_TOOL_ERROR)
+  );
+}
+
+/**
  * Page cards and reply chips moved to the end of their turn, under the Bot's last words in it:
  * the cards first, then the chips.
  *
@@ -581,6 +604,10 @@ const MAKE_PAGE = "make_page";
  * as common, and drawn where the call sits its chips would land above the question they answer. A
  * page is the same: the Bot makes it, then says a line about it, and the card belongs under the
  * line. A turn ends where the person next sends something, so both go just before that.
+ *
+ * AND ONLY CHIPS THE SERVER ACCEPTED (`repliesShown`). Any other call has no chips to draw, and kept
+ * as an item it would still take a row of the transcript's gap: an empty stripe where the chips
+ * would have been.
  */
 export function repliesLast(
   items: readonly VisibleChatItem[],
@@ -597,7 +624,7 @@ export function repliesLast(
       item.kind === "tool" &&
       item.toolCall.function.name === SUGGEST_REPLIES
     ) {
-      replies.push(item);
+      if (repliesShown(item.result)) replies.push(item);
       continue;
     }
     if (

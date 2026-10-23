@@ -119,6 +119,14 @@ describe("reading the call", () => {
         "Refused. suggest_replies takes two or three different replies, each at most 40 characters.",
       ),
     ).toBe(null);
+    // Replies the runtime rejected before the tool ran (too long for a chip): it answers for the
+    // tool, unencoded, and nothing was accepted.
+    expect(
+      readReplies(
+        args,
+        'Error: Invalid input for tool suggest_replies: Type validation failed: Value: {"replies":["Draft a yes to all 200 mugs for next Tuesday","No"]}.',
+      ),
+    ).toBe(null);
     expect(readReplies({ replies: "Yes" }, ACK)).toBe(null);
     expect(readReplies(undefined, ACK)).toBe(null);
   });
@@ -263,6 +271,63 @@ describe("the chips", () => {
     await view.findByText(/Which first\?/);
     await settleReactWork();
     expect(view.queryByRole("group", { name: "Suggested replies" })).toBe(null);
+  });
+
+  test("a call held until the answer is written is drawn under that answer", async () => {
+    // As the server holds a call made beside a read (server/src/openduet/reply-turn.ts): the call
+    // carries no words, and the answer comes in the step after it.
+    const held = JSON.stringify(
+      "The buttons are held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't call suggest_replies again, and don't mention the buttons.",
+    );
+    const view = render(
+      <Chat
+        messages={[
+          ...asked(held, ""),
+          {
+            id: "a2",
+            role: "assistant",
+            content:
+              "Ana needs the ship date by end of day, and Hearth & Co moved the visit to Thursday. Which first?",
+          },
+        ]}
+        sent={[]}
+      />,
+    );
+
+    const group = await view.findByRole("group", { name: "Suggested replies" });
+    const answer = view.getByText(/Ana needs the ship date/);
+    expect(
+      answer.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test("a refused call, such as a second set in one turn, draws nothing at all, not even an empty row", async () => {
+    // As the server refuses a second set (server/src/openduet/reply-turn.ts), and as the thread
+    // stores it: the tool's text, encoded once more.
+    const refused = JSON.stringify(
+      "Refused. The buttons are already on screen. End your turn now and write nothing more.",
+    );
+    const rows = (view: ReturnType<typeof render>) =>
+      view.container.querySelectorAll('[data-slot="message-scroller-item"]')
+        .length;
+
+    const without = render(
+      <Chat messages={asked(ACK).filter((m) => m.role !== "tool")} sent={[]} />,
+    );
+    await without.findByText(/Which first\?/);
+    await settleReactWork();
+    // The person's message and the Bot's question; the call with no answer yet draws no row either.
+    const expected = rows(without);
+    expect(expected).toBe(2);
+    cleanup();
+
+    const view = render(<Chat messages={asked(refused)} sent={[]} />);
+    await view.findByText(/Which first\?/);
+    await settleReactWork();
+    expect(view.queryByRole("group", { name: "Suggested replies" })).toBe(null);
+    for (const reply of ["Ana's ship date", "The visit", "Not now"])
+      expect(view.queryByRole("button", { name: reply })).toBe(null);
+    expect(rows(view)).toBe(expected);
   });
 
   test("draw nothing outside a conversation, where there is nowhere to send", () => {

@@ -1091,6 +1091,7 @@ describe("repliesLast", () => {
           content: "Which first?",
           toolCalls: [replies("call-1")],
         },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: "Shown." },
       ]),
     ).toEqual(["u1", "a1", "call-1"]);
   });
@@ -1122,5 +1123,59 @@ describe("repliesLast", () => {
         { id: "u2", role: "user", content: "Thanks." },
       ]),
     ).toEqual(["u1", "a3", "call-page", "call-chips", "u2"]);
+  });
+
+  test("leaves out a call the server refused or the runtime rejected, and one not answered yet: none draws chips", () => {
+    expect(
+      ids([
+        {
+          id: "u1",
+          role: "user",
+          content: "Ana emailed me. Should I say yes?",
+        },
+        {
+          id: "a0",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-too-long")],
+        },
+        {
+          id: "t0",
+          role: "tool",
+          toolCallId: "call-too-long",
+          // The runtime's own answer for arguments it rejected before the tool ran: not encoded.
+          content:
+            "Error: Invalid input for tool suggest_replies: Type validation failed.",
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-second")],
+        },
+        {
+          id: "t1",
+          role: "tool",
+          toolCallId: "call-second",
+          // As the thread stores a server tool's text: encoded once more.
+          content: JSON.stringify(
+            "Refused. The buttons are already on screen. End your turn now and write nothing more.",
+          ),
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "She wants 200 mugs. Should I draft a yes?",
+          toolCalls: [replies("call-shown")],
+        },
+        { id: "t2", role: "tool", toolCallId: "call-shown", content: "Shown." },
+        {
+          id: "a3",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-running")],
+        },
+      ]),
+    ).toEqual(["u1", "a2", "call-shown"]);
   });
 });
