@@ -100,7 +100,13 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/pages/page-1/more")).toBeNull();
   expect(tabForPath("/activity")).toBeNull();
   expect(tabForPath("/bots")).toBeNull();
-  expect(tabForPath("/channel/abc")).toBeNull();
+  // Any other conversation with a Bot is drawn as Chat is, in the column with the tab bar.
+  expect(tabForPath("/channel/abc")).toBe("chat");
+  expect(tabForPath("/channel/abc/")).toBe("chat");
+  // Starting a new one, and a group's shared transcript, keep their own pages.
+  expect(tabForPath("/channel/new")).toBeNull();
+  expect(tabForPath("/channel/abc/more")).toBeNull();
+  expect(tabForPath("/group/abc")).toBeNull();
 });
 
 test("the tab bar draws Chat, Tasks and Pages, the current one marked", async () => {
