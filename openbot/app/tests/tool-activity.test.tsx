@@ -203,7 +203,7 @@ test("the app-access card stays out of a group, even before its answer arrives",
 
 test("show_app_access is named in words in a step's details too, and keeps its words to the model out", () => {
   const running = stepDetails(call("card", "show_app_access", { app: "x" }));
-  expect(running.label).toBe("Checking app access");
+  expect(running.label).toBe("Checking your apps");
   const done = stepDetails(
     call(
       "card",
@@ -214,7 +214,7 @@ test("show_app_access is named in words in a step's details too, and keeps its w
       ),
     ),
   );
-  expect(done.label).toBe("Checked app access");
+  expect(done.label).toBe("Checked your apps");
   expect(done.output).toBeUndefined();
 });
 
@@ -278,7 +278,7 @@ test("while running, the line names the step in progress; opened, a step shows i
       <ToolActivity group={group} active />
     </QueryClientProvider>,
   );
-  expect(view.getByText("Read web pages…")).toBeDefined();
+  expect(view.getByText("Reading a web page…")).toBeDefined();
   fireEvent.click(view.getAllByText("Search the web")[0] as HTMLElement);
   expect(view.getByText("query")).toBeDefined();
   expect(view.getAllByText("top 5 GDP 2025").length).toBeGreaterThan(0);

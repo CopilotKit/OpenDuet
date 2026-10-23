@@ -55,6 +55,7 @@ import {
   type PersonQuestion,
   questionConversationBot,
 } from "./approvals/questions";
+import { signallingBusy } from "./approvals/busy-runner";
 import { createApprovalResumeTick } from "./approvals/resume-sweep";
 import { createApprovalStore } from "./approvals/store";
 import { ApprovalRefusedError } from "./approvals/types";
@@ -1967,7 +1968,11 @@ const approvalSweep = repeatAfterEach(
     database,
     responsibilityStore,
     groupConversations,
-    approvalContinuationRunner,
+    // The continuation after a decision is server work the browser never started: announce it.
+    approvalContinuationRunner: signallingBusy(
+      approvalContinuationRunner,
+      (threadId, busy) => channelStore.signalBusy(threadId, busy),
+    ),
     channelStore,
     actorFor,
     // Assigned further down, once delivery is wired.

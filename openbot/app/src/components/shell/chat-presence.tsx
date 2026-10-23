@@ -1,4 +1,5 @@
 import type { Message } from "@ag-ui/core";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   createContext,
   type Dispatch,
@@ -11,8 +12,12 @@ import {
   useState,
 } from "react";
 import { toVisibleChatItems } from "@/components/channels/chat-messages";
-import { stepDetails } from "@/components/channels/tool-activity";
 import { FINISH_MS, type MicOrbState } from "@/components/duet/mic-orb";
+import { primaryBot } from "@/lib/agents/primary-bot";
+import { agentListQueryOptions } from "@/lib/agents/queries";
+import { ongoingChannel } from "@/lib/channels/ongoing";
+import { channelListQueryOptions } from "@/lib/channels/queries";
+import { STEP_PHRASES, stepPhrase } from "@/lib/plugins/tool-name";
 
 /**
  * What Chat is doing, for the header's orb to show, as the film's phone header does: it thinks
@@ -60,16 +65,36 @@ const StepReportContext = createContext<Dispatch<
   SetStateAction<string | null>
 > | null>(null);
 const StepContext = createContext<string | null>(null);
+/** Whether Chat is on screen, on its own so the pill can ask without hearing every keystroke. */
+const OnChatContext = createContext(false);
+/** Whether the server has a turn running in Chat's conversation (`useChatServerBusy`). */
+const ServerBusyContext = createContext(false);
 
-export function ChatPresenceProvider({ children }: { children: ReactNode }) {
+/**
+ * `serverBusy` is what the shell reads off the server for Chat's conversation (`useChatServerBusy`),
+ * so the pill and the orb show work this screen did not start.
+ */
+export function ChatPresenceProvider({
+  children,
+  serverBusy = false,
+}: {
+  children: ReactNode;
+  serverBusy?: boolean;
+}) {
   const [presence, setPresence] = useState(AT_REST);
   const [step, setStep] = useState<string | null>(null);
   return (
     <ReportContext.Provider value={setPresence}>
       <StepReportContext.Provider value={setStep}>
-        <PresenceContext.Provider value={presence}>
-          <StepContext.Provider value={step}>{children}</StepContext.Provider>
-        </PresenceContext.Provider>
+        <ServerBusyContext.Provider value={serverBusy}>
+          <PresenceContext.Provider value={presence}>
+            <OnChatContext.Provider value={presence.chat}>
+              <StepContext.Provider value={step}>
+                {children}
+              </StepContext.Provider>
+            </OnChatContext.Provider>
+          </PresenceContext.Provider>
+        </ServerBusyContext.Provider>
       </StepReportContext.Provider>
     </ReportContext.Provider>
   );
@@ -93,16 +118,22 @@ export function orbStateFor(
 }
 
 /** What the pill under the orb says while the Bot works and no step of its own is running. */
-export const THINKING = "Thinking it through…";
+export const THINKING = STEP_PHRASES.thinking;
+
+/**
+ * What the pill says when the server is running something in Chat this screen did not start: the
+ * continuation after Allow once, a suggestion started from the card, a check-in, another tab.
+ */
+export const SERVER_WORKING = STEP_PHRASES.working;
 
 /**
  * What the Bot is doing right now, in a line for the pill under the orb, or null when it has not
  * got the turn.
  *
- * The newest step still waiting on its result, in the words a running tool line in the transcript
- * uses for it, so the pill and the line say the same thing at the same moment. Only this turn's
- * steps count: a call from an earlier turn that never got its result is not running, it was cut
- * off. With no step running the Bot is thinking, or writing what it found.
+ * The newest step still waiting on its result, as a phrase about the person (`stepPhrase`): "Searching
+ * your email", never "Gmail search messages". Steps the pill does not name, such as the reply chips,
+ * are passed over. Only this turn's steps count: a call from an earlier turn that never got its result
+ * is not running, it was cut off. With no step running the Bot is thinking, or writing what it found.
  */
 export function stepFor(
   messages: readonly Message[],
@@ -119,9 +150,33 @@ export function stepFor(
     ) + 1,
   );
   const running = turn
-    .flatMap((item) => (item.kind === "tool" ? [stepDetails(item)] : []))
-    .findLast((step) => step.pending);
-  return running ? `${running.label}…` : THINKING;
+    .flatMap((item) =>
+      item.kind === "tool" && item.result === undefined
+        ? [stepPhrase(item.toolCall.function.name)]
+        : [],
+    )
+    .findLast((phrase) => phrase !== null);
+  return running ?? THINKING;
+}
+
+/**
+ * Whether the server says Chat's conversation has a turn running, from the busy flag it puts on the
+ * conversation list. That flag covers runs this screen never started, which is the point: without it
+ * the pill and the orb sat still for the 20 seconds after Allow once while the Bot sent the email.
+ *
+ * Chat's conversation is found the way the Chat tab finds it (`ChatScreen`): the main Bot's most
+ * recently used conversation. When Chat's identity changes there, this changes with it.
+ */
+export function useChatServerBusy(onChat: boolean): boolean {
+  const agents = useQuery({ ...agentListQueryOptions(), enabled: onChat });
+  const channels = useInfiniteQuery({
+    ...channelListQueryOptions(),
+    enabled: onChat,
+  });
+  if (!onChat) return false;
+  const bot = primaryBot(agents.data);
+  if (!bot) return false;
+  return ongoingChannel(channels.data, bot.id)?.busy === true;
 }
 
 /**
@@ -222,7 +277,13 @@ export function useReportFinish(): () => void {
 
 /** The header orb's state and keystrokes, from what Chat and `useReportFinish` last reported. */
 export function useChatOrb(): { state: MicOrbState; keystrokes: number } {
-  const presence = useContext(PresenceContext);
+  const reported = useContext(PresenceContext);
+  // Work the server is doing in Chat thinks too, as a turn this screen started does.
+  const serverBusy = useContext(ServerBusyContext);
+  const presence =
+    serverBusy && reported.chat && !reported.working
+      ? { ...reported, working: true }
+      : reported;
   // The answer whose landing has played out. Behind `answers` while the orb holds "done".
   const [landed, setLanded] = useState(presence.answers);
   useEffect(() => {
@@ -263,7 +324,13 @@ export function useChatDrafting(): boolean {
   return useContext(PresenceContext).drafting;
 }
 
-/** What the pill under the orb says, from what Chat last reported. Null hides it. */
+/**
+ * What the pill under the orb says, from what Chat last reported, or that the Bot is working when
+ * the server has a turn running in Chat that this screen did not start. Null hides it.
+ */
 export function useChatStep(): string | null {
-  return useContext(StepContext);
+  const step = useContext(StepContext);
+  const serverBusy = useContext(ServerBusyContext);
+  const onChat = useContext(OnChatContext);
+  return step ?? (serverBusy && onChat ? SERVER_WORKING : null);
 }

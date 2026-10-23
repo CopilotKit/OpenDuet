@@ -371,7 +371,7 @@ test("an ordinary tool's answer is never read for a card, whatever it starts wit
 test("show_app_access is named for the person while it runs, not by its identifier", () => {
   const view = mount(<ServerToolLine name={SHOW_APP_ACCESS_TOOL} />);
   return waitFor(() => {
-    expect(view.getByText("Checking app access")).toBeTruthy();
+    expect(view.getByText("Checking your apps")).toBeTruthy();
     expect(view.container.textContent).not.toContain(SHOW_APP_ACCESS_TOOL);
   });
 });
@@ -383,7 +383,7 @@ test("show_app_access about an app nobody can name draws the line, never its wor
       result="This deployment has no app called Gmial, so there is nothing to show. Say so plainly; do not browse to it instead."
     />,
   );
-  expect(await view.findByText("Checked app access")).toBeTruthy();
+  expect(await view.findByText("Checked your apps")).toBeTruthy();
   expect(view.container.textContent).not.toContain("Say so plainly");
   // Nothing behind a disclosure either: the line is not expandable.
   expect(view.container.querySelector("details")).toBeNull();

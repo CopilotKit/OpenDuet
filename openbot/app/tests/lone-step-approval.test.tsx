@@ -124,7 +124,7 @@ test("a gated call alone in its turn draws its approval card under its own line"
   const view = draw();
   expect(await view.findByRole("button", { name: "Allow once" })).toBeTruthy();
   expect(view.getByRole("button", { name: "Refuse" })).toBeTruthy();
-  expect(view.getByText("Gmail send reply")).toBeTruthy();
+  expect(view.getByText("Sending your email")).toBeTruthy();
 });
 
 test("a request for some other call draws nothing under this one", async () => {
@@ -132,6 +132,6 @@ test("a request for some other call draws nothing under this one", async () => {
   const view = draw();
   await waitFor(() => expect(asked).toBeGreaterThan(0));
   await settleReactWork();
-  expect(view.getByText("Gmail send reply")).toBeTruthy();
+  expect(view.getByText("Sending your email")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Allow once" })).toBeNull();
 });

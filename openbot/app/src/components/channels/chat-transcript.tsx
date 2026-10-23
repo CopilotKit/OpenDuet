@@ -48,12 +48,13 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TypingDots } from "@/components/duet/kit";
+import { Seen, ThreadFooter, TypingDots } from "@/components/duet/kit";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
 import { readFirstDay } from "@/lib/channels/first-day";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { appConfig } from "@/lib/generated/application-config";
 import { queryClient } from "@/query-client";
 import { splitChatOrigin } from "./chat-origin";
 import {
@@ -124,16 +125,18 @@ type ChatTranscriptProps = {
   contentClassName?: string;
 };
 
-/** The film's message bubbles (launch-film/film/src/duet/app.tsx `Bubble`). */
+/**
+ * The film's message bubbles (launch-film/film/src/duet/app.tsx `Bubble`), on the visual system's
+ * scale: body text, and one radius on every corner with no tail (parity-spec 2.3, 2.4).
+ */
 const BUBBLE_CONTENT =
-  "duet-face rounded-[21px] px-4 py-3 text-[18px] leading-6 tracking-[-0.011em] text-duet-ink [&>*:first-child]:mt-0 [&>*:last-child]:mb-0";
+  "duet-face type-body rounded-[var(--duet-radius-bubble)] px-4 py-3 text-duet-ink [&>*:first-child]:mt-0 [&>*:last-child]:mb-0";
 /** Streamdown's prose, tightened to a bubble: closer paragraphs, bullets hung outside the text. */
 const AGENT_PROSE =
   "[&>div]:space-y-2.5 [&_ol]:list-outside [&_ol]:pl-5 [&_ul]:list-outside [&_ul]:pl-5 [&_li]:py-0.5";
 const AGENT_BUBBLE =
-  "max-w-[92%] *:data-[slot=bubble-content]:rounded-bl-[7px] *:data-[slot=bubble-content]:bg-duet-bubble *:data-[slot=bubble-content]:text-duet-ink";
-const USER_BUBBLE =
-  "max-w-[85%] *:data-[slot=bubble-content]:rounded-br-[7px] *:data-[slot=bubble-content]:bg-duet-user";
+  "max-w-[92%] *:data-[slot=bubble-content]:bg-duet-bubble *:data-[slot=bubble-content]:text-duet-ink";
+const USER_BUBBLE = "max-w-[85%] *:data-[slot=bubble-content]:bg-duet-user";
 
 /** One shared empty array, so a screen without a queue does not hand down a new one per render. */
 const EMPTY_QUEUE: readonly QueuedMessage[] = [];
@@ -691,11 +694,14 @@ const TranscriptMessage = memo(function TranscriptMessage({
   delay,
   role,
   text,
+  seen = false,
 }: {
   commandNames?: string;
   delay: number;
   role: "user" | "assistant";
   text: string;
+  /** The person's newest message, which the Bot has picked up and not yet answered in words. */
+  seen?: boolean;
 }) {
   const isUser = role === "user";
   /*
@@ -785,11 +791,35 @@ const TranscriptMessage = memo(function TranscriptMessage({
               )}
             </BubbleContent>
           </Bubble>
+          {seen ? <Seen /> : null}
         </Arriving>
       </MessageContent>
     </MessageRow>
   );
 });
+
+/**
+ * Which of the person's messages reads "Seen" (parity-spec 2.13), or null for none.
+ *
+ * Only their newest, and only once the Bot has it: the turn is running, or the Bot has already done
+ * something after it, such as a tool line. It goes as soon as the Bot answers in words under it.
+ * Derived from the thread alone, so it is the same after a reload.
+ */
+export function seenMessageId(
+  items: readonly TranscriptItem[],
+  busy: boolean,
+): string | null {
+  const newest = items.findLastIndex(
+    (item) => item.kind === "text" && isPersonSentMessage(item.role, item.text),
+  );
+  if (newest === -1) return null;
+  const after = items.slice(newest + 1);
+  const answered = after.some(
+    (item) => item.kind === "text" && item.role === "assistant",
+  );
+  if (answered) return null;
+  return busy || after.length > 0 ? (items[newest]?.id ?? null) : null;
+}
 
 /**
  * The one shape an attachment url is allowed to have, taken from the helper that builds it rather
@@ -1684,6 +1714,7 @@ export function ChatTranscript({
 
   /* One rule for both kinds of row — see `anchorRowIds`, which is where it is written down. */
   const anchorRows = anchorRowIds(items);
+  const seenId = seenMessageId(items, busy);
 
   /*
    * One decider per mounted transcript, so opening a different channel starts the cascade over and
@@ -1787,6 +1818,14 @@ export function ChatTranscript({
                   text={message.text}
                 />
               ))}
+              {/*
+               * Once, under the last thing in the thread, scrolling with it (parity-spec 2.13). In
+               * this block for the reason the block exists: it is drawn last without being a row the
+               * scroller counts.
+               */}
+              {items.length > 0 ? (
+                <ThreadFooter product={appConfig.brand.productName} />
+              ) : null}
             </div>
             {/*
              * Always in the DOM, empty or not, and before the rows: the scroller counts rows by
@@ -1838,6 +1877,7 @@ export function ChatTranscript({
                     commandNames={commandNames}
                     delay={delays.delayFor(item.id, index, items.length)}
                     role={item.role}
+                    seen={item.id === seenId}
                     text={item.text}
                   />
                 </MessageScrollerItem>
@@ -1862,7 +1902,7 @@ export function ChatTranscript({
           </MessageScrollerContent>
         </MessageScrollerViewport>
         {/* A floating disc, like the shell's own controls. */}
-        <MessageScrollerButton className="size-9 rounded-full border-0 bg-duet-card text-duet-ink shadow-duet-float hover:bg-duet-card hover:text-duet-ink data-[direction=end]:bottom-[calc(var(--duet-dock,0px)+16px)]" />
+        <MessageScrollerButton className="size-11 rounded-full border-0 bg-duet-card text-duet-ink shadow-duet-float hover:bg-duet-card hover:text-duet-ink data-[direction=end]:bottom-[calc(var(--duet-dock,0px)+16px)]" />
         <ScrollNewestQueuedIntoView newest={queued.at(-1)?.id ?? null} />
       </MessageScroller>
     </MessageScrollerProvider>

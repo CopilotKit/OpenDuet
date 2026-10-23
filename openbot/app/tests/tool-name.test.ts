@@ -149,13 +149,44 @@ describe("naming a tool call", () => {
   });
 });
 
+describe("the person's own mail and calendar", () => {
+  test("are named for what happened to them, with no server key beside the words", () => {
+    const gw = (tool: string) => `mcp__google-workspace__${tool}`;
+    expect(readToolName(gw("gmail_search_messages"), true)).toEqual({
+      label: "Searching your email",
+    });
+    expect(readToolName(gw("gmail_search_messages"))).toEqual({
+      label: "Searched your email",
+    });
+    expect(readToolName(gw("gmail_read_message"), true).label).toBe(
+      "Reading your email",
+    );
+    expect(readToolName(gw("calendar_list_events"), true).label).toBe(
+      "Checking your calendar",
+    );
+    expect(readToolName(gw("gmail_send_reply"), true).label).toBe(
+      "Sending your email",
+    );
+    expect(readToolName(gw("gmail_send_reply")).label).toBe("Sent your email");
+  });
+
+  test("research says what it is doing while it runs", () => {
+    expect(readToolName("mcp__exa__web_search_exa", true).label).toBe(
+      "Searching the web",
+    );
+    expect(readToolName("mcp__exa__web_fetch_exa", true).label).toBe(
+      "Reading a web page",
+    );
+  });
+});
+
 describe("this deployment's own tools", () => {
   test("show_app_access is named for what it is doing, then for what it did", () => {
     expect(readToolName("show_app_access", true)).toEqual({
-      label: "Checking app access",
+      label: "Checking your apps",
     });
     expect(readToolName("show_app_access")).toEqual({
-      label: "Checked app access",
+      label: "Checked your apps",
     });
   });
 

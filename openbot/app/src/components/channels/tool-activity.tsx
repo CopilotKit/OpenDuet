@@ -259,7 +259,8 @@ export function stepDetails(step: ToolItem): StepDetails {
 
   const [, server = "", ...rest] = name.split("__");
   const role = researchRoleOfTool(server, rest.join("__"));
-  const { label, detail } = readToolName(name);
+  // Running, a line says what is happening now ("Searching your email"); done, what happened.
+  const { label, detail } = readToolName(name, outcome.pending);
   const urls = role === "fetch" ? urlsOf(args) : [];
   const base = { ...outcome, label };
   if (role === "search") {
