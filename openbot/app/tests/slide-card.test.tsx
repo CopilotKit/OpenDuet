@@ -241,3 +241,36 @@ test("figures too wide for half a slide take a whole-width tile each", () => {
   const tiles = view.getByText("$1,234,567.89").closest("ul");
   expect(tiles?.className).toContain("grid-cols-1");
 });
+
+test("a row keeps a 44px target, and a chart's long label word gets a column wide enough for it", () => {
+  const view = render(
+    <SlideCard
+      onListItem={() => {}}
+      slide={{
+        title: "Senders",
+        blocks: [
+          { type: "list", items: [{ text: "Ana" }] },
+          {
+            type: "bars",
+            // Seven bars lie in rows: a seventh of a slide is too narrow for the address.
+            items: [
+              { label: "noreply@shopify.com", value: 12 },
+              ...["Ana", "Sam", "Leo", "Rosa", "Dev", "Maya"].map(
+                (label, value) => ({
+                  label,
+                  value,
+                }),
+              ),
+            ],
+          },
+        ],
+      }}
+    />,
+  );
+  // Unmeasured, the slide is at scale 1, so 44px laid out is 44px on screen.
+  expect(view.getByRole("button", { name: "Ana" }).style.minHeight).toBe(
+    "44px",
+  );
+  const label = view.getByText("noreply@shopify.com");
+  expect(Number.parseFloat(label.style.maxWidth)).toBeGreaterThan(128);
+});

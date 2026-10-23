@@ -2,9 +2,13 @@ import {
   BAR_PLOT,
   barFigure,
   barsLayout,
+  LEAST_SCALE,
   metricColumns,
+  ROW_GAP,
+  rowLabelWidth,
   SLIDE_PADDING,
   SLIDE_WIDTH,
+  TAP_TARGET,
 } from "@openbot/shared/slide-fit";
 import {
   Fragment,
@@ -326,13 +330,6 @@ export function formatValue(value: number): string {
  * Change one here and change it there.
  */
 
-/**
- * The least a slide is scaled, so its 13px captions never draw under 11px. At 320 wide that makes
- * the card 279px against the 264px the deck gives it, and it reaches 8px into the deck's side
- * padding on each side, which the slide track keeps in view.
- */
-const LEAST_SCALE = 11 / 13;
-
 /** A slide's height at the design width, before it is scaled: its content, or 16:9 if that is taller. */
 function cardHeight(content: number): number {
   return Math.max(content + 2 * SLIDE_PADDING, (SLIDE_WIDTH * 9) / 16);
@@ -463,6 +460,7 @@ export function SlideCard({
                   // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
                   key={index}
                   onListItem={onListItem}
+                  scale={fit?.scale ?? 1}
                 />
               ))}
             </div>
@@ -476,9 +474,12 @@ export function SlideCard({
 function SlideBlock({
   block,
   onListItem,
+  scale,
 }: {
   block: PageBlock;
   onListItem?: OnListItem | undefined;
+  /** How much the slide is scaled on screen, so a row can stay a 44px target there. */
+  scale: number;
 }): ReactNode {
   switch (block.type) {
     case "heading":
@@ -560,6 +561,7 @@ function SlideBlock({
                 <SlideRow
                   note={item.note}
                   onPress={onListItem ? () => onListItem(item.text) : undefined}
+                  scale={scale}
                   text={item.text}
                 />
               </li>
@@ -570,16 +572,22 @@ function SlideBlock({
   }
 }
 
-/** A row on a slide: at least a 44px target, its note under it, a chevron when it can be pressed. */
+/**
+ * A row on a slide: its note under it, a chevron when it can be pressed, and at least a 44px target
+ * on screen whatever the slide's scale (52px laid out at the least scale, which the measure counts).
+ */
 function SlideRow({
   text,
   note,
   onPress,
+  scale,
 }: {
   text: string;
   note?: string | undefined;
   onPress?: (() => void) | undefined;
+  scale: number;
 }) {
+  const minHeight = TAP_TARGET / scale;
   const body = (
     <>
       <span className="min-w-0 flex-1">
@@ -602,8 +610,7 @@ function SlideRow({
       ) : null}
     </>
   );
-  const row =
-    "flex min-h-[44px] w-full items-center gap-[8px] py-[4px] text-left";
+  const row = "flex w-full items-center gap-[8px] py-[4px] text-left";
   return onPress ? (
     <button
       className={cn(
@@ -611,12 +618,15 @@ function SlideRow({
         "rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-duet-violet/40 active:bg-duet-hair-2",
       )}
       onClick={onPress}
+      style={{ minHeight }}
       type="button"
     >
       {body}
     </button>
   ) : (
-    <div className={row}>{body}</div>
+    <div className={row} style={{ minHeight }}>
+      {body}
+    </div>
   );
 }
 
@@ -635,6 +645,9 @@ function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
   const tone = (index: number) =>
     index === items.length - 1 ? "violet" : "grey";
   const share = (value: number) => (max > 0 ? value / max : 0);
+  const rows = barsLayout(block) === "rows";
+  // In rows, the label column takes the longest label word, as the measure does (`rowLabelWidth`).
+  const labelWidth = rows ? rowLabelWidth(block) : 0;
   return (
     <figure className="flex flex-col">
       {label ? (
@@ -642,17 +655,21 @@ function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
           {label}
         </figcaption>
       ) : null}
-      {barsLayout(block) === "rows" ? (
+      {rows ? (
         <div
           aria-label={name}
-          className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_max-content] items-center gap-x-[8px] gap-y-[6px]"
+          className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_max-content] items-center gap-x-[8px]"
           data-layout="rows"
           role="img"
+          style={{ rowGap: ROW_GAP }}
         >
           {items.map((item, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: two bars may share a label.
             <Fragment key={index}>
-              <span className="max-w-[128px] text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+              <span
+                className="text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]"
+                style={{ maxWidth: labelWidth }}
+              >
                 {item.label}
               </span>
               <div className="h-[12px] w-full">
@@ -661,7 +678,7 @@ function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
                     "h-full rounded-[4px]",
                     tone(index) === "violet"
                       ? "bg-duet-violet"
-                      : "bg-duet-ink-3/35",
+                      : "bg-duet-ink-2/70",
                   )}
                   style={{ width: `${Math.max(share(item.value) * 100, 2)}%` }}
                 />
@@ -711,7 +728,7 @@ function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
                     "w-full rounded-[6px]",
                     tone(index) === "violet"
                       ? "bg-duet-violet"
-                      : "bg-duet-ink-3/35",
+                      : "bg-duet-ink-2/70",
                   )}
                   style={{ height: `${Math.max(share(item.value) * 100, 3)}%` }}
                 />

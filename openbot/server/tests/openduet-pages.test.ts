@@ -214,7 +214,8 @@ describe("the make_page tool", () => {
           slides: [
             {
               title: "Too much",
-              blocks: Array.from({ length: 4 }, () => ({
+              // More than a slide takes from the model; a fifth block continues.
+              blocks: Array.from({ length: 9 }, () => ({
                 type: "text",
                 text: "a",
               })),

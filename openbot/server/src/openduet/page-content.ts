@@ -1,11 +1,7 @@
 import {
-  blockHeight,
   figuresTooWide,
-  SLIDE_BLOCK_GAP,
   SLIDE_FIT_HEIGHT,
-  type SlideShape,
   slideHeight,
-  titleHeight,
 } from "@openbot/shared/slide-fit";
 import { z } from "zod";
 
@@ -35,18 +31,22 @@ export const MAX_BULLETS = 12;
 /*
  * What one slide holds. A page scrolls, so its caps are about length. A slide doesn't: it is one
  * frame, and the viewer shows all of it, so these are what reads in full in that frame (a square of
- * 298px of content, laid out at 330px wide and scaled to the phone: see shared/slide-fit.ts). Each
- * count is the most that fits with short items and nothing else on the slide; the fit check then
- * refuses a slide whose blocks fit apart but not together.
+ * 298px of content, laid out at 330px wide and scaled to the phone: see shared/slide-fit.ts).
+ *
+ * The model is not held to them. A slide it writes with more is laid out at save onto as many
+ * continuation slides as it needs (`layOutDeck`, below): each count is the most one slide takes
+ * before the rest continues, and the frame's height decides the rest. Refusing instead cost a run
+ * one of its few tool steps per retry, and a run that ran out of steps saved the deck and never
+ * said a word about it.
  */
 /** Two rows of two half-width tiles. A third row of tiles with notes runs past the frame. */
 export const SLIDE_MAX_METRICS = 4;
 /** Six bullets of up to two lines each, under the slide's title, fill the frame (294 of 298px). */
 export const SLIDE_MAX_BULLETS = 6;
-/** Five rows at the 44px a tap target needs, under a list title and the slide's title (282px); a sixth runs past. */
-export const SLIDE_MAX_LIST = 5;
-/** The most bars that still stand in columns, the shape a chart is read by: 32px each, room for "1.2K" (31px). */
-export const SLIDE_MAX_BARS = 8;
+/** Four rows at 52px (a 44px tap target at the least scale) under a list title and the slide's title (269px). */
+export const SLIDE_MAX_LIST = 4;
+/** Twelve bars lying in rows, 16px each and 4px apart, under a caption and the slide's title (292px). */
+export const SLIDE_MAX_BARS = 12;
 
 export { SLIDE_FIT_HEIGHT, slideHeight };
 
@@ -126,7 +126,18 @@ function amount(limits: Limits) {
 type Caps = Record<
   "metrics" | "bars" | "list" | "bullets",
   { max: number; message?: string }
->;
+> & {
+  /** How long a block's shorter strings may be: a page's lines are short, a slide's wrap. */
+  text: {
+    metricLabel: number;
+    metricNote: number;
+    barLabel: number;
+    barCaption: number;
+    listTitle: number;
+    listText: number;
+    listNote: number;
+  };
+};
 
 /** The six blocks, with a page's or a slide's caps. Everything but the counts is the same. */
 function blockSchemaWith(limits: Limits, caps: Caps) {
@@ -152,13 +163,13 @@ function blockSchemaWith(limits: Limits, caps: Caps) {
     items: many(
       limits,
       closed(limits, {
-        label: line(limits, 40).describe(
+        label: line(limits, caps.text.metricLabel).describe(
           'What it measures: "Revenue this week".',
         ),
         value: line(limits, 24).describe(
           'The figure as it should read: "$528K".',
         ),
-        note: line(limits, 60)
+        note: line(limits, caps.text.metricNote)
           .optional()
           .describe('One short line under it: "+11% vs last year".'),
       }),
@@ -168,22 +179,27 @@ function blockSchemaWith(limits: Limits, caps: Caps) {
   });
   const bars = closed(limits, {
     type: z.literal("bars"),
-    label: line(limits, 60).optional(),
+    label: line(limits, caps.text.barCaption).optional(),
     items: many(
       limits,
-      closed(limits, { label: line(limits, 24), value: amount(limits) }),
+      closed(limits, {
+        label: line(limits, caps.text.barLabel),
+        value: amount(limits),
+      }),
       caps.bars.max,
       caps.bars.message,
     ),
   });
   const list = closed(limits, {
     type: z.literal("list"),
-    title: line(limits, 60).optional(),
+    title: line(limits, caps.text.listTitle).optional(),
     items: many(
       limits,
       closed(limits, {
-        text: line(limits, 80).describe("Something worth a closer look."),
-        note: line(limits, 80).optional(),
+        text: line(limits, caps.text.listText).describe(
+          "Something worth a closer look.",
+        ),
+        note: line(limits, caps.text.listNote).optional(),
       }),
       caps.list.max,
       caps.list.message,
@@ -204,6 +220,15 @@ const PAGE_CAPS: Caps = {
   bars: { max: MAX_BARS },
   list: { max: MAX_LIST },
   bullets: { max: MAX_BULLETS },
+  text: {
+    metricLabel: 40,
+    metricNote: 60,
+    barLabel: 24,
+    barCaption: 60,
+    listTitle: 60,
+    listText: 80,
+    listNote: 80,
+  },
 };
 
 /** A page's blocks, with `limits` written as `pageBlockSchema` writes them. */
@@ -213,45 +238,36 @@ export function pageBlockSchemaWith(limits: Limits) {
 export const pageBlockSchema = pageBlockSchemaWith(ENFORCED);
 export type PageBlock = z.infer<typeof pageBlockSchema>;
 
-/** Said when a slide's block has more than one slide shows. */
-const moreThanASlide = (most: number, what: string) =>
-  `A slide shows at most ${most} ${what}. Put the rest on a new slide. ${FIX_SILENTLY}`;
-
-const SLIDE_CAPS: Caps = {
-  metrics: {
-    max: SLIDE_MAX_METRICS,
-    message: moreThanASlide(SLIDE_MAX_METRICS, "metrics"),
-  },
-  bars: {
-    max: SLIDE_MAX_BARS,
-    message: moreThanASlide(SLIDE_MAX_BARS, "bars"),
-  },
-  list: {
-    max: SLIDE_MAX_LIST,
-    message: moreThanASlide(SLIDE_MAX_LIST, "rows"),
-  },
-  bullets: {
-    max: SLIDE_MAX_BULLETS,
-    message: moreThanASlide(SLIDE_MAX_BULLETS, "bullets"),
+/**
+ * What a slide takes from the model: a page's counts, and longer lines than a page's. A slide's
+ * lines wrap and its items continue onto new slides at save, so a longer note or a seventh row is
+ * laid out, not refused. Only the shape is refused: a figure is still a figure (24 characters).
+ */
+const SLIDE_INPUT_CAPS: Caps = {
+  ...PAGE_CAPS,
+  text: {
+    metricLabel: 60,
+    metricNote: 120,
+    barLabel: 48,
+    barCaption: 120,
+    listTitle: 120,
+    listText: 120,
+    listNote: 160,
   },
 };
+/** The most blocks a slide takes from the model; past three, they continue onto new slides. */
+export const MAX_SLIDE_INPUT_BLOCKS = 8;
 
-/** A deck's slide, with `limits` written as `pageSlideSchema` writes them. Enforced, it is fit-checked too. */
+/** A deck's slide, with `limits` written as `pageSlideSchema` writes them. */
 export function pageSlideSchemaWith(limits: Limits) {
-  const slide = closed(limits, {
+  return closed(limits, {
     title: line(limits, MAX_TITLE),
     blocks: upTo(
       limits,
-      blockSchemaWith(limits, SLIDE_CAPS),
-      MAX_SLIDE_BLOCKS,
-      moreThanASlide(MAX_SLIDE_BLOCKS, "blocks"),
+      blockSchemaWith(limits, SLIDE_INPUT_CAPS),
+      MAX_SLIDE_INPUT_BLOCKS,
     ).default([]),
   });
-  return limits.enforce
-    ? slide.superRefine((value, context) => {
-        for (const issue of slideFitIssues(value)) context.addIssue(issue);
-      })
-    : slide;
 }
 export const pageSlideSchema = pageSlideSchemaWith(ENFORCED);
 export type PageSlide = z.infer<typeof pageSlideSchema>;
@@ -259,63 +275,193 @@ export type PageSlide = z.infer<typeof pageSlideSchema>;
 /** What the table's `content` column holds: a page's blocks, or a deck's slides. */
 export type PageContent = { blocks: PageBlock[] } | { slides: PageSlide[] };
 
-type FitIssue = { code: "custom"; path: (string | number)[]; message: string };
+type FitIssue = { path: (string | number)[]; message: string };
 
-const SPLITTABLE = new Set<PageBlock["type"]>([
-  "bullets",
-  "metrics",
-  "bars",
-  "list",
-]);
+/** The most of each kind of item one slide shows before the rest continues. */
+const SLIDE_ITEMS: Partial<Record<PageBlock["type"], number>> = {
+  metrics: SLIDE_MAX_METRICS,
+  bullets: SLIDE_MAX_BULLETS,
+  list: SLIDE_MAX_LIST,
+  bars: SLIDE_MAX_BARS,
+};
+
+/** Whether a slide shows everything on it in its frame: few enough blocks and items, short enough. */
+function fits(slide: PageSlide): boolean {
+  return (
+    slide.blocks.length <= MAX_SLIDE_BLOCKS &&
+    slide.blocks.every(
+      (block) =>
+        !("items" in block) ||
+        block.items.length <= (SLIDE_ITEMS[block.type] ?? Infinity),
+    ) &&
+    slideHeight(slide) <= SLIDE_FIT_HEIGHT
+  );
+}
+
+/** A continuation slide's title: the slide's own, marked as carrying on, when that fits the cap. */
+function continued(title: string): string {
+  const next = `${title} (continued)`;
+  return next.length <= MAX_TITLE ? next : title;
+}
+
+/** A text block's sentences, each with the space after it, so they join back as written. */
+function sentencesOf(text: string): string[] {
+  return text.match(/[^.!?\n]+(?:[.!?]+["')\]]*)?\s*|\n+/g) ?? [text];
+}
 
 /**
- * Everything about a slide that would not show in full on a phone, as issues the refusal names: a
- * figure too wide to draw whole, or a slide taller than the frame, with which blocks to move.
- *
- * A chart's labels are never refused: a chart whose labels or figures are too wide for columns is
- * drawn in rows instead (`barsLayout`), and measured that way. A figure is refused only when it is
- * wider than a whole-width tile, since figures of a block wider than half a tile already take the
- * whole width.
+ * A block cut in two: its first `count` units and the rest. The units are items for a block of
+ * them (a list keeps its title on the first part) and sentences, or failing that words, for text.
  */
-function slideFitIssues(slide: SlideShape): FitIssue[] {
-  const figures = slide.blocks.flatMap((block, at) =>
-    block.type === "metrics"
-      ? figuresTooWide(block).map((index) => ({
-          code: "custom" as const,
-          path: ["blocks", at, "items", index, "value"],
-          message: `"${block.items[index]?.value}" is too wide to show on a phone. Write the figure shorter, such as "$1.2M" for "$1,234,567". ${FIX_SILENTLY}`,
-        }))
-      : [],
-  );
-  if (figures.length > 0) return figures;
-  const height = slideHeight(slide);
-  if (height <= SLIDE_FIT_HEIGHT) return [];
-  const title = titleHeight(slide.title);
-  let used = title;
-  let advice = "Shorten the title or the text.";
-  for (const [index, block] of slide.blocks.entries()) {
-    const step = SLIDE_BLOCK_GAP + blockHeight(block);
-    if (title + step > SLIDE_FIT_HEIGHT) {
-      advice = SPLITTABLE.has(block.type)
-        ? `Block ${index} (${block.type}) is too long for any one slide: keep some of its items here and put the rest in the same kind of block on a new slide.`
-        : `Block ${index} (${block.type}) is too long for any one slide: carry it on in a new slide.`;
-      break;
+function cut(block: PageBlock, count: number): [PageBlock, PageBlock] | null {
+  switch (block.type) {
+    case "bullets":
+      return [
+        { ...block, items: block.items.slice(0, count) },
+        { ...block, items: block.items.slice(count) },
+      ];
+    case "metrics":
+      return [
+        { ...block, items: block.items.slice(0, count) },
+        { ...block, items: block.items.slice(count) },
+      ];
+    case "list": {
+      const { title: _title, ...rest } = block;
+      return [
+        { ...block, items: block.items.slice(0, count) },
+        { ...rest, items: block.items.slice(count) },
+      ];
     }
-    if (used + step > SLIDE_FIT_HEIGHT) {
-      const moved = slide.blocks
-        .slice(index)
-        .map((later) => later.type)
-        .join(", ");
-      advice = `Keep the blocks before block ${index} here and move the rest (${moved}) to a new slide.`;
-      break;
+    case "text": {
+      const units = unitsOf(block.text);
+      return [
+        { ...block, text: units.slice(0, count).join("").trim() },
+        { ...block, text: units.slice(count).join("").trim() },
+      ];
     }
-    used += step;
+    // A chart's bars share one scale, and a heading is one line: neither is cut.
+    default:
+      return null;
   }
-  return [
-    {
-      code: "custom",
-      path: [],
-      message: `This slide is too full to read on a phone: it needs about ${Math.ceil(height)}px and a slide has ${SLIDE_FIT_HEIGHT}px. ${advice} Use more slides rather than leave anything out, even if the person asked for fewer. ${FIX_SILENTLY}`,
-    },
-  ];
+}
+
+/** How a text block is cut: by sentence, or by word when one sentence is longer than a slide. */
+function unitsOf(text: string): string[] {
+  const sentences = sentencesOf(text);
+  return sentences.length > 1 ? sentences : (text.match(/\S+\s*/g) ?? [text]);
+}
+
+function unitCount(block: PageBlock): number {
+  if (block.type === "text") return unitsOf(block.text).length;
+  return "items" in block ? block.items.length : 1;
+}
+
+/**
+ * The most of `block` that fits on an otherwise empty slide titled `title`, and the rest; or null
+ * when even its first unit does not fit, or it cannot be cut.
+ */
+function firstPart(
+  block: PageBlock,
+  title: string,
+): [PageBlock, PageBlock] | null {
+  for (let count = unitCount(block) - 1; count >= 1; count--) {
+    const parts = cut(block, count);
+    if (!parts) return null;
+    if (fits({ title, blocks: [parts[0]] })) return parts;
+  }
+  return null;
+}
+
+/**
+ * A slide laid out on as many slides as it takes to show it all on a phone. Blocks go on in order
+ * while they fit; one that does not starts a continuation slide, carrying a heading that would
+ * otherwise end a slide with it; one too long for any slide is cut by items, or by sentence, and
+ * continues. What cannot be laid out (a chart taller than a slide by itself) comes back as an issue.
+ */
+function layOutSlide(
+  slide: PageSlide,
+  at: number,
+): { slides: PageSlide[]; issues: FitIssue[] } {
+  const slides: PageSlide[] = [];
+  let current: PageSlide = { title: slide.title, blocks: [] };
+  const queue = [...slide.blocks];
+  let block = queue.shift();
+  while (block) {
+    const next = { ...current, blocks: [...current.blocks, block] };
+    if (fits(next)) {
+      current = next;
+      block = queue.shift();
+      continue;
+    }
+    if (current.blocks.length > 0) {
+      // A heading never ends a slide with what it heads on the next one: it goes over with it.
+      const last = current.blocks.at(-1);
+      const carried =
+        last?.type === "heading" && current.blocks.length > 1 ? last : null;
+      slides.push({
+        ...current,
+        blocks: carried ? current.blocks.slice(0, -1) : current.blocks,
+      });
+      current = { title: continued(slide.title), blocks: [] };
+      if (carried) {
+        queue.unshift(block);
+        block = carried;
+      }
+      continue;
+    }
+    const parts = firstPart(block, current.title);
+    if (!parts)
+      return {
+        slides: [],
+        issues: [
+          {
+            path: ["slides", at],
+            message: `This slide's ${block.type} is taller than a phone shows by itself (about ${Math.ceil(slideHeight({ title: current.title, blocks: [block] }))}px against ${SLIDE_FIT_HEIGHT}px). ${block.type === "bars" ? "Use fewer bars or shorter labels" : "Shorten it"}.`,
+          },
+        ],
+      };
+    slides.push({ ...current, blocks: [parts[0]] });
+    current = { title: continued(slide.title), blocks: [] };
+    block = parts[1];
+  }
+  if (current.blocks.length > 0 || slides.length === 0) slides.push(current);
+  return { slides, issues: [] };
+}
+
+/**
+ * A deck as the viewer shows it: every slide laid out on as many slides as it needs (`layOutSlide`),
+ * so nothing a slide holds is cut off and nothing is refused for length. What is still refused is a
+ * figure too wide to draw whole even in a whole-width tile, a chart taller than a slide by itself,
+ * and a deck that runs past `MAX_SLIDES` once laid out.
+ */
+export function layOutDeck(slides: readonly PageSlide[]): {
+  slides: PageSlide[];
+  issues: FitIssue[];
+} {
+  const issues: FitIssue[] = slides.flatMap((slide, at) =>
+    slide.blocks.flatMap((block, index) =>
+      block.type === "metrics"
+        ? figuresTooWide(block).map((item) => ({
+            path: ["slides", at, "blocks", index, "items", item, "value"],
+            message: `"${block.items[item]?.value}" is too wide to show on a phone. Write the figure shorter, such as "$1.2M" for "$1,234,567".`,
+          }))
+        : [],
+    ),
+  );
+  if (issues.length > 0) return { slides: [], issues };
+  const laid = slides.map((slide, at) => layOutSlide(slide, at));
+  const failed = laid.flatMap((result) => result.issues);
+  if (failed.length > 0) return { slides: [], issues: failed };
+  const all = laid.flatMap((result) => result.slides);
+  if (all.length > MAX_SLIDES)
+    return {
+      slides: [],
+      issues: [
+        {
+          path: ["slides"],
+          message: `Laid out for a phone, this deck runs to ${all.length} slides, and a deck has at most ${MAX_SLIDES}. Keep fewer items, or shorter notes.`,
+        },
+      ],
+    };
+  return { slides: all, issues: [] };
 }

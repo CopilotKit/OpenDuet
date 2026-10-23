@@ -13,6 +13,7 @@ import {
   ENFORCED,
   FIX_SILENTLY,
   type Limits,
+  layOutDeck,
   line,
   MAX_BLOCKS,
   MAX_SLIDE_BLOCKS,
@@ -27,10 +28,6 @@ import {
   type PageSlide,
   pageBlockSchemaWith,
   pageSlideSchemaWith,
-  SLIDE_MAX_BARS,
-  SLIDE_MAX_BULLETS,
-  SLIDE_MAX_LIST,
-  SLIDE_MAX_METRICS,
   STATED,
 } from "./page-content";
 
@@ -103,7 +100,7 @@ function inputSchemaWith(limits: Limits) {
     slides: many(limits, pageSlideSchemaWith(limits), MAX_SLIDES)
       .optional()
       .describe(
-        `A deck's slides, in order, each a title and at most ${MAX_SLIDE_BLOCKS} blocks that read in full on a phone. Required for "slides".`,
+        `A deck's slides, in order, each a title and its blocks. A slide with more than a phone shows continues onto the next slide when it is saved. Required for "slides".`,
       ),
   });
   if (!limits.enforce) return input;
@@ -155,21 +152,50 @@ const MOST_ISSUES = 6;
  * The retry is between the model and the tool, which is why it ends on `FIX_SILENTLY`. The slide
  * refusals carry that line themselves; it is said once here.
  */
-function refusalFor(error: z.ZodError): string {
-  const lines = error.issues.slice(0, MOST_ISSUES).map((issue) => {
+function refusalFor(
+  issues: readonly { path: PropertyKey[]; message: string }[],
+): string {
+  const lines = issues.slice(0, MOST_ISSUES).map((issue) => {
     const where = issue.path.length ? `${issue.path.join(".")}: ` : "";
     return `${where}${issue.message.replace(FIX_SILENTLY, "").trim()}`;
   });
   return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${lines.join(" ") || "Invalid arguments."} Fix it and call ${PAGE_TOOL} again. ${FIX_SILENTLY}`;
 }
 
+/**
+ * The input checked, and a deck laid out for a phone (`layOutDeck`): a slide with more than one
+ * slide shows continues onto new slides, so a deck is refused only for its shape. `continued` says
+ * how many slides the model wrote when that differs from how many were saved.
+ */
 export function parsePageInput(
   input: unknown,
-): { ok: true; value: PageInput } | { ok: false; refusal: string } {
+):
+  | { ok: true; value: PageInput; continued?: { from: number; to: number } }
+  | { ok: false; refusal: string } {
   const parsed = pageInputSchema.safeParse(input ?? {});
-  return parsed.success
-    ? { ok: true, value: parsed.data }
-    : { ok: false, refusal: refusalFor(parsed.error) };
+  if (!parsed.success)
+    return { ok: false, refusal: refusalFor(parsed.error.issues) };
+  const value = parsed.data;
+  if (!value.slides) return { ok: true, value };
+  const laid = layOutDeck(value.slides);
+  if (laid.issues.length > 0)
+    return { ok: false, refusal: refusalFor(laid.issues) };
+  const from = value.slides.length;
+  const to = laid.slides.length;
+  return {
+    ok: true,
+    value: { ...value, slides: laid.slides },
+    ...(to !== from ? { continued: { from, to } } : {}),
+  };
+}
+
+/**
+ * What the tool says back about a deck it carried onto more slides than the model wrote. The person
+ * should hear how long the deck is, never why: told only the count, a model explained it ("the
+ * chart didn't fit on one").
+ */
+export function continuedNote(continued: { to: number }): string {
+  return `Saved as ${continued.to} slides: what ran past a phone screen continued onto the next slide. Tell the person only how many slides it has, such as "It's ${continued.to} slides.", and never why.`;
 }
 
 type Row = typeof openduetPages.$inferSelect;
@@ -298,8 +324,8 @@ export function pageTools(options: {
         'Use kind "page" with blocks for anything to read, and kind "slides" with slides for a deck to present.',
         "A dashboard is a page that starts with a text block holding one short headline sentence (under 90 characters), then a metrics block of up to 8 tiles, then anything else, such as a list block of what to look at next.",
         "Blocks: heading, text, bullets, metrics (label, value, optional note), bars (a bar chart of labelled numbers) and list (rows worth a closer look).",
-        `A slide is read on a phone, in full: a title and at most ${MAX_SLIDE_BLOCKS} blocks, with at most ${SLIDE_MAX_METRICS} metrics, ${SLIDE_MAX_BULLETS} bullets, ${SLIDE_MAX_LIST} list rows or ${SLIDE_MAX_BARS} bars. It holds about 12 lines of text, so each of these is best on a slide by itself: ${SLIDE_MAX_METRICS} metrics with notes, a chart, 3 or 4 list rows with notes, or 5 bullets. Put two blocks on a slide only when both are short. Keep figures short. When there is more, use more slides rather than leave anything out, even if the person asked for fewer.`,
-        'If a call is refused, fix what it names and call make_page again, silently: write nothing to the person until it is saved, never tell them about a limit, a split, a cut, what fits on a slide or a retry, and never switch to a page or to another tool instead of the deck they asked for. If a deck needs more slides than they asked for, say only how many it has, such as "It\'s 3 slides.", and never why.',
+        `A slide is read on a phone, in full: about ${MAX_SLIDE_BLOCKS} blocks and 12 lines of text. Write each slide with everything that belongs on it, and keep figures short. When a slide holds more than a phone shows, make_page carries the rest onto the next slide by itself, so never leave anything out or call again to make it fit; its result says how many slides were saved.`,
+        'Say only how many slides a deck has, such as "It\'s 3 slides.", never why, and never mention a limit, a split, a cut or what fits on a slide. If a call is refused, fix what it names and call make_page again, silently: write nothing to the person until it is saved, and never switch to a page or to another tool instead of the deck they asked for.',
         "The app shows it as a card under your message, and the person opens it from there. So never paste its content into the chat: write one or two sentences about it, such as what it covers and how long it takes to read.",
         "To change one you already made, call it again with that page's id and the whole new content.",
       ].join(" "),
@@ -309,8 +335,11 @@ export function pageTools(options: {
         const parsed = parsePageInput(args);
         if (!parsed.ok) return parsed.refusal;
         try {
+          const saved = summaryOfRecord(await options.save(parsed.value));
           return JSON.stringify(
-            summaryOfRecord(await options.save(parsed.value)),
+            parsed.continued
+              ? { ...saved, note: continuedNote(parsed.continued) }
+              : saved,
           );
         } catch (error) {
           if (error instanceof PageNotFoundError)

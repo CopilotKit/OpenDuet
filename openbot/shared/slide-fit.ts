@@ -51,12 +51,23 @@ const TILE_GAP = 8;
 const BAR_GAP = 6;
 /** The height every bar in columns shares, so the bars compare. */
 export const BAR_PLOT = 72;
-/** In rows, the widest a label may be before it wraps, and the space a figure takes at the end. */
+/** In rows, the narrowest a label column is: it widens to the longest word, up to `rowLabelWidth`. */
 export const ROW_LABEL_WIDTH = 128;
+/** In rows, the least room a bar keeps beside its label and figure. */
+const ROW_BAR = 48;
+/** Between a row's label, bar and figure. */
+const ROW_SPACE = 8;
 /** Between two bars lying in rows. */
-const ROW_GAP = 6;
-/** A list row's least height: a 44px tap target at the design width. */
-const LIST_ROW = 44;
+export const ROW_GAP = 4;
+
+/**
+ * The least a slide is scaled, so its 13px captions never draw under 11px. At 320 wide that makes
+ * the card 279px against the 264px the deck gives it.
+ */
+export const LEAST_SCALE = 11 / 13;
+/** A list row is a 44px tap target on screen: so 44 / scale here, 52px at the least scale. */
+export const TAP_TARGET = 44;
+const LIST_ROW = Math.ceil(TAP_TARGET / LEAST_SCALE);
 
 /*
  * Each printable ASCII character's advance, in thousandths of an em, from " " (32) to "~" (126):
@@ -140,9 +151,19 @@ function wordsOf(text: string): string[] {
 }
 
 /**
- * How many lines a run of text takes in `width`: breaking at spaces, and inside a word only when the
- * word alone is wider than the line (`overflow-wrap: anywhere`). With `preLine`, a newline starts a
- * line, as `white-space: pre-line` does; otherwise it is a space.
+ * The pieces of a word Chrome may wrap between without a space: after a hyphen, an en or em dash,
+ * a question mark or an ellipsis ("double-" | "wall"). Measured in Chrome: it does not break after
+ * "/", "_", ",", ":", "@" or "." inside a word, so those stay whole.
+ */
+const BREAK_AFTER = /(?<=[-\u2010\u2013\u2014?\u2026])(?=\S)/u;
+function piecesOf(word: string): string[] {
+  return word.split(BREAK_AFTER).filter(Boolean);
+}
+
+/**
+ * How many lines a run of text takes in `width`: breaking at spaces and after a hyphen or dash, and
+ * inside a piece only when the piece alone is wider than the line (`overflow-wrap: anywhere`). With
+ * `preLine`, a newline starts a line, as `white-space: pre-line` does; otherwise it is a space.
  */
 export function linesOf(
   text: string,
@@ -157,29 +178,43 @@ export function linesOf(
     lines += 1;
     let x = 0;
     for (const word of wordsOf(paragraph)) {
-      const wide = widthOf(word, size, face);
-      if (x > 0 && x + space + wide <= width) {
-        x += space + wide;
-        continue;
-      }
-      if (x > 0) lines += 1;
-      x = 0;
-      for (const character of word) {
-        const step = advance(character, face) * size;
-        if (x > 0 && x + step > width) {
-          lines += 1;
-          x = 0;
+      for (const [index, piece] of piecesOf(word).entries()) {
+        // A space before a word; nothing between the pieces of one.
+        const gap = index === 0 && x > 0 ? space : 0;
+        const wide = widthOf(piece, size, face);
+        if (x + gap + wide <= width) {
+          x += gap + wide;
+          continue;
         }
-        x += step;
+        if (x > 0) lines += 1;
+        x = 0;
+        for (const character of piece) {
+          const step = advance(character, face) * size;
+          if (x > 0 && x + step > width) {
+            lines += 1;
+            x = 0;
+          }
+          x += step;
+        }
       }
     }
   }
   return lines;
 }
 
-/** Whether every word of `text` fits `width` whole, so none has to break. */
+/** The widest piece of `text` the browser cannot wrap inside. */
+function widestPiece(text: string, size: number, face: Face): number {
+  return Math.max(
+    0,
+    ...wordsOf(text)
+      .flatMap(piecesOf)
+      .map((piece) => widthOf(piece, size, face)),
+  );
+}
+
+/** Whether every piece of `text` fits `width` whole, so none has to break mid-word. */
 function wordsFit(text: string, size: number, face: Face, width: number) {
-  return wordsOf(text).every((word) => widthOf(word, size, face) <= width);
+  return widestPiece(text, size, face) <= width;
 }
 
 /** The blocks a slide holds, by shape: the app's and the server's types both fit it. */
@@ -236,6 +271,28 @@ export function barsLayout(
       wordsFit(item.label, CAPTION[0], "regular", column),
   );
   return fits ? "columns" : "rows";
+}
+
+/**
+ * In rows, how wide the label column may be: wide enough for the longest word of any label, so a
+ * word like "noreply@shopify.com" stays whole, and never so wide that the bar has less than 48px
+ * beside it and the widest figure. Labels wrap at this width.
+ */
+export function rowLabelWidth(
+  block: Extract<SlideBlockShape, { type: "bars" }>,
+): number {
+  const figure = Math.max(
+    ...block.items.map((item) =>
+      widthOf(barFigure(item.value), CAPTION[0], "bold"),
+    ),
+  );
+  const most = SLIDE_CONTENT_WIDTH - figure - ROW_BAR - 2 * ROW_SPACE;
+  const word = Math.max(
+    ...block.items.map((item) =>
+      widestPiece(item.label, CAPTION[0], "regular"),
+    ),
+  );
+  return Math.min(Math.floor(most), Math.ceil(Math.max(ROW_LABEL_WIDTH, word)));
 }
 
 /** The width of the words in a tile of figures, in a row of `columns` tiles. */
@@ -316,16 +373,17 @@ export function blockHeight(block: SlideBlockShape): number {
       const caption = block.label
         ? lines(block.label, CAPTION, "bold", W) + 6
         : 0;
-      if (barsLayout(block) === "rows")
+      if (barsLayout(block) === "rows") {
+        const label = rowLabelWidth(block);
         return (
           caption +
           block.items.reduce(
-            (sum, item) =>
-              sum + lines(item.label, CAPTION, "regular", ROW_LABEL_WIDTH),
+            (sum, item) => sum + lines(item.label, CAPTION, "regular", label),
             0,
           ) +
           ROW_GAP * (block.items.length - 1)
         );
+      }
       const column = columnWidth(block.items.length);
       const labels = Math.max(
         ...block.items.map((item) =>
