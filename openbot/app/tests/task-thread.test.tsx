@@ -206,6 +206,11 @@ function serving() {
       const method =
         init?.method ?? (input instanceof Request ? input.method : "GET");
       if (path === "/api/openduet/tasks") return NativeResponse.json({ tasks });
+      if (path === "/api/openduet/channels")
+        return NativeResponse.json({
+          everythingId: null,
+          channels: [kilnChannel],
+        });
       const done = /^\/api\/openduet\/tasks\/([^/]+)\/(resolve|reopen)$/.exec(
         path,
       );
@@ -462,6 +467,46 @@ function type(box: HTMLElement, text: string) {
   fireEvent.keyDown(box, { key: "Enter" });
 }
 
+/** The channel a task can be asked for in, as the drawer lists it. */
+const kilnChannel = {
+  id: "c-kiln",
+  name: "Kiln move",
+  purpose: "Moving the studio's kiln by March.",
+  icon: "home",
+  colour: "green",
+  dressed: true,
+  archivedAt: null,
+  agentIds: ["openduet"],
+  lastMessageAt: null,
+  createdAt: "2026-10-22T09:00:00Z",
+};
+
+test("a task asked for in a channel wears its colour tag on Chat's card", async () => {
+  tasks = [rosa({ fromChannelId: "c-kiln" })];
+  serving();
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <ChatTaskCard
+        started={{
+          taskId: "rosa",
+          channelId: "rosa-channel",
+          title: rosa().title,
+        }}
+      />
+    </QueryClientProvider>,
+  );
+  await waitFor(() =>
+    expect(
+      view.container.querySelector("[data-channel-tag]")?.textContent,
+    ).toBe("Kiln move"),
+  );
+  expect(
+    view.container
+      .querySelector("[data-channel-tag]")
+      ?.getAttribute("data-channel-tag"),
+  ).toBe("green");
+});
+
 /** The `/tasks/$taskId` route's component, against this test's route tree. */
 function TaskRoute() {
   const { taskId } = useParams({ strict: false }) as { taskId: string };
@@ -616,6 +661,30 @@ test("the task page reads as a report: how it was noticed, where it stands, deci
   fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/tasks"));
   await waitFor(() => expect(view.queryByRole("dialog") === null).toBe(true));
+});
+
+test("the task report wears the channel's colour tag beside where it stands", async () => {
+  tasks = [rosa({ status: "ready_for_review", fromChannelId: "c-kiln" })];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await waitFor(() =>
+    expect(sheet.querySelector("[data-channel-tag]")?.textContent).toBe(
+      "Kiln move",
+    ),
+  );
+  const status = sheet.querySelector("[data-status]");
+  // On the status line, after the pill.
+  expect(
+    status &&
+      status.compareDocumentPosition(
+        sheet.querySelector("[data-channel-tag]") as Node,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 });
 
 test("a reply from the box at the foot goes into the task's conversation, and unfolds it", async () => {

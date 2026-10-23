@@ -42,6 +42,12 @@ export type ChannelSummary = AgentChannel & {
    */
   taskId?: string | null;
   /**
+   * Whether this conversation is one of the person's OpenDuet channels, with a look of its own. The
+   * drawer lists those; Chat, which is Everything, leaves them out. Absent on a row this browser made
+   * itself, which is never one.
+   */
+  openduetChannel?: boolean;
+  /**
    * Whether a turn is running in this channel right now.
    *
    * Socket-only and transient: the server never persists it and the roster query never returns it,

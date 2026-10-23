@@ -46,12 +46,15 @@ export function TaskRow({
   title,
   status,
   failure = null,
+  channel,
 }: {
   title: string;
   /** Null while the task has not been read yet: the row draws without a pill rather than a guess. */
   status: TaskStatus | null;
   /** Why it couldn't finish, said under the pill while it is failed. */
   failure?: string | null;
+  /** The tag of the channel it was asked for in, beside the pill. */
+  channel?: ReactNode;
 }) {
   return (
     <CardRow
@@ -63,9 +66,10 @@ export function TaskRow({
             </span>
             {` · ${couldNotFinish(failure)}`}
           </span>
-        ) : status ? (
-          <span className="mt-1.5 flex">
-            <TaskStatusPill status={status} />
+        ) : status || channel ? (
+          <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            {status ? <TaskStatusPill status={status} /> : null}
+            {channel}
           </span>
         ) : undefined
       }
@@ -146,12 +150,15 @@ export function TaskCard({
   title,
   status,
   failure = null,
+  channel,
   link,
 }: {
   taskId: string;
   title: string;
   status: TaskStatus | null;
   failure?: string | null;
+  /** The tag of the channel it was asked for in. */
+  channel?: ReactNode;
   /** Wraps the row in whatever opens the task: a router link, given the row and its class. */
   link: (props: { className: string; children: ReactNode }) => ReactNode;
 }) {
@@ -162,7 +169,12 @@ export function TaskCard({
           "group block w-full rounded-[22px] outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 focus-visible:ring-inset",
         children: (
           <div className="transition-transform duration-150 motion-safe:group-active:scale-[0.985]">
-            <TaskRow failure={failure} status={status} title={title} />
+            <TaskRow
+              channel={channel}
+              failure={failure}
+              status={status}
+              title={title}
+            />
           </div>
         ),
       })}

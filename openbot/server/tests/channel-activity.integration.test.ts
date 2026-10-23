@@ -260,6 +260,8 @@ describe("channel activity", () => {
         lastReadAt: null,
         // An ordinary conversation, not an OpenDuet task's own.
         taskId: null,
+        // Nor one of the person's OpenDuet channels.
+        openduetChannel: false,
       },
     ]);
   });

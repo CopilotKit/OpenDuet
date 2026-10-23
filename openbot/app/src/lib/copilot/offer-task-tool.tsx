@@ -11,6 +11,7 @@ import { OFFER_TASK_TOOL } from "@/lib/channels/check-in";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import {
+  personAsked,
   proactiveSuggestionQueryOptions,
   resolveSuggestionMutationOptions,
 } from "@/lib/proactive";
@@ -96,8 +97,11 @@ export function OfferedTaskCard({ offered }: { offered: OfferedTask }) {
       }
       onAnswer={(action, comeBack) =>
         act.mutate(
-          // Started here, the task records that it began at a check-in.
-          action === "start"
+          /*
+           * Started here, a check-in's card makes a task that began at a check-in. A card the person
+           * asked for, as a channel's Yes adds them, is an ordinary suggestion started.
+           */
+          action === "start" && !(current.data && personAsked(current.data))
             ? { id: offered.id, action, from: "check_in" }
             : { id: offered.id, action },
           { onError: () => comeBack?.() },

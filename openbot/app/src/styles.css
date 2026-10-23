@@ -98,6 +98,20 @@ html {
   --duet-veil: rgb(246 246 248 / 74%);
   --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 80%);
   --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
+
+  /*
+   * A channel's colour: its icon in the drawer and the sheet, and its tag on a task. Nine, by the
+   * names shared/channel-look.ts stores. Each at least 4:1 on the light surface, so an icon passes 3:1.
+   */
+  --duet-ch-berry: #9e3b66;
+  --duet-ch-blush: #b0606f;
+  --duet-ch-peach: #ad6550;
+  --duet-ch-amber: #a8650f;
+  --duet-ch-sage: #5f7a4c;
+  --duet-ch-green: #3f7d61;
+  --duet-ch-sky: #4f7f99;
+  --duet-ch-blue: #3f6fa8;
+  --duet-ch-lavender: #6f63a3;
 }
 
 .dark {
@@ -167,6 +181,15 @@ html {
   --duet-veil: rgb(17 17 19 / 72%);
   --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 8%);
   --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
+  --duet-ch-berry: #d0709a;
+  --duet-ch-blush: #e5c0c5;
+  --duet-ch-peach: #e5bcae;
+  --duet-ch-amber: #e4a04c;
+  --duet-ch-sage: #c6d1ba;
+  --duet-ch-green: #6fb093;
+  --duet-ch-sky: #bdcfda;
+  --duet-ch-blue: #7fa6d6;
+  --duet-ch-lavender: #c1bdd3;
 }
 
 * {

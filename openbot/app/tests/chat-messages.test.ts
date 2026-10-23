@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { frameChannelHello } from "@openbot/shared/channel-hello";
 import type { Message, ToolCall } from "@ag-ui/core";
 import {
   repliesLast,
@@ -35,6 +36,25 @@ const DRAWING: Message = {
 };
 
 describe("toVisibleChatItems", () => {
+  test("draws nothing for a new channel's hello: the Bot speaks first", () => {
+    const hello: Message = {
+      id: "hello",
+      role: "user",
+      content: frameChannelHello({
+        name: "Kiln move",
+        purpose: "Moving the kiln by March.",
+      }),
+    };
+    expect(toVisibleChatItems([hello, PROSE])).toEqual([
+      {
+        kind: "text",
+        id: "assistant-1",
+        role: "assistant",
+        text: "Here is how those issues group.",
+      },
+    ]);
+  });
+
   test("keeps an activity, carrying the message whole", () => {
     expect(toVisibleChatItems([DRAWING])).toEqual([
       { kind: "activity", id: "activity-1", message: DRAWING },

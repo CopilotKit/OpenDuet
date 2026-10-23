@@ -69,6 +69,8 @@ export type TaskRecord = {
   suggestionId: string | null;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** The OpenDuet channel it was asked for in, or null for Everything. */
+  fromChannelId: string | null;
   status: TaskStatus;
   /**
    * Why its turn couldn't finish, in plain words, while it is `failed`, or marked done after failing.
@@ -92,6 +94,8 @@ export type NewTask = {
   suggestionId: string | null;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** Absent or null: asked for in Everything. */
+  fromChannelId?: string | null;
 };
 
 export class TaskNotFoundError extends Error {
@@ -412,6 +416,7 @@ export function createTaskStore(
       suggestionId: row.suggestionId,
       sourceApp: row.sourceApp,
       sourceLink: row.sourceLink,
+      fromChannelId: row.fromChannelId,
       status,
       // Kept while it is marked done, too: Reopen brings the failure back, and so may a reply.
       failure: failedOrDone ? (state?.failure ?? null) : null,

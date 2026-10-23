@@ -106,6 +106,8 @@ export type TaskThreads = {
     suggestionId: string | null;
     sourceApp: string | null;
     sourceLink: string | null;
+    /** The OpenDuet channel it was asked for in; absent or null for Everything. */
+    fromChannelId?: string | null;
   }): Promise<OpenedTask>;
   /** The task's own conversation, or null once the person can no longer reach it or its Bot. */
   scope(ownerUserId: string, taskId: string): Promise<ProactiveScope | null>;
@@ -129,6 +131,8 @@ export type AskedTask = {
   why?: string | undefined;
   source?: string | undefined;
   link?: string | undefined;
+  /** The OpenDuet channel `start_task` ran in, or null or absent for Everything. */
+  fromChannelId?: string | null | undefined;
 };
 
 export type ProactiveEngineDeps = {
@@ -663,6 +667,8 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       suggestionId: suggestion.id,
       sourceApp: suggestion.sourceApp,
       sourceLink: suggestion.sourceLink,
+      // A card added in a channel makes a task of that channel's.
+      fromChannelId: suggestion.fromChannelId ?? null,
     });
   }
 
@@ -906,6 +912,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         suggestionId: null,
         sourceApp: input.source ?? null,
         sourceLink: input.link ?? null,
+        fromChannelId: input.fromChannelId ?? null,
       });
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,

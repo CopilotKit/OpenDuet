@@ -54,6 +54,8 @@ let settings: unknown[] = [];
 let activity: Record<string, unknown> = {};
 let channels: unknown[] = [];
 let tasks: unknown[] = [];
+/** The person's channels, as the drawer and every tag read them. */
+let duetChannels: unknown[] = [];
 const sent: { method: string; path: string; body: unknown }[] = [];
 function serving() {
   sent.length = 0;
@@ -96,6 +98,8 @@ function serving() {
     if (url === "/api/channels")
       return Response.json({ channels, nextCursor: null });
     if (url === "/api/openduet/tasks") return Response.json({ tasks });
+    if (url === "/api/openduet/channels?bot=openduet")
+      return Response.json({ everythingId: "chat-1", channels: duetChannels });
     return Response.json({});
   }) as unknown as typeof fetch;
 }
@@ -124,6 +128,7 @@ function quiet() {
   activity = { inProgress: [], scheduled: [], completed: [] };
   channels = [];
   tasks = [];
+  duetChannels = [];
 }
 
 /** An ISO time this many minutes before now, so "Updated" reads the same whenever the test runs. */
@@ -859,6 +864,76 @@ test("Up next lists suggestions and asked tasks newest first, the asked ones tag
   // Another Bot's says whose it is; the product's own Bot goes without saying.
   expect(rows[3]?.textContent).toContain("Scout");
   expect(rows[0]?.textContent).not.toContain("OpenDuet");
+});
+
+/** A channel as the drawer lists it, for the tags. */
+const kilnChannel = {
+  id: "c-kiln",
+  name: "Kiln move",
+  purpose: "Moving the studio's kiln by March.",
+  icon: "home",
+  colour: "green",
+  dressed: true,
+  archivedAt: null,
+  agentIds: ["openduet"],
+  lastMessageAt: null,
+  createdAt: "2026-10-22T09:00:00Z",
+};
+
+test("a task asked for in a channel wears the channel's colour tag on its row; one from Everything wears none", async () => {
+  quiet();
+  duetChannels = [kilnChannel];
+  tasks = [
+    task({
+      id: "movers",
+      title: "Book the movers",
+      status: "working",
+      fromChannelId: "c-kiln",
+    }),
+    task({ id: "rosa", status: "working", fromChannelId: null }),
+  ];
+  serving();
+  const view = draw();
+  const group = await view.findByRole("region", { name: "Working" });
+  const movers = (await within(group).findByText("Book the movers")).closest(
+    "a",
+  ) as HTMLElement;
+  await waitFor(() =>
+    expect(movers.querySelector("[data-channel-tag]")).toBeTruthy(),
+  );
+  const tag = movers.querySelector("[data-channel-tag]");
+  expect(tag?.getAttribute("data-channel-tag")).toBe("green");
+  expect(tag?.textContent).toBe("Kiln move");
+  const rosa = within(group)
+    .getByText("Draft a reply to Rosa about Oat Satin")
+    .closest("a") as HTMLElement;
+  expect(rosa.querySelector("[data-channel-tag]")).toBeNull();
+});
+
+test("an Up next card added in a channel wears its tag too", async () => {
+  quiet();
+  duetChannels = [kilnChannel];
+  suggestions = [
+    suggestion({
+      id: "measure",
+      runId: "asked:kiln",
+      title: "Measure the new kiln bay",
+      fromChannelId: "c-kiln",
+    }),
+    suggestion({ id: "plain", title: "Pay the booth balance" }),
+  ];
+  serving();
+  const view = await upNext();
+  const list = await view.findByRole("region", { name: "Up next" });
+  await within(list).findByText("Measure the new kiln bay");
+  const rows = within(list).getAllByRole("listitem");
+  await waitFor(() =>
+    expect(
+      rows
+        .map((row) => row.querySelector("[data-channel-tag]")?.textContent)
+        .filter(Boolean),
+    ).toEqual(["Kiln move"]),
+  );
 });
 
 test("Start starts an Up next card as a task and Hide dismisses one", async () => {

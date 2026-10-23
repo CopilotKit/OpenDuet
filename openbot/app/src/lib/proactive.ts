@@ -28,6 +28,8 @@ export type ProactiveSuggestion = {
   detail: string;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** The channel the person asked for it in, which it wears as a tag, or null for Everything. */
+  fromChannelId?: string | null;
   /** Open until the person starts it or hides it, from any card that shows it. */
   status?: "open" | "started" | "dismissed";
   createdAt: string;

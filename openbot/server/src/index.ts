@@ -254,7 +254,12 @@ import { createRoutineRunner } from "./routines/runner";
 import { createRoutineStore } from "./routines/store";
 import { createIntentRouter } from "./routing/classify";
 import { createModelCompleter } from "./routing/model";
+import {
+  createChannelHello,
+  createDuetChannelStore,
+} from "./openduet/channels";
 import { createPageStore } from "./openduet/pages";
+import { withRunChannels } from "./openduet/run-channel";
 import {
   createSetupSources,
   modelKeyOf,
@@ -1355,7 +1360,8 @@ const memoryDefaults = createMemoryDefaults({
   // task's own conversation: research writes to the person in Chat, and a task's turn speaks for them.
   canDeliver: async (ownerUserId, channelId, agentId) =>
     (await deliveryScopeFor(ownerUserId, channelId, agentId)) !== null &&
-    !(await openDuetTasks.isTaskConversation(ownerUserId, channelId)),
+    !(await openDuetTasks.isTaskConversation(ownerUserId, channelId)) &&
+    !(await openDuetChannels.isChannel(ownerUserId, channelId)),
   mintThreadId: () => threadIdentity.mint(),
   // Read when a Bot turn starts, long after `teamBots` below is defined.
   publishedByAnother: (ownerUserId, agentId) =>
@@ -1776,7 +1782,7 @@ const routineRunner = createRoutineRunner({
  * invisible: it runs, and quietly holds different tools or a different role from the one the person
  * is talking to.
  */
-const actorAgentResolver = createActorAgentResolver({
+const baseAgentResolver = createActorAgentResolver({
   loadAgents: loadAgentsForActor,
   model: runtimeModel,
   resolveModelApiKey: resolveRuntimeModelApiKey,
@@ -1806,6 +1812,10 @@ const actorAgentResolver = createActorAgentResolver({
   },
   loadPersonalMemoryForActor,
 });
+// Every Bot a person runs learns which OpenDuet channel its run is in. See openduet/run-channel.ts.
+const actorAgentResolver = withRunChannels(baseAgentResolver, (owner, thread) =>
+  openDuetChannels.ofThread(owner, thread),
+);
 
 const copilotRuntime = mountCopilotRuntime(
   config,
@@ -1947,6 +1957,16 @@ const approvalContinuationRunner = createTurnRunner({
   learningContainerForThread: (input) =>
     copilotRuntime.learning?.containerForThread(input) ??
     Promise.resolve(undefined),
+});
+// The drawer's channels, and the Bot's hello in a new one. See openduet/channels.ts.
+const openDuetChannels = createDuetChannelStore({
+  database,
+  channels: channelStore,
+  hello: createChannelHello({
+    channels: channelStore,
+    actorFor,
+    runTurn: approvalContinuationRunner,
+  }),
 });
 /**
  * Conversations with several Bots. Each Bot turn is an ordinary headless AG-UI turn into that Bot's
@@ -2694,6 +2714,7 @@ const app = createApp(
       }),
       intake: openDuetIntake,
       report: openDuetReport,
+      channels: openDuetChannels,
     },
     responsibilities: {
       store: responsibilityStore,

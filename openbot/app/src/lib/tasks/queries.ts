@@ -31,6 +31,8 @@ export type TaskRecord = {
   suggestionId: string | null;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** The channel it was asked for in, which it wears as a tag, or null for Everything. */
+  fromChannelId?: string | null;
   status: TaskStatus;
   /**
    * Why its turn couldn't finish, in plain words, while it is `failed`, or marked done after failing.

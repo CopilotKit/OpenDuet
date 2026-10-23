@@ -87,3 +87,16 @@ test("the tabs are about the tenant's own Bot, or the default Bot without one", 
   expect(primaryBot([bot("helper"), bot("another")])?.id).toBe("helper");
   expect(primaryBot(undefined)).toBeUndefined();
 });
+
+test("one of the person's channels is never Chat's, however recently it was used", () => {
+  const found = ongoingChannel(
+    [
+      channel("kiln move", ["openduet"], "2026-10-22T10:00:00Z", {
+        openduetChannel: true,
+      }),
+      channel("chat", ["openduet"], "2026-10-20T10:00:00Z"),
+    ],
+    "openduet",
+  );
+  expect(found?.id).toBe("chat");
+});

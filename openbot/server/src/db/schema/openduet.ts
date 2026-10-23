@@ -7,6 +7,12 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import {
+  CHANNEL_COLOURS,
+  CHANNEL_ICONS,
+  type ChannelColour,
+  type ChannelIcon,
+} from "@openbot/shared/channel-look";
 import type { PageContent, PageKind } from "../../openduet/page-content";
 import { agents, channels, users } from "./core";
 import { jsonb } from "./json";
@@ -68,6 +74,8 @@ export type OpenDuetTaskOrigin = "asked" | "suggestion" | "check_in";
  * Only the person's own "done" is stored, as `resolved_at`.
  *
  * `channel_id` is the task's own conversation, made with it, one task per conversation.
+ * `from_channel_id` is the channel it was asked for in, when a channel asked for it: null means
+ * Everything, the person's one thread. A channel deleted later leaves the task, untagged.
  */
 export const openduetTasks = pgTable(
   "openduet_tasks",
@@ -82,6 +90,9 @@ export const openduetTasks = pgTable(
     channelId: text("channel_id")
       .notNull()
       .references(() => channels.id, { onDelete: "cascade" }),
+    fromChannelId: text("from_channel_id").references(() => channels.id, {
+      onDelete: "set null",
+    }),
     title: text("title").notNull(),
     why: text("why"),
     origin: text("origin").$type<OpenDuetTaskOrigin>().notNull(),
@@ -110,6 +121,53 @@ export const openduetTasks = pgTable(
     check(
       "openduet_tasks_origin_check",
       sql`${table.origin} IN ('asked', 'suggestion', 'check_in')`,
+    ),
+  ],
+);
+
+/** The SQL list a check constraint keeps a column to, from one of the shared sets. */
+const oneOf = (values: readonly string[]) =>
+  sql.raw(values.map((value) => `'${value}'`).join(", "));
+
+/**
+ * How one of the person's channels looks, and whether they put it away. A channel is an OpenBot
+ * conversation between the person and the Bot that is neither the direct one, which is Everything,
+ * nor a task's (openduet/channels.ts). Its name and its purpose stay where OpenBot keeps them,
+ * `channels.name` and `channels.description`; this holds only what OpenBot has no column for.
+ *
+ * A conversation with no row here is still a channel, drawn with the default look: a generic icon
+ * and a colour picked stably from its id (`channelLook` in shared/channel-look.ts). The row is
+ * written when the person makes the channel, dresses one, opens one from the drawer, or archives
+ * one, so there is nothing to backfill.
+ *
+ * `archived_at` lives here, not on `channel_memberships` beside `pinned_at`, deliberately. An
+ * OpenDuet channel has one person in it, so a per-member fact and a per-channel one are the same
+ * fact, and keeping it here leaves OpenBot's core tables untouched.
+ */
+export const openduetChannels = pgTable(
+  "openduet_channels",
+  {
+    channelId: text("channel_id")
+      .primaryKey()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    icon: text("icon").$type<ChannelIcon>().notNull(),
+    colour: text("colour").$type<ChannelColour>().notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "openduet_channels_icon_check",
+      sql`${table.icon} IN (${oneOf(CHANNEL_ICONS)})`,
+    ),
+    check(
+      "openduet_channels_colour_check",
+      sql`${table.colour} IN (${oneOf(CHANNEL_COLOURS)})`,
     ),
   ],
 );

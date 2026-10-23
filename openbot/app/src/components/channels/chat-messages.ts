@@ -1,6 +1,7 @@
 import type { ActivityMessage, Message, ToolCall } from "@ag-ui/core";
 import { classifyAttachment } from "@/lib/channels/attachments";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
+import { readChannelHello } from "@/lib/channels/channel-hello";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -452,6 +453,9 @@ export function toVisibleChatItems(
 
     if (typeof message.content === "string") {
       const text = message.content;
+      // A new channel's hello: sent for the person, never by them. The Bot speaks first, so nothing
+      // is drawn where their bubble would be (shared/channel-hello.ts).
+      if (readChannelHello(text) !== null) return [];
       return text ? [{ kind: "text", id: message.id, role: "user", text }] : [];
     }
 

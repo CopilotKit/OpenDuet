@@ -10,6 +10,7 @@ import { buildMorningBrief, type CallTool, openduetTools } from "./brief";
 import { offerTools } from "./offers";
 import { createPageStore, type PageStore, pageTools } from "./pages";
 import { replyTools } from "./replies";
+import { currentRunChannelId } from "./run-channel";
 import type { TaskIntake } from "./task-store";
 import {
   type TaskSink,
@@ -28,6 +29,8 @@ export type UpNextCard = {
   detail: string;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** The OpenDuet channel it was asked for in; absent or null for Everything. */
+  fromChannelId?: string | null;
 };
 
 /**
@@ -89,6 +92,7 @@ export function createUpNext(deps: {
         sourceApp: card.sourceApp,
         sourceRef: null,
         sourceLink: card.sourceLink,
+        fromChannelId: card.fromChannelId ?? null,
       });
       added.push({ id: row.id, title: row.title });
     }
@@ -147,13 +151,19 @@ export function createOpenDuetTools(deps: {
    * started suggestions too. Absent, the tool is not held.
    */
   startTask?: TaskStarter;
+  /**
+   * The channel the run calling a tool is in. Defaults to the run's own, as the middleware on every
+   * Bot sets it (openduet/run-channel.ts); a test passes its own.
+   */
+  runChannel?: () => string | null;
 }): (
   actorId: string,
   botId: string,
   initiator: AuditInitiator,
 ) => GrantedTool[] {
   const upNext = createUpNext(deps);
-  const save: TaskSink = ({ ownerUserId, agentId, tasks }) =>
+  const runChannel = deps.runChannel ?? currentRunChannelId;
+  const save: TaskSink = ({ ownerUserId, agentId, tasks, fromChannelId }) =>
     upNext({
       ownerUserId,
       agentId,
@@ -162,6 +172,7 @@ export function createOpenDuetTools(deps: {
         detail: taskDetail(asked),
         sourceApp: asked.source ?? null,
         sourceLink: asked.link ?? null,
+        fromChannelId,
       })),
     });
   const proactive = createProactiveStore(deps.database);
@@ -189,7 +200,14 @@ export function createOpenDuetTools(deps: {
         ),
     }),
     ...replyTools({ initiator }),
-    ...taskTools({ actorId, botId, initiator, save, start: deps.startTask }),
+    ...taskTools({
+      actorId,
+      botId,
+      initiator,
+      save,
+      start: deps.startTask,
+      channel: runChannel,
+    }),
     ...offerTools({
       actorId,
       initiator,

@@ -21,6 +21,7 @@ import {
 import { useConversationBusy } from "@/lib/tasks/use-task";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
+import { ChannelTagOf } from "./channel-tag";
 import { DuetIcon } from "./icons";
 import { TaskButton, TaskStatusPill } from "./task-card";
 import { noticedLine, TaskReportView } from "./task-report";
@@ -166,7 +167,10 @@ function TaskBody({ task }: { task: TaskRecord }) {
           {noticedLine(task)}
         </p>
         <div className="flex items-center justify-between gap-2.5">
-          <TaskStatusPill status={status} />
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+            <TaskStatusPill status={status} />
+            <ChannelTagOf channelId={task.fromChannelId} />
+          </span>
           <div className="flex items-center gap-2">
             <TaskButton
               busy={resolve.isPending}
