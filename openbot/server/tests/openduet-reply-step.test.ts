@@ -1,8 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { BaseEvent, Message } from "@ag-ui/client";
 import { LLMock } from "@copilotkit/aimock";
+import { frameFirstDay } from "@openbot/shared/first-day";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import { z } from "zod";
+import { currentApprovalContext } from "../src/approvals/types";
 import { buildAgents } from "../src/copilot";
 import { REPLIES_TOOL, replyTools } from "../src/openduet/replies";
 
@@ -78,6 +81,7 @@ async function turn(
       content: "Ana from Hearth & Co emailed me. What does she want?",
     },
   ],
+  options: { tools?: GrantedTool[] } = {},
 ) {
   recorder.clearFixtures();
   recorder.clearRequests();
@@ -100,7 +104,11 @@ async function turn(
     { provider: "openai", defaultModel: "gpt-test" },
     "synthetic-model-key",
     undefined,
-    async () => [read, ...replyTools({ initiator: { kind: "person" } })],
+    async () => [
+      read,
+      ...(options.tools ?? []),
+      ...replyTools({ initiator: { kind: "person" } }),
+    ],
   );
   const built = agents.openduet;
   if (!built) throw new Error('buildAgents returned no "openduet"');
@@ -138,7 +146,18 @@ async function turn(
     }
   }
   expect(events.some((event) => event.type === "RUN_ERROR")).toBe(false);
-  return { calls, steps: at };
+  const text = events
+    .filter(
+      (event) =>
+        event.type === "TEXT_MESSAGE_CHUNK" ||
+        event.type === "TEXT_MESSAGE_CONTENT",
+    )
+    .map((event) => (event as BaseEvent & { delta?: string }).delta ?? "")
+    .join("");
+  const finished = events.find((event) => event.type === "RUN_FINISHED") as
+    | (BaseEvent & { outcome?: { type?: string } })
+    | undefined;
+  return { calls, steps: at, text, outcome: finished?.outcome?.type };
 }
 
 const replyAnswers = (calls: { name: string; answer: string }[]) =>
@@ -166,7 +185,9 @@ describe("a suggest_replies call made too early is held under the answer, not dr
     expect(drawn(held)).toBe(true);
     expect(held).toContain("Nothing is on the person's screen yet");
     expect(held).toContain("Write your full answer now");
-    expect(held).toContain(`Don't call ${REPLIES_TOOL} again`);
+    expect(held).toContain(
+      `If what you read changes the choices, call ${REPLIES_TOOL} once more after your answer.`,
+    );
     // Not the answer that collapsed it: nothing about the buttons being on screen, or one sentence.
     expect(held).not.toContain("on screen,");
     expect(held).not.toContain("one short sentence");
@@ -205,16 +226,17 @@ describe("a suggest_replies call made too early is held under the answer, not dr
 
   test("the Bot is told not to mention the buttons", async () => {
     const { calls } = await turn([{ calls: [chips()] }, { text: ANSWER }]);
-    expect(replyAnswers(calls)[0]).toContain("don't mention the buttons");
+    expect(replyAnswers(calls)[0]).toContain("Don't mention the buttons.");
   });
 });
 
 describe("a suggest_replies call after the answer", () => {
-  test("ending on the question: shown, and the Bot is told to end its turn", async () => {
-    const { calls } = await turn([
+  test("ending on the question: shown, and the turn ends there: the model is not asked again", async () => {
+    const { calls, steps, text } = await turn([
       { calls: [reads()] },
       { text: ANSWER, calls: [chips()] },
-      { text: "" },
+      // What the model wrote here on main: a line about the buttons, between the question and them.
+      { text: "The buttons are on screen above. Pick the one you want." },
     ]);
 
     const [shown] = replyAnswers(calls);
@@ -223,6 +245,9 @@ describe("a suggest_replies call after the answer", () => {
     // Nothing that would have it ask the question a second time.
     expect(shown).not.toContain("ask it now");
     expect(shown).not.toContain("Ask your question");
+    // Enforced, not only asked: the third step is never requested, so nothing is written after.
+    expect(steps).toBe(2);
+    expect(text).not.toContain("Pick the one you want");
   });
 
   test("that asks nothing: shown, and the Bot is told to ask, once, in words", async () => {
@@ -241,7 +266,7 @@ describe("a suggest_replies call after the answer", () => {
 
   test("beside a copy of itself: the first is shown and the copy dropped, so one row is drawn", async () => {
     // A copy is not a read: the answer before them stands, and neither is held.
-    const { calls } = await turn([
+    const { calls, steps } = await turn([
       { calls: [reads()] },
       { text: ANSWER, calls: [chips(), chips(), chips()] },
       { text: "" },
@@ -250,35 +275,80 @@ describe("a suggest_replies call after the answer", () => {
     const answers = replyAnswers(calls);
     expect(answers.filter(drawn)).toHaveLength(1);
     expect(answers.filter(drawn)[0]).toContain("End your turn now");
+    expect(steps).toBe(2);
     expect(
       answers.filter((answer) => answer.includes("already on screen")),
     ).toHaveLength(2);
   });
+
+  test("that asks nothing does not end the turn: the Bot still has its question to write", async () => {
+    const { steps, text } = await turn([
+      {
+        text: "Ana wants 200 mugs instead of 120 for the same Friday.",
+        calls: [chips()],
+      },
+      { text: "Should I say yes for Tuesday?" },
+    ]);
+    expect(steps).toBe(2);
+    expect(text).toContain("Should I say yes for Tuesday?");
+  });
+
+  test("a held call does not end the turn: the answer is still to come", async () => {
+    const { steps, text } = await turn([
+      { calls: [reads(), chips()] },
+      { text: ANSWER },
+    ]);
+    expect(steps).toBe(2);
+    expect(text).toContain("Should I draft a yes for Tuesday?");
+  });
 });
 
 describe("one set of chips per turn", () => {
-  test("a second call after the first was shown is dropped", async () => {
-    const { calls } = await turn([
-      { text: ANSWER, calls: [chips()] },
-      { calls: [chips(["Draft it", "Not yet"])] },
-      { text: "" },
+  test("a second call after the first was shown is dropped, and the turn ends", async () => {
+    // Shown under words that asked nothing, so the turn goes on for the question.
+    const { calls, steps } = await turn([
+      {
+        text: "Ana wants 200 mugs instead of 120 for the same Friday.",
+        calls: [chips()],
+      },
+      {
+        text: "Should I say yes for Tuesday?",
+        calls: [chips(["Draft it", "Not yet"])],
+      },
+      { text: "The buttons are on screen above." },
     ]);
 
     const [first, second] = replyAnswers(calls);
     expect(drawn(first)).toBe(true);
     expect(second).toStartWith("Refused.");
     expect(second).toContain("already on screen");
+    expect(steps).toBe(2);
   });
 
-  test("a second call after one was held is dropped too", async () => {
-    const { calls } = await turn([
+  test("a call after the answer replaces a held set, and the turn ends", async () => {
+    // The held set was picked beside the read; the one picked after the answer is the one to draw.
+    const { calls, steps } = await turn([
       { calls: [reads(), chips()] },
       { text: ANSWER, calls: [chips(["Draft it", "Not yet"])] },
-      { text: "" },
+      { text: "Pick one above." },
+    ]);
+
+    const [held, replacing] = replyAnswers(calls);
+    expect(held).toStartWith("The buttons are held");
+    expect(drawn(replacing)).toBe(true);
+    expect(replacing).toContain("End your turn now and write nothing more.");
+    expect(steps).toBe(2);
+  });
+
+  test("a second call before the answer, after one was held, is dropped", async () => {
+    const { calls } = await turn([
+      { calls: [reads(), chips()] },
+      { calls: [reads(), chips(["Draft it", "Not yet"])] },
+      { text: ANSWER },
     ]);
 
     const [held, second] = replyAnswers(calls);
-    expect(drawn(held)).toBe(true);
+    expect(held).toStartWith("The buttons are held");
     expect(second).toStartWith("Refused.");
     expect(second).toContain("already on screen");
   });
@@ -342,5 +412,175 @@ describe("one set of chips per turn", () => {
     );
 
     expect(replyAnswers(calls)[0]).toContain("already on screen");
+  });
+});
+
+const SEND = "gmail_send_reply";
+const sends = (): Call => ({
+  name: SEND,
+  args: { messageId: "msg-ana", body: "Yes to 200, for Tuesday." },
+});
+
+/** A send held for the person's approval, as the gate holds one: after a moment's work, it waits. */
+const heldSend: GrantedTool = {
+  name: SEND,
+  ref: `google-workspace/${SEND}`,
+  description: "Reply in an existing thread.",
+  parameters: z.object({ messageId: z.string(), body: z.string() }),
+  execute: async () => {
+    // The real gate reads the policy and writes the request first; the chips call answers in that time.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    throw new HeadlessToolSuspension("Waiting for your approval.", {
+      kind: "approval",
+      approvalId: "approval-1",
+      requestId: "approval-1",
+      continuation: currentApprovalContext(),
+    });
+  },
+};
+
+/** The same send once the person allowed it. */
+const allowedSend: GrantedTool = {
+  ...heldSend,
+  execute: async () => "Sent.",
+};
+
+describe("chips and an approval in the same turn", () => {
+  test("called beside a send that waits for approval: nothing is drawn under the card", async () => {
+    const { calls, outcome } = await turn(
+      [{ calls: [reads(), sends(), chips()] }, { text: ANSWER }],
+      undefined,
+      { tools: [heldSend] },
+    );
+
+    expect(outcome).toBe("interrupt");
+    // Whatever the chips call answered, if anything reached the person, it draws nothing.
+    expect(replyAnswers(calls).filter(drawn)).toEqual([]);
+  });
+
+  test("the run resumed after Allow once, with the first chips call left unanswered, draws one set", async () => {
+    /*
+     * The history a private-share resume runs with: the continuation was captured when the send
+     * suspended, before the chips call beside it answered, so that call has no result. The approval's
+     * answer stands in for the send's. The model then sends again and calls the chips again.
+     */
+    const history: Message[] = [
+      {
+        id: "u1",
+        role: "user",
+        content:
+          "Reply to Ana's 'Could we do 200?' and say yes for Tuesday. Then ask me whether to tell Sam today or tomorrow.",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "call_read",
+            type: "function",
+            function: { name: READ, arguments: '{"id":"msg-ana"}' },
+          },
+          {
+            id: "call_send",
+            type: "function",
+            function: {
+              name: SEND,
+              arguments:
+                '{"messageId":"msg-ana","body":"Yes to 200, for Tuesday."}',
+            },
+          },
+          {
+            id: "call_chips_first",
+            type: "function",
+            function: {
+              name: REPLIES_TOOL,
+              arguments: '{"replies":["Tell Sam today","Tell Sam tomorrow"]}',
+            },
+          },
+        ],
+      },
+      {
+        id: "t1",
+        role: "tool",
+        toolCallId: "call_read",
+        content: JSON.stringify("Could we do 200 mugs instead of 120?"),
+      },
+      {
+        id: "approval:approval-1",
+        role: "tool",
+        toolCallId: "call_send",
+        content: "The person allowed this share. Send it again now, unchanged.",
+      },
+    ];
+    const { calls, steps } = await turn(
+      [
+        {
+          calls: [sends(), chips(["Tell Sam today", "Tell Sam tomorrow"])],
+        },
+        { text: "I sent Ana a yes for Tuesday. Should I tell Sam today?" },
+      ],
+      history,
+      { tools: [allowedSend] },
+    );
+
+    // One set from this run, held under the answer it then writes; the first call drew nothing.
+    expect(replyAnswers(calls).filter(drawn)).toHaveLength(1);
+    expect(replyAnswers(calls)[0]).toStartWith("The buttons are held");
+    expect(steps).toBe(2);
+  });
+
+  test("an earlier call in the turn with no answer counts as a set, so another before the answer is dropped", async () => {
+    const history: Message[] = [
+      { id: "u1", role: "user", content: "Should I say yes to Ana?" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "call_chips_first",
+            type: "function",
+            function: {
+              name: REPLIES_TOOL,
+              arguments: '{"replies":["Yes","No"]}',
+            },
+          },
+        ],
+      },
+      {
+        id: "t1",
+        role: "tool",
+        toolCallId: "call_chips_first",
+        content: JSON.stringify(
+          "The buttons are held: they appear under the last thing you write this turn.",
+        ),
+      },
+    ];
+    const { calls } = await turn(
+      [{ calls: [reads(), chips()] }, { text: ANSWER }],
+      history,
+    );
+    expect(replyAnswers(calls)[0]).toContain("already on screen");
+  });
+});
+
+describe("the first day", () => {
+  test("a chips call on the first-day turn is refused: the app draws that turn's own replies", async () => {
+    const { calls } = await turn(
+      [{ calls: [reads(), chips()] }, { text: ANSWER }],
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: frameFirstDay(
+            "Look at my mail and calendar and tell me who I am.",
+          ),
+        },
+      ],
+    );
+    const [refused] = replyAnswers(calls);
+    expect(refused).toStartWith("Refused.");
+    expect(refused).toContain("first day");
   });
 });

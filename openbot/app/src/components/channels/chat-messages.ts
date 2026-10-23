@@ -584,8 +584,8 @@ const RUNTIME_TOOL_ERROR = "Error:";
  * it (`REFUSAL_MARKER`: a second set in one turn, or replies it would not take) nor failed it. One
  * test for the transcript and the chips' renderer both, so a call is never a row with no chips.
  *
- * A call the server held, because it came before the answer, is drawn: `repliesLast` puts it under
- * the answer written after it.
+ * A call the server held, because it came before the answer, is drawn once the answer is written:
+ * see `repliesHeld`.
  */
 export function repliesShown(result: string | undefined): boolean {
   if (result === undefined) return false;
@@ -593,6 +593,18 @@ export function repliesShown(result: string | undefined): boolean {
   return (
     !answer.startsWith(REFUSAL_MARKER) && !answer.startsWith(RUNTIME_TOOL_ERROR)
   );
+}
+
+/** How the server answers a call it held for an answer still to come (server/src/openduet/replies.ts). */
+const HELD_MARKER = "The buttons are held";
+
+/**
+ * Whether the server held this call's chips: the Bot called for them beside a read, or before it
+ * had written its answer, and was told to write it now. They belong under that answer, so
+ * `repliesLast` draws nothing for them until the Bot's words follow the call in its turn.
+ */
+export function repliesHeld(result: string | undefined): boolean {
+  return result !== undefined && asText(result).startsWith(HELD_MARKER);
 }
 
 /**
@@ -608,13 +620,29 @@ export function repliesShown(result: string | undefined): boolean {
  * AND ONLY CHIPS THE SERVER ACCEPTED (`repliesShown`). Any other call has no chips to draw, and kept
  * as an item it would still take a row of the transcript's gap: an empty stripe where the chips
  * would have been.
+ *
+ * A HELD SET WAITS FOR WORDS (`repliesHeld`). Drawn as soon as it was answered, it sat live under
+ * "Thinking it through…" for seconds before the answer it belongs to existed: the person's message,
+ * a tool line and three choices, which is the very picture of an answer collapsed to its question.
+ * A tap there answered a question nobody had been shown. So it is drawn once the Bot's words follow
+ * the call in its turn.
+ *
+ * ONE SET PER TURN, THE LAST. The server refuses a second set, but a run resumed after Allow once
+ * starts from the moment the send waited, and the step it repeats can call for chips again. Two
+ * identical rows were drawn; the last set stands for the turn.
  */
 export function repliesLast(
   items: readonly VisibleChatItem[],
 ): VisibleChatItem[] {
   const ordered: VisibleChatItem[] = [];
   let pages: VisibleChatItem[] = [];
-  let replies: VisibleChatItem[] = [];
+  let replies: { item: VisibleChatItem; ready: boolean }[] = [];
+  const close = () => {
+    const last = replies.filter((reply) => reply.ready).at(-1);
+    ordered.push(...pages, ...(last ? [last.item] : []));
+    pages = [];
+    replies = [];
+  };
   for (const item of items) {
     if (item.kind === "tool" && item.toolCall.function.name === MAKE_PAGE) {
       pages.push(item);
@@ -624,19 +652,23 @@ export function repliesLast(
       item.kind === "tool" &&
       item.toolCall.function.name === SUGGEST_REPLIES
     ) {
-      if (repliesShown(item.result)) replies.push(item);
+      if (repliesShown(item.result))
+        replies.push({ item, ready: !repliesHeld(item.result) });
       continue;
     }
     if (
       item.kind === "attachments" ||
       (item.kind === "text" && item.role === "user")
-    ) {
-      ordered.push(...pages, ...replies);
-      pages = [];
-      replies = [];
-    }
+    )
+      close();
+    else if (
+      item.kind === "text" &&
+      item.role === "assistant" &&
+      item.text.trim()
+    )
+      for (const reply of replies) reply.ready = true;
     ordered.push(item);
   }
-  ordered.push(...pages, ...replies);
+  close();
   return ordered;
 }

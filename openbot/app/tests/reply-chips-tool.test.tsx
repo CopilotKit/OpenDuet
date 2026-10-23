@@ -15,9 +15,9 @@ import userEvent from "@testing-library/user-event";
 import type { ComposerDraft } from "@/components/channels/composer/draft";
 import { ConversationView } from "@/components/channels/conversation-view";
 import {
-  readReplies,
   ReplyChips,
   ReplyChipsTool,
+  readReplies,
 } from "@/lib/copilot/reply-chips-tool";
 import { settleReactWork } from "./settle-react-work";
 
@@ -45,6 +45,11 @@ afterAll(async () => {
 
 const ACK =
   "The buttons are on screen, under the last thing you write this turn.";
+
+/** As the server holds a call made beside a read (server/src/openduet/reply-turn.ts), encoded. */
+const HELD = JSON.stringify(
+  "The buttons are held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't mention the buttons. If what you read changes the choices, call suggest_replies once more after your answer.",
+);
 
 /** The person asks, the Bot asks back and offers three replies. */
 function asked(
@@ -273,12 +278,42 @@ describe("the chips", () => {
     expect(view.queryByRole("group", { name: "Suggested replies" })).toBe(null);
   });
 
+  test("a held call draws nothing until the Bot's words follow it, so no choice shows before its answer", async () => {
+    // While the read and the answer are still on the way: the person's message and the call only.
+    // Drawn here, the chips sat live under "Thinking it through…" for seconds, the collapse's picture.
+    const rows = (view: ReturnType<typeof render>) =>
+      view.container.querySelectorAll('[data-slot="message-scroller-item"]')
+        .length;
+    const view = render(<Chat messages={asked(HELD, "")} sent={[]} />);
+    await view.findByText(/What needs me this morning\?/);
+    await settleReactWork();
+    expect(view.queryByRole("group", { name: "Suggested replies" })).toBe(null);
+    for (const reply of ["Ana's ship date", "The visit", "Not now"])
+      expect(view.queryByRole("button", { name: reply })).toBe(null);
+    // No empty row for it either: the person's message is the only row.
+    expect(rows(view)).toBe(1);
+
+    // The answer arrives, and the chips come with it, under it.
+    view.rerender(
+      <Chat
+        messages={[
+          ...asked(HELD, ""),
+          { id: "a2", role: "assistant", content: "Which first?" },
+        ]}
+        sent={[]}
+      />,
+    );
+    const group = await view.findByRole("group", { name: "Suggested replies" });
+    expect(
+      view.getByText("Which first?").compareDocumentPosition(group) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   test("a call held until the answer is written is drawn under that answer", async () => {
     // As the server holds a call made beside a read (server/src/openduet/reply-turn.ts): the call
     // carries no words, and the answer comes in the step after it.
-    const held = JSON.stringify(
-      "The buttons are held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't call suggest_replies again, and don't mention the buttons.",
-    );
+    const held = HELD;
     const view = render(
       <Chat
         messages={[

@@ -62,6 +62,7 @@ import {
 import { REPLIES_TOOL } from "./openduet/replies";
 import {
   answerReplies,
+  endingTurns,
   noteToolStep,
   type ToolExecution,
   watchReplyTurn,
@@ -424,7 +425,18 @@ export function builtInAgentConfiguration(
   ];
 
   return {
-    model: planModel ?? `${model.provider}/${model.defaultModel}`,
+    /*
+     * Wrapped only when the Bot holds tools, which is when there is a step loop to end: once a turn's
+     * reply chips are shown under its question, the next step is answered "stop" without reaching the
+     * model. See `endingTurns` in openduet/reply-turn.ts.
+     */
+    model:
+      allTools.length > 0
+        ? endingTurns(
+            planModel ?? `${model.provider}/${model.defaultModel}`,
+            apiKey ?? undefined,
+          )
+        : (planModel ?? `${model.provider}/${model.defaultModel}`),
     /*
      * The package's role, then the person's own standing instructions, then what this Bot actually
      * holds, then the computer.
@@ -471,12 +483,12 @@ export function builtInAgentConfiguration(
           tools: allTools.map((tool) => ({
             ...tool,
             /*
-             * Every call is noted against its step before anything else, so a `suggest_replies`
-             * call can tell whether it shares that step with a read. See openduet/reply-turn.ts.
+             * Every call is noted against its step, with its execution, as it starts, so a
+             * `suggest_replies` call can tell whether it shares that step with a read and wait for a
+             * send beside it to reach its approval. See openduet/reply-turn.ts.
              */
             execute: (args: unknown, execution?: ToolExecution) => {
-              noteToolStep(tool.name, execution);
-              return executeNativeApprovalTool(
+              const settled = executeNativeApprovalTool(
                 tool.name,
                 args,
                 execution?.toolCallId,
@@ -486,6 +498,8 @@ export function builtInAgentConfiguration(
                     ? answerReplies(execution, () => tool.execute(args))
                     : tool.execute(args),
               );
+              noteToolStep(tool.name, execution, settled);
+              return settled;
             },
           })),
           maxSteps: TOOL_STEPS,

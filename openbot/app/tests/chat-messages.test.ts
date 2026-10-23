@@ -1,5 +1,5 @@
-import type { Message, ToolCall } from "@ag-ui/core";
 import { describe, expect, test } from "bun:test";
+import type { Message, ToolCall } from "@ag-ui/core";
 import {
   repliesLast,
   toVisibleChatItems,
@@ -1177,5 +1177,61 @@ describe("repliesLast", () => {
         },
       ]),
     ).toEqual(["u1", "a2", "call-shown"]);
+  });
+
+  const held = JSON.stringify(
+    "The buttons are held: they appear under the last thing you write this turn.",
+  );
+
+  test("holds back a held set until the Bot's words follow it in the turn", () => {
+    const before = [
+      { id: "u1", role: "user", content: "Ana emailed me. Should I say yes?" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        toolCalls: [replies("call-held")],
+      },
+      { id: "t1", role: "tool", toolCallId: "call-held", content: held },
+    ] as Message[];
+    expect(ids(before)).toEqual(["u1"]);
+    expect(
+      ids([
+        ...before,
+        { id: "a2", role: "assistant", content: "She wants 200. Say yes?" },
+      ]),
+    ).toEqual(["u1", "a2", "call-held"]);
+    // Words from a later turn do not release it: the person spoke in between.
+    expect(
+      ids([
+        ...before,
+        { id: "u2", role: "user", content: "Never mind." },
+        { id: "a3", role: "assistant", content: "Sure." },
+      ]),
+    ).toEqual(["u1", "u2", "a3"]);
+  });
+
+  test("draws one set per turn, the last one accepted", () => {
+    // As after Allow once: the step that sent was asked again, chips and all.
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Reply to Ana, then ask me." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-first")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-first", content: held },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "",
+          toolCalls: [replies("call-again")],
+        },
+        { id: "t2", role: "tool", toolCallId: "call-again", content: held },
+        { id: "a3", role: "assistant", content: "Sent. Tell Sam today?" },
+      ]),
+    ).toEqual(["u1", "a3", "call-again"]);
   });
 });

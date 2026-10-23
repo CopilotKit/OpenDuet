@@ -41,7 +41,12 @@ export const REPLIES_DRAWN_PREFIX = "The buttons are";
  * short sentence", and it did exactly that. This one says what the person can actually see, which
  * is nothing yet, and asks for the answer it would write with no buttons at all.
  */
-export const REPLIES_HELD = `${REPLIES_DRAWN_PREFIX} held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't call ${REPLIES_TOOL} again, and don't mention the buttons.`;
+export const REPLIES_HELD = `${REPLIES_DRAWN_PREFIX} held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't mention the buttons. If what you read changes the choices, call ${REPLIES_TOOL} once more after your answer.`;
+/** Called while the turn waits on the person's approval: the next choice comes after that answer. */
+export const REPLIES_AFTER_APPROVAL =
+  "Refused. Ask after the person answers the approval, in your reply once the action is done.";
+/** The first day's own replies are drawn by the app (`FirstDayReplies`), under its answer. */
+export const REPLIES_FIRST_DAY = `Refused. Not on the first day: the app draws this turn's own replies under your answer. Don't call ${REPLIES_TOOL} in this turn.`;
 /** A second set in one turn: the first is still on screen, so this one is not drawn. */
 export const REPLIES_ALREADY_SHOWN =
   "Refused. The buttons are already on screen. End your turn now and write nothing more.";
