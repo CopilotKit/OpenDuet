@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readTaskBrief } from "@openbot/shared/task-brief";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
@@ -9,7 +10,7 @@ import type {
   ProactiveScope,
   TaskThreads,
 } from "../proactive/engine";
-import type { TaskStore } from "./task-store";
+import { plainFailure, type TaskStore } from "./task-store";
 
 /*
  * The two halves of a task the proactive engine leaves to the server's assembly: making its
@@ -25,7 +26,7 @@ import type { TaskStore } from "./task-store";
  * roster marks them, so Chat and the menu never mistake one for the person's own.
  */
 export function createTaskThreads(deps: {
-  store: Pick<TaskStore, "create" | "locate">;
+  store: Pick<TaskStore, "create" | "locate" | "failedTurn">;
   channels: Pick<ChannelStore, "create">;
   actorFor: (ownerUserId: string) => Promise<AgentActor>;
   /** The conversation as a turn needs it, or null once the person cannot reach it or its Bot. */
@@ -60,8 +61,18 @@ export function createTaskThreads(deps: {
         ? deps.scopeFor(ownerUserId, task.channelId, task.botId)
         : null;
     },
+    failedTurn: (ownerUserId, taskId) =>
+      deps.store.failedTurn(ownerUserId, taskId),
   };
 }
+
+/**
+ * DEV ONLY. While the file this names exists, every task's turn fails before it reaches the Bot, the
+ * way a turn fails when a service it needs is down. Unset, as it is everywhere but a developer's own
+ * stack, it does nothing. It is how the failed state and Try again are shown on a running stack:
+ * create the file, start a task, watch it fail twice, delete the file, press Try again.
+ */
+export const DEV_FAIL_TASKS_WHILE = "OPENDUET_DEV_FAIL_TASKS_WHILE";
 
 /**
  * A task's turn: the person's ask as their message in the task's conversation, a person-started turn
@@ -74,12 +85,22 @@ export function createTaskThreads(deps: {
  * with the request waiting on them; answering it carries the turn on (approvals/resume-sweep.ts). So
  * it is recorded as the Bot's line and the turn is done, rather than thrown as an error the queue
  * would log and hold.
+ *
+ * FAILING ON ITS LAST RUN IS SAID. A turn that throws is thrown on, for the queue to hold and retry.
+ * On its last run (`final`) the Bot's line says it couldn't finish and why, in plain words, so the
+ * conversation does not end on the person's ask with nothing after it.
  */
 export function createTaskTurn(deps: {
   channels: Pick<ChannelStore, "recordActivity" | "signalBusy">;
   actorFor: (ownerUserId: string) => Promise<AgentActor>;
   runTurn: TurnRunner;
+  /** See `DEV_FAIL_TASKS_WHILE`. Read from the environment when not given. */
+  failWhile?: string | undefined;
 }): ProactiveEngineDeps["startTask"] {
+  const failWhile =
+    "failWhile" in deps
+      ? deps.failWhile
+      : process.env[DEV_FAIL_TASKS_WHILE]?.trim() || undefined;
   return async (scope, input) => {
     const actor = await deps.actorFor(scope.ownerUserId);
     const record = (text: string, agentId: string | null, id: string) =>
@@ -97,6 +118,10 @@ export function createTaskTurn(deps: {
     );
     await deps.channels.signalBusy(scope.threadId, true).catch(() => {});
     try {
+      if (failWhile && existsSync(failWhile))
+        throw new Error(
+          `The model provider is unavailable (simulated: ${DEV_FAIL_TASKS_WHILE} names a file that exists).`,
+        );
       const result = await deps.runTurn({
         ...scope,
         routineId: input.runId,
@@ -108,7 +133,15 @@ export function createTaskTurn(deps: {
       if (result.replyText)
         await record(result.replyText, scope.agentId, `${input.runId}:reply`);
     } catch (error) {
-      if (!(error instanceof HeadlessToolSuspension)) throw error;
+      if (!(error instanceof HeadlessToolSuspension)) {
+        if (input.final)
+          await record(
+            `I couldn't finish this: ${plainFailure(error instanceof Error ? error.message : String(error))}.`,
+            scope.agentId,
+            `${input.runId}:failed`,
+          ).catch(() => {});
+        throw error;
+      }
       await record(error.message, scope.agentId, `${input.runId}:waiting`);
     } finally {
       await deps.channels.signalBusy(scope.threadId, false).catch(() => {});

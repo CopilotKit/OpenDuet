@@ -33,6 +33,9 @@ const NO_TASKS: TaskThreads = {
     throw new Error("This test never opens a task.");
   },
   scope: async () => null,
+  failedTurn: async () => {
+    throw new Error("This test never retries a task.");
+  },
 };
 
 const catalogue = (effects: Record<string, "read" | "write">) => ({

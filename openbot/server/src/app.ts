@@ -1670,7 +1670,11 @@ export function createApp(
   if (coworker?.openduet?.tasks)
     app.route(
       "/api/openduet/tasks",
-      createTaskRoutes(coworker.openduet.tasks, requireUser),
+      createTaskRoutes(
+        coworker.openduet.tasks,
+        requireUser,
+        coworker.proactive?.engine,
+      ),
     );
   if (coworker?.memory)
     app.route(

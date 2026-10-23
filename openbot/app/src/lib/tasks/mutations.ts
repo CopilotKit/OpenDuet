@@ -18,3 +18,18 @@ export const resolveTaskMutationOptions = (queryClient: QueryClient) =>
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: taskKeys.all }),
   });
+
+/** Try again: a task that couldn't finish runs its turn once more, in its own conversation. */
+export const tryTaskAgainMutationOptions = (queryClient: QueryClient) =>
+  mutationOptions({
+    mutationFn: (id: string) =>
+      client<TaskRecord>(
+        `/api/openduet/tasks/${encodeURIComponent(id)}/again`,
+        "task",
+        {
+          method: "POST",
+          fallback: "Couldn't run this task again. Try again in a moment.",
+        },
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: taskKeys.all }),
+  });

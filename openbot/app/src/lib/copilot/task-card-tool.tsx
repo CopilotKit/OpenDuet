@@ -12,8 +12,8 @@ import { useTask } from "@/lib/tasks/use-task";
  * Draws the server's `start_task` tool (server/src/openduet/tasks.ts) as the card under the Bot's
  * "On it": the task's title, where it stands, and a chevron that opens it. The work happens in the
  * task's own conversation, so this card is all Chat shows of it. The pill is read from the person's
- * tasks and kept live (lib/tasks/queries.ts), so it moves from Working to Ready for review while the
- * card sits in the thread. The transcript moves it to the end of its turn, under the Bot's words
+ * tasks and kept live (lib/tasks/queries.ts), so it moves from Working to Ready for review, or to
+ * Failed with Try again, while the card sits in the thread. The transcript moves it to the end of its turn, under the Bot's words
  * (`repliesLast` in chat-messages.ts).
  */
 
@@ -68,7 +68,9 @@ export function ChatTaskCard({ started }: { started: StartedTask }) {
           </a>
         )
       }
+      failure={task?.failure ?? null}
       status={status}
+      taskId={started.taskId}
       title={task?.title ?? started.title}
     />
   );

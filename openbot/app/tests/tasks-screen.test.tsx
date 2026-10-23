@@ -55,6 +55,17 @@ function serving() {
     if (init?.method && init.method !== "GET") {
       const body = init.body ? JSON.parse(String(init.body)) : undefined;
       sent.push({ method: init.method, path: url, body });
+      const again = /^\/api\/openduet\/tasks\/([^/]+)\/again$/.exec(url);
+      if (again) {
+        tasks = (tasks as { id: string }[]).map((row) =>
+          row.id === again[1]
+            ? { ...row, status: "working", failure: null }
+            : row,
+        );
+        return Response.json({
+          task: (tasks as { id: string }[]).find((row) => row.id === again[1]),
+        });
+      }
       if (url === "/api/channels")
         return Response.json({ channel: newChannel }, { status: 201 });
       return Response.json({ ok: true });
@@ -632,6 +643,8 @@ const task = (overrides: Record<string, unknown>) => ({
   sourceApp: null,
   sourceLink: null,
   status: "working",
+  failure: null,
+  failedAt: null,
   resolvedAt: null,
   createdAt: "2026-10-22T10:00:00Z",
   updatedAt: "2026-10-22T10:00:00Z",
@@ -701,4 +714,45 @@ test("a task whose conversation is running a turn reads Working, even before the
   await waitFor(() =>
     expect(yours.querySelector("[data-status]")?.textContent).toBe("Working"),
   );
+});
+
+test("a task that couldn't finish says why on its row, and Try again runs it once more without opening it", async () => {
+  quiet();
+  tasks = [
+    task({
+      id: "rosa",
+      status: "failed",
+      failure: "the run took longer than 5 minutes",
+    }),
+  ];
+  serving();
+  const view = draw();
+  const yours = await view.findByRole("region", { name: "Your tasks" });
+  const row = within(yours).getByRole("link", {
+    name: /Draft a reply to Rosa/,
+  });
+  expect(row.querySelector("[data-status]")?.textContent).toBe("Failed");
+  expect(row.textContent).toContain(
+    "Couldn't finish: the run took longer than 5 minutes.",
+  );
+  expect(row.textContent).not.toContain("Ready for review");
+  // Outside the link, so pressing it never opens the task.
+  const again = within(yours).getByRole("button", {
+    name: "Try this task again",
+  });
+  expect(again.textContent).toBe("Try again");
+  expect(row.contains(again)).toBe(false);
+
+  fireEvent.click(again);
+  await waitFor(() =>
+    expect(sent.map((request) => request.path)).toContain(
+      "/api/openduet/tasks/rosa/again",
+    ),
+  );
+  await waitFor(() =>
+    expect(yours.querySelector("[data-status]")?.textContent).toBe("Working"),
+  );
+  expect(
+    within(yours).queryByRole("button", { name: "Try this task again" }),
+  ).toBeNull();
 });

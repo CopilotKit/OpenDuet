@@ -49,6 +49,20 @@ import {
 export const PROACTIVE_RUN_KIND = "proactive.run";
 export const PROACTIVE_TASK_KIND = "proactive.task";
 const RUN_LEASE_MS = 10 * 60_000;
+/**
+ * How many times a task's turn runs: once, and once more when the first run threw or a restart cut
+ * it off. The queue's attempt cap for the kind, so a turn out of runs stays on the queue unfinished
+ * with its count and its reason, which is what reads as Failed (openduet/task-store.ts).
+ */
+export const TASK_RUNS = 2;
+/**
+ * A task's lease, shorter than research's so a turn a restart cut off is picked up again within
+ * minutes. Longer than the thread lock's two minutes (`TURN_LIMITS.lockTtlSeconds`), so the dead
+ * run's lock on the conversation has gone by the time the retry asks for it.
+ */
+const TASK_LEASE_MS = 3 * 60_000;
+/** How long a task's turn that threw waits before its one retry. */
+const TASK_RETRY_MS = 10_000;
 /** A person pressing "Run now" twice in a minute gets one run. */
 const RUN_NOW_GAP_MS = 10 * 60_000;
 /** How far back the first check-in looks, and any check-in after one that did not succeed. */
@@ -85,6 +99,17 @@ export type TaskThreads = {
   }): Promise<OpenedTask>;
   /** The task's own conversation, or null once the person can no longer reach it or its Bot. */
   scope(ownerUserId: string, taskId: string): Promise<ProactiveScope | null>;
+  /**
+   * What a failed task's turn was asked, and how many turns it has had. Throws unless the task is
+   * the person's and failed.
+   */
+  failedTurn(
+    ownerUserId: string,
+    taskId: string,
+  ): Promise<{
+    ask: { text?: string; suggestionId?: string };
+    turns: number;
+  }>;
 };
 
 /** What `start_task` hands off from Chat: the ask in the person's words, and where it came from. */
@@ -115,10 +140,13 @@ export type ProactiveEngineDeps = {
   ): Promise<void>;
   /** Opens tasks and finds their conversations again. See `TaskThreads`. */
   tasks: TaskThreads;
-  /** A person-started turn in a task's conversation with this text as their message. */
+  /**
+   * A person-started turn in a task's conversation with this text as their message. `final` is its
+   * last run: if it fails, the task has failed, and the Bot says so in the conversation.
+   */
   startTask(
     scope: ProactiveScope,
-    input: { runId: string; text: string; signal: AbortSignal },
+    input: { runId: string; text: string; signal: AbortSignal; final: boolean },
   ): Promise<void>;
   /**
    * The Bot writing first: a turn in the person's channel with this framed check-in as its message,
@@ -150,6 +178,8 @@ export type ProactiveEngineDeps = {
   ): Promise<string[]>;
   mintThreadId(): string;
   now?: () => Date;
+  /** How long a task's turn that threw waits for its retry. Tests pass 0. */
+  taskRetryMs?: number;
 };
 
 /** What one check-in reads: what is new since the window opened, and what is already suggested. */
@@ -517,19 +547,31 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     await checkIn(scope, runId, found, signal);
   }
 
+  /**
+   * Claim one queued item of this kind and run it. Research runs once: a background read is not
+   * worth repeating. A task's turn runs up to `TASK_RUNS` times (see `drainTask`).
+   */
   async function drain(
     kind: string,
     work: (
       payload: Record<string, unknown>,
       signal: AbortSignal,
+      attempt: number,
     ) => Promise<void>,
+    options: {
+      leaseMs: number;
+      maxAttempts: number;
+      retryMs: number;
+      /** Told when a run failed and the item has another run left. */
+      onRetry?: () => void;
+    } = { leaseMs: RUN_LEASE_MS, maxAttempts: 1, retryMs: 60_000 },
   ) {
     const [item] = await deps.queue.claim({
       kind,
       owner: deps.owner,
-      leaseMs: RUN_LEASE_MS,
+      leaseMs: options.leaseMs,
       limit: 1,
-      maxAttempts: 1,
+      maxAttempts: options.maxAttempts,
     });
     if (!item) return false;
     const controller = new AbortController();
@@ -539,7 +581,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           kind,
           key: item.key,
           owner: deps.owner,
-          leaseMs: RUN_LEASE_MS,
+          leaseMs: options.leaseMs,
         })
         .then(
           (kept) => {
@@ -547,20 +589,21 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           },
           () => controller.abort(),
         );
-    }, RUN_LEASE_MS / 3);
+    }, options.leaseMs / 3);
     renew.unref?.();
     try {
-      await work(item.payload, controller.signal);
+      await work(item.payload, controller.signal, item.attempts);
       await deps.queue.finish({ kind, key: item.key, owner: deps.owner });
     } catch (error) {
-      // One attempt only: a background run is not worth repeating a partial read for.
-      await deps.queue.release({
+      // The reason stays on the row: at its last attempt, that row is the failure.
+      const released = await deps.queue.release({
         kind,
         key: item.key,
         owner: deps.owner,
-        delayMs: 60_000,
+        delayMs: options.retryMs,
         reason: error instanceof Error ? error.message : String(error),
       });
+      if (released && item.attempts < options.maxAttempts) options.onRetry?.();
       throw error;
     } finally {
       clearInterval(renew);
@@ -582,6 +625,8 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     taskId: z.string().min(1).optional(),
     suggestionId: z.string().min(1).optional(),
     text: z.string().min(1).optional(),
+    /** Queued by Try again, beside the turn that failed. */
+    again: z.boolean().optional(),
   });
 
   /** Opens the task a started suggestion becomes, in its own conversation with the suggesting Bot. */
@@ -602,10 +647,15 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     });
   }
 
-  /** Runs one queued task's turn in its own conversation, as the person's message. */
+  /**
+   * Runs one queued task's turn in its own conversation, as the person's message. A rerun, whether
+   * the retry or Try again, is a new run with its own id, so it never collides with what the one
+   * before left in the conversation, and it says the ask again.
+   */
   async function runTask(
     payload: Record<string, unknown>,
     signal: AbortSignal,
+    attempt: number,
   ) {
     const work = taskSchema.parse(payload);
     let ask = work.text;
@@ -625,10 +675,25 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       throw new ProactiveRefusedError(
         "This Bot or its channel is no longer available to you.",
       );
+    const rerun = work.again || attempt > 1;
     await deps.startTask(scope, {
-      runId: `task-${taskId}`,
+      runId: rerun
+        ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
+        : `task-${taskId}`,
       text: frameTaskBrief(ask),
       signal,
+      final: attempt >= TASK_RUNS,
+    });
+  }
+
+  /** One queued task's turn, run up to `TASK_RUNS` times, the retry kicked off after its wait. */
+  function drainTask() {
+    const retryMs = deps.taskRetryMs ?? TASK_RETRY_MS;
+    return drain(PROACTIVE_TASK_KIND, runTask, {
+      leaseMs: TASK_LEASE_MS,
+      maxAttempts: TASK_RUNS,
+      retryMs,
+      onRetry: () => track(Bun.sleep(retryMs).then(startSoon)),
     });
   }
 
@@ -638,9 +703,13 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
    * the sweep stays the backstop for any a crash left behind.
    */
   const kicked = new Set<Promise<unknown>>();
+  function track(work: Promise<unknown>) {
+    const tracked = work.finally(() => kicked.delete(tracked));
+    kicked.add(tracked);
+  }
   function startSoon() {
-    const run = drain(PROACTIVE_TASK_KIND, runTask)
-      .catch((error: unknown) => {
+    track(
+      drainTask().catch((error: unknown) => {
         console.error(
           JSON.stringify({
             type: "proactive-task-error",
@@ -648,9 +717,8 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
             timestamp: new Date().toISOString(),
           }),
         );
-      })
-      .finally(() => kicked.delete(run));
-    kicked.add(run);
+      }),
+    );
   }
 
   return {
@@ -799,6 +867,20 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       startSoon();
       return task;
     },
+    /**
+     * Try again: a task whose turn couldn't finish runs it once more, in the same conversation, as a
+     * turn of its own beside the one that failed. Keyed on how many turns the task has had, so two
+     * presses at once queue one.
+     */
+    async again(ownerUserId: string, taskId: string): Promise<void> {
+      const { ask, turns } = await deps.tasks.failedTurn(ownerUserId, taskId);
+      await deps.queue.offer({
+        kind: PROACTIVE_TASK_KIND,
+        key: `task:${taskId}:again:${turns}`,
+        payload: { ownerUserId, taskId, ...ask, again: true },
+      });
+      startSoon();
+    },
     /** Settles once every task started straight away has finished its turn. For tests and shutdown. */
     async idle() {
       while (kicked.size > 0) await Promise.allSettled([...kicked]);
@@ -817,7 +899,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         const { settingId, runId } = payloadSchema.parse(payload);
         await run(settingId, runId, signal);
       });
-      await drain(PROACTIVE_TASK_KIND, runTask);
+      await drainTask();
     },
   };
 }

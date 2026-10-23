@@ -71,6 +71,8 @@ const rosa = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
   sourceApp: null,
   sourceLink: null,
   status: "working",
+  failure: null,
+  failedAt: null,
   resolvedAt: null,
   createdAt: new Date("2026-10-22T09:41:00").toISOString(),
   updatedAt: new Date("2026-10-22T09:41:00").toISOString(),
@@ -139,6 +141,18 @@ function serving() {
         );
         return NativeResponse.json({
           task: tasks.find((task) => task.id === done[1]),
+        });
+      }
+      const again = /^\/api\/openduet\/tasks\/([^/]+)\/again$/.exec(path);
+      if (again && method === "POST") {
+        posted.push(path);
+        tasks = tasks.map((task) =>
+          task.id === again[1]
+            ? { ...task, status: "working", failure: null, failedAt: null }
+            : task,
+        );
+        return NativeResponse.json({
+          task: tasks.find((task) => task.id === again[1]),
         });
       }
       const one = /^\/api\/openduet\/tasks\/([^/]+)$/.exec(path);
@@ -304,6 +318,43 @@ test("the card's pill follows the task: Working, Needs input, then Ready for rev
   await waitFor(() => expect(pill()?.textContent).toBe("Working"));
 });
 
+test("a card whose task couldn't finish says why, and Try again runs it once more from Chat", async () => {
+  tasks = [
+    rosa({ status: "failed", failure: "a service it needed didn't answer" }),
+  ];
+  serving();
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <ChatTaskCard
+        started={{
+          taskId: "rosa",
+          channelId: "rosa-channel",
+          title: rosa().title,
+        }}
+      />
+    </QueryClientProvider>,
+  );
+  const card = await view.findByRole("link", { name: /Draft a reply to Rosa/ });
+  await waitFor(() =>
+    expect(card.querySelector("[data-status]")?.textContent).toBe("Failed"),
+  );
+  expect(card.textContent).toContain(
+    "Couldn't finish: a service it needed didn't answer.",
+  );
+  const again = view.getByRole("button", { name: "Try this task again" });
+  expect(card.contains(again)).toBe(false);
+  fireEvent.click(again);
+  await waitFor(() =>
+    expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]),
+  );
+  await waitFor(() =>
+    expect(card.querySelector("[data-status]")?.textContent).toBe("Working"),
+  );
+  expect(
+    view.queryByRole("button", { name: "Try this task again" }),
+  ).toBeNull();
+});
+
 /** The `/tasks/$taskId` route's component, against this test's route tree. */
 function TaskRoute() {
   const { taskId } = useParams({ strict: false }) as { taskId: string };
@@ -402,6 +453,55 @@ test("the task page: × and the title across the top, where it stands, Mark done
   fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/tasks"));
   await waitFor(() => expect(view.queryByRole("dialog")).toBeNull());
+});
+
+test("the task page of one that couldn't finish says why in the Bot's words, and Try again runs it in the same conversation", async () => {
+  tasks = [
+    rosa({
+      status: "failed",
+      failure: "the run took longer than 5 minutes",
+      failedAt: new Date("2026-10-22T09:47:00").toISOString(),
+    }),
+  ];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await waitFor(() =>
+    expect(sheet.querySelector("[data-status]")?.textContent).toBe("Failed"),
+  );
+  // The Bot's own line, as it recorded it in the conversation, and when: the page's last update.
+  const update = sheet.querySelector("[data-failure]");
+  expect(update?.textContent).toContain(
+    "I couldn't finish this: the run took longer than 5 minutes.",
+  );
+  expect(update?.textContent).toContain(
+    clockTime(new Date("2026-10-22T09:47:00").toISOString()),
+  );
+  // Mark done stays, beside Try again.
+  expect(
+    within(sheet).getByRole("button", { name: "Mark this task done" }),
+  ).toBeTruthy();
+  fireEvent.click(
+    within(sheet).getByRole("button", { name: "Try this task again" }),
+  );
+  await waitFor(() =>
+    expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]),
+  );
+  await waitFor(() =>
+    expect(sheet.querySelector("[data-status]")?.textContent).toBe("Working"),
+  );
+  expect(sheet.querySelector("[data-failure]")).toBeNull();
+  expect(
+    within(sheet).queryByRole("button", { name: "Try this task again" }),
+  ).toBeNull();
+  // Still the task's own conversation.
+  expect(
+    await within(sheet).findByText(ASK, undefined, { timeout: 5_000 }),
+  ).toBeTruthy();
 });
 
 test("a task that is not the person's says so in the sheet", async () => {

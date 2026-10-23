@@ -4,7 +4,7 @@ import { Fragment, type ReactNode, useRef, useState } from "react";
 import { ApprovalCard, PillButton } from "@/components/approvals/approval-card";
 import { DuetIcon } from "@/components/duet/icons";
 import { DuetCard, Rule, SectionLabel, Tile } from "@/components/duet/kit";
-import { TaskRow } from "@/components/duet/task-card";
+import { TaskRow, TryTaskAgain } from "@/components/duet/task-card";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
 import { clockTime } from "@/lib/approval-view";
@@ -201,17 +201,24 @@ function YourTasks() {
   );
 }
 
-/** One task: a row that opens it, its pill kept live with its conversation's working dot. */
+/**
+ * One task: a row that opens it, its pill kept live with its conversation's working dot. One that
+ * couldn't finish says why, with Try again under it.
+ */
 function TaskLine({ task }: { task: TaskRecord }) {
   const busy = useConversationBusy(task.channelId);
+  const status = liveStatus(task.status, busy);
   return (
-    <Link
-      className="block rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
-      params={{ taskId: task.id }}
-      to="/tasks/$taskId"
-    >
-      <TaskRow status={liveStatus(task.status, busy)} title={task.title} />
-    </Link>
+    <>
+      <Link
+        className="block rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
+        params={{ taskId: task.id }}
+        to="/tasks/$taskId"
+      >
+        <TaskRow failure={task.failure} status={status} title={task.title} />
+      </Link>
+      {status === "failed" ? <TryTaskAgain taskId={task.id} /> : null}
+    </>
   );
 }
 

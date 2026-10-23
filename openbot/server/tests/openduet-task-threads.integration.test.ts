@@ -90,7 +90,7 @@ const threads = createTaskThreads({
 function memoryQueue() {
   const items = new Map<
     string,
-    WorkItem & { finished: boolean; claimed: boolean }
+    WorkItem & { finished: boolean; claimed: boolean; lastError?: string }
   >();
   const queue = {
     offer: async (item: {
@@ -110,9 +110,19 @@ function memoryQueue() {
       });
       return "queued";
     },
-    claim: async ({ kind }: { kind: string }) => {
+    claim: async ({
+      kind,
+      maxAttempts = 5,
+    }: {
+      kind: string;
+      maxAttempts?: number;
+    }) => {
       const due = [...items.values()].find(
-        (item) => item.kind === kind && !item.finished && !item.claimed,
+        (item) =>
+          item.kind === kind &&
+          !item.finished &&
+          !item.claimed &&
+          item.attempts < maxAttempts,
       );
       if (!due) return [];
       due.claimed = true;
@@ -125,9 +135,20 @@ function memoryQueue() {
       if (item) item.finished = true;
       return true;
     },
-    release: async ({ kind, key }: { kind: string; key: string }) => {
+    release: async ({
+      kind,
+      key,
+      reason,
+    }: {
+      kind: string;
+      key: string;
+      reason?: string;
+    }) => {
       const item = items.get(`${kind}:${key}`);
-      if (item) item.claimed = false;
+      if (item) {
+        item.claimed = false;
+        if (reason !== undefined) item.lastError = reason;
+      }
       return true;
     },
     purge: async () => 0,
@@ -135,9 +156,15 @@ function memoryQueue() {
   return { queue: queue as unknown as WorkQueue, items };
 }
 
-type Started = { scope: ProactiveScope; runId: string; text: string };
+type Started = {
+  scope: ProactiveScope;
+  runId: string;
+  text: string;
+  final: boolean;
+};
 
-function engineFor() {
+/** An engine on the memory queue. `turn` is each task turn's outcome; by default it succeeds. */
+function engineFor(turn: (started: Started) => Promise<void> = async () => {}) {
   const { queue, items } = memoryQueue();
   const started: Started[] = [];
   const engine = createProactiveEngine({
@@ -154,15 +181,38 @@ function engineFor() {
     notify: async () => undefined,
     tasks: threads,
     startTask: async (scope, input) => {
-      started.push({ scope, runId: input.runId, text: input.text });
+      const run = {
+        scope,
+        runId: input.runId,
+        text: input.text,
+        final: input.final,
+      };
+      started.push(run);
+      await turn(run);
     },
     catalogue: { listServers: async () => [] },
     mintThreadId: () => `${prefix}-research-thread`,
+    taskRetryMs: 0,
   });
   return { engine, items, started };
 }
 
 const chatOf = () => channelStore.direct(owner, bot);
+
+/** A turn for this task on the real queue, in whatever state the test needs. */
+async function turnFor(
+  taskId: string,
+  state: Partial<typeof workItems.$inferInsert> = {},
+  key = `task:${taskId}`,
+) {
+  await database.insert(workItems).values({
+    kind: PROACTIVE_TASK_KIND,
+    key,
+    payload: { ownerUserId: owner.id, taskId, text: "Prepare the notes." },
+    ...state,
+  });
+  return and(eq(workItems.kind, PROACTIVE_TASK_KIND), eq(workItems.key, key));
+}
 
 beforeAll(async () => {
   await database.insert(users).values([
@@ -401,19 +451,12 @@ describe("status", () => {
 
   test("is worked out from the queue, the approval inbox and the question queue, never stored", async () => {
     const task = await freshTask();
-    expect(await statusOf(task.id)).toBe("ready_for_review");
+    // Opened, and its turn not queued yet: just started.
+    expect(await statusOf(task.id)).toBe("working");
 
     // Its turn, queued and then running: working.
-    const turn = { kind: PROACTIVE_TASK_KIND, key: `task:${task.id}` };
-    await database.insert(workItems).values({
-      ...turn,
-      payload: { ownerUserId: owner.id, taskId: task.id, text: "Go" },
-    });
+    const where = await turnFor(task.id);
     expect(await statusOf(task.id)).toBe("working");
-    const where = and(
-      eq(workItems.kind, turn.kind),
-      eq(workItems.key, turn.key),
-    );
     await database
       .update(workItems)
       .set({
@@ -423,16 +466,12 @@ describe("status", () => {
       })
       .where(where);
     expect(await statusOf(task.id)).toBe("working");
-    // Let go after failing: not working any more, so it does not read Working for ever.
+    // Finished: the run wrote its reply, so there is something to read.
     await database
       .update(workItems)
-      .set({ claimedBy: null, leaseUntil: null })
+      .set({ finishedAt: new Date(), claimedBy: null, leaseUntil: null })
       .where(where);
     expect(await statusOf(task.id)).toBe("ready_for_review");
-    await database
-      .update(workItems)
-      .set({ finishedAt: new Date() })
-      .where(where);
 
     // Its reply stopped for Allow once: needs input.
     const approvalId = `${prefix}-approval-${randomUUID()}`;
@@ -512,6 +551,7 @@ describe("status", () => {
 
   test("another person's pending approval on the same thread id is not this task's", async () => {
     const task = await freshTask();
+    await turnFor(task.id, { attempts: 1, finishedAt: new Date() });
     await database.insert(approvalRequests).values({
       id: `${prefix}-theirs-${randomUUID()}`,
       ownerUserId: other.id,
@@ -565,6 +605,7 @@ describe("/api/openduet/tasks", () => {
       true,
     );
 
+    await turnFor(second.id, { attempts: 1, finishedAt: new Date() });
     const resolved = (await (
       await call(owner.id, `/${second.id}/resolve`, "POST")
     ).json()) as { task: TaskRecord };
@@ -600,5 +641,255 @@ describe("/api/openduet/tasks", () => {
     };
     expect(theirs.tasks).toEqual([]);
     expect((await taskStore.get(owner.id, mine.id)).resolvedAt).toBeNull();
+  });
+});
+
+describe("a task whose turn fails", () => {
+  async function opened(title = `Failing ${randomUUID()}`) {
+    const task = await threads.open({
+      ownerUserId: owner.id,
+      agentId: bot,
+      title,
+      why: null,
+      origin: "asked",
+      suggestionId: null,
+      sourceApp: null,
+      sourceLink: null,
+    });
+    return task;
+  }
+  const read = (id: string, store = taskStore) => store.get(owner.id, id);
+
+  test("reads Working while its one retry is due, then Failed with the reason in plain words, never Ready for review", async () => {
+    const task = await opened();
+    // The first run threw: let go with its reason, and due once more.
+    const where = await turnFor(task.id, {
+      attempts: 1,
+      lastError: "fetch failed",
+    });
+    expect((await read(task.id)).status).toBe("working");
+    // A restart cut the first run off: the lease ran out, so the retry is due.
+    await database
+      .update(workItems)
+      .set({
+        lastError: null,
+        claimedBy: "gone",
+        leaseUntil: sql`now() - interval '1 second'`,
+      })
+      .where(where);
+    expect((await read(task.id)).status).toBe("working");
+    // The retry running.
+    await database
+      .update(workItems)
+      .set({
+        attempts: 2,
+        claimedBy: "worker",
+        leaseUntil: sql`now() + interval '3 minutes'`,
+      })
+      .where(where);
+    expect((await read(task.id)).status).toBe("working");
+    // The retry threw too: out of runs, so it failed, and says why without the error itself.
+    await database
+      .update(workItems)
+      .set({
+        claimedBy: null,
+        leaseUntil: null,
+        lastError: "The routine's turn was stopped after 300s.",
+      })
+      .where(where);
+    const failed = await read(task.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.failure).toBe("the run took longer than 5 minutes");
+    expect(failed.failedAt).not.toBeNull();
+
+    // Marked done, it is done; reopened, it is failed again.
+    expect((await taskStore.resolve(owner.id, task.id)).status).toBe(
+      "resolved",
+    );
+    expect((await taskStore.resolve(owner.id, task.id)).failure).toBeNull();
+    expect((await taskStore.reopen(owner.id, task.id)).status).toBe("failed");
+
+    // Try again's turn is the newest, so it counts: working, then ready once it finished.
+    const again = await turnFor(task.id, {}, `task:${task.id}:again:1`);
+    expect((await read(task.id)).status).toBe("working");
+    await database
+      .update(workItems)
+      .set({ attempts: 1, finishedAt: new Date() })
+      .where(again);
+    const done = await read(task.id);
+    expect(done.status).toBe("ready_for_review");
+    expect(done.failure).toBeNull();
+    expect(done.failedAt).toBeNull();
+  });
+
+  test("whose second run a restart cut off too fails, saying so, at the moment its lease ran out", async () => {
+    const task = await opened();
+    const expired = new Date(Date.now() - 60_000);
+    await turnFor(task.id, {
+      attempts: 2,
+      claimedBy: "gone",
+      leaseUntil: expired,
+      updatedAt: new Date(Date.now() - 4 * 60_000),
+    });
+    expect(await read(task.id)).toMatchObject({
+      status: "failed",
+      failure: "the run was cut off partway through, twice",
+      failedAt: expired.toISOString(),
+    });
+  });
+
+  test("whose turn never reached the queue fails to start, once it should have", async () => {
+    const task = await opened();
+    expect((await read(task.id)).status).toBe("working");
+    const later = createTaskStore(database, {
+      now: () => new Date(Date.now() + 2 * 60_000),
+    });
+    expect(await read(task.id, later)).toMatchObject({
+      status: "failed",
+      failure: "it never started",
+    });
+  });
+
+  test("moves past the failure once the person replies in its conversation and the Bot answers", async () => {
+    const task = await opened();
+    await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
+    // The server's own line saying it failed is not the conversation moving on.
+    await channelStore.recordActivity(
+      owner,
+      task.channelId,
+      {
+        text: "I couldn't finish this: a service it needed didn't answer.",
+        agentId: bot,
+        at: new Date(),
+      },
+      { id: `task-${task.id}-x:failed` },
+    );
+    expect((await read(task.id)).status).toBe("failed");
+    // The person's reply alone is not an answer yet.
+    await channelStore.recordActivity(owner, task.channelId, {
+      text: "Try it with the other glaze.",
+      agentId: null,
+      at: new Date(Date.now() + 1_000),
+    });
+    expect((await read(task.id)).status).toBe("failed");
+    // The Bot answered in the browser: there is something to read.
+    await channelStore.recordActivity(owner, task.channelId, {
+      text: "Done, with Oat Satin.",
+      agentId: bot,
+      at: new Date(Date.now() + 2_000),
+    });
+    expect((await read(task.id)).status).toBe("ready_for_review");
+  });
+
+  test("runs once more after throwing, and the second run is its last", async () => {
+    const { engine, items, started } = engineFor(async () => {
+      throw new Error("The routine's turn was stopped after 300s.");
+    });
+    const task = await engine.startAsked(owner.id, bot, {
+      title: "Prepare notes for the Hearth & Co visit",
+      instruction: "Prepare notes for the Hearth & Co visit.",
+    });
+    await engine.idle();
+    expect(started.map((run) => run.final)).toEqual([false, true]);
+    expect(started[0]?.runId).toBe(`task-${task.id}`);
+    // The retry is a run of its own, so it never collides with the first in the conversation.
+    expect(started[1]?.runId).toStartWith(`task-${task.id}-`);
+    expect(started[1]?.runId).not.toBe(started[0]?.runId);
+    expect(started[1]?.text).toBe(started[0]?.text);
+    // Out of runs: unfinished on the queue, with its reason, which is what reads as Failed.
+    expect(items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)).toMatchObject({
+      attempts: 2,
+      finished: false,
+      lastError: "The routine's turn was stopped after 300s.",
+    });
+  });
+
+  test("whose first run a restart cut off is picked up by the sweep, as its last run", async () => {
+    const task = await opened();
+    const { engine, items, started } = engineFor();
+    // Claimed once by a process that died: its lease has run out.
+    items.set(`${PROACTIVE_TASK_KIND}:task:${task.id}`, {
+      kind: PROACTIVE_TASK_KIND,
+      key: `task:${task.id}`,
+      payload: { ownerUserId: owner.id, taskId: task.id, text: "Go on." },
+      attempts: 1,
+      finished: false,
+      claimed: false,
+    });
+    await engine.sweep();
+    expect(started).toHaveLength(1);
+    expect(started[0]?.final).toBe(true);
+    expect(started[0]?.runId).toStartWith(`task-${task.id}-`);
+    expect(started[0]?.text).toBe(frameTaskBrief("Go on."));
+    expect(items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}`)?.finished).toBe(
+      true,
+    );
+  });
+
+  test("Try again runs it once more in its own conversation, and only when it failed", async () => {
+    const task = await opened();
+    await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
+    const { engine, items, started } = engineFor();
+
+    // Somebody else's task is no task.
+    await expect(engine.again(other.id, task.id)).rejects.toThrow(
+      "Couldn't find that task.",
+    );
+    await engine.again(owner.id, task.id);
+    // Pressed twice at once, it is one run.
+    await engine.again(owner.id, task.id);
+    await engine.idle();
+    expect(started).toHaveLength(1);
+    expect(started[0]?.scope.channelId).toBe(task.channelId);
+    expect(started[0]?.text).toBe(frameTaskBrief("Prepare the notes."));
+    expect(started[0]?.runId).toStartWith(`task-${task.id}-`);
+    expect(started[0]?.final).toBe(false);
+    expect(
+      items.get(`${PROACTIVE_TASK_KIND}:task:${task.id}:again:1`)?.finished,
+    ).toBe(true);
+
+    // One that did not fail has nothing to try again.
+    const fine = await opened();
+    await turnFor(fine.id, { attempts: 1, finishedAt: new Date() });
+    await expect(engine.again(owner.id, fine.id)).rejects.toThrow(
+      "Only a task that couldn't finish can be tried again.",
+    );
+  });
+
+  test("Try again is served to the task's owner, for a failed task only", async () => {
+    const task = await opened();
+    await turnFor(task.id, { attempts: 2, lastError: "fetch failed" });
+    const fine = await opened();
+    await turnFor(fine.id, { attempts: 1, finishedAt: new Date() });
+    const { engine, started } = engineFor();
+    const routes = createTaskRoutes(
+      taskStore,
+      async (context, next) => {
+        context.set("actor", {
+          id: context.req.header("x-person") ?? owner.id,
+        } as AuthenticatedActor);
+        await next();
+      },
+      engine,
+    );
+    const again = (person: string, id: string) =>
+      routes.request(`/${id}/again`, {
+        method: "POST",
+        headers: { "x-person": person },
+      });
+
+    expect((await again(other.id, task.id)).status).toBe(404);
+    const refused = await again(owner.id, fine.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: string }).error).toBe(
+      "Only a task that couldn't finish can be tried again.",
+    );
+    const accepted = await again(owner.id, task.id);
+    expect(accepted.status).toBe(200);
+    expect(((await accepted.json()) as { task: TaskRecord }).task.id).toBe(
+      task.id,
+    );
+    await engine.idle();
+    expect(started).toHaveLength(1);
   });
 });

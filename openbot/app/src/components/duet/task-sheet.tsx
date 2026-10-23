@@ -6,8 +6,12 @@ import { RowButton } from "@/components/shell/activity-screen";
 import { clockTime } from "@/lib/approval-view";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { channelQueryOptions } from "@/lib/channels/queries";
-import { resolveTaskMutationOptions } from "@/lib/tasks/mutations";
 import {
+  resolveTaskMutationOptions,
+  tryTaskAgainMutationOptions,
+} from "@/lib/tasks/mutations";
+import {
+  failureLine,
   liveStatus,
   type TaskRecord,
   taskQueryOptions,
@@ -25,6 +29,9 @@ import { TaskStatusPill } from "./task-card";
  *
  * Opened from its card in Chat or its row in Tasks, at `/tasks/<id>`, over the Tasks list. Never
  * over Chat itself: that would put two conversations on screen at once.
+ *
+ * A task that couldn't finish says why under its pill, and offers Try again beside Mark done: its
+ * turn runs once more in this conversation.
  *
  * The conversation is the whole report for now. A fuller layout (the decisions it made, its updates,
  * the resources it used) is a later slice.
@@ -101,30 +108,62 @@ function StartedAt({ iso }: { iso: string }) {
   ) : null;
 }
 
+/**
+ * The Bot's line saying the task couldn't finish and why, as the page's last update: the same words
+ * it recorded in the task's conversation, and when.
+ */
+function FailureUpdate({ task }: { task: TaskRecord }) {
+  const when = task.failedAt ? clockTime(task.failedAt) : null;
+  return (
+    <div className="flex flex-col gap-0.5" data-failure>
+      <p className="type-sub text-duet-ink">{failureLine(task.failure)}</p>
+      {when ? <p className="type-label text-duet-ink-3">{when}</p> : null}
+    </div>
+  );
+}
+
 function TaskBody({ task }: { task: TaskRecord }) {
   // Open on screen is read, as a conversation's own page is.
   useMarkOpenChannelRead(task.channelId);
   const busy = useConversationBusy(task.channelId);
   const status = liveStatus(task.status, busy);
   const resolve = useMutation(resolveTaskMutationOptions(queryClient));
+  const again = useMutation(tryTaskAgainMutationOptions(queryClient));
   const conversation = useQuery(channelQueryOptions(task.channelId));
   const done = task.resolvedAt !== null;
+  const failed = status === "failed";
+  const error = resolve.error ?? again.error;
   return (
     <>
-      <div className="flex shrink-0 items-center justify-between gap-2.5 border-duet-hair-2 border-b px-5 pt-1 pb-3">
-        <TaskStatusPill status={status} />
-        <RowButton
-          busy={resolve.isPending}
-          label={done ? "Reopen this task" : "Mark this task done"}
-          onClick={() => resolve.mutate({ id: task.id, done: !done })}
-          primary={!done}
-        >
-          {done ? "Reopen" : "Mark done"}
-        </RowButton>
+      <div className="flex shrink-0 flex-col gap-2 border-duet-hair-2 border-b px-5 pt-1 pb-3">
+        <div className="flex items-center justify-between gap-2.5">
+          <TaskStatusPill status={status} />
+          <div className="flex items-center gap-2">
+            <RowButton
+              busy={resolve.isPending}
+              label={done ? "Reopen this task" : "Mark this task done"}
+              onClick={() => resolve.mutate({ id: task.id, done: !done })}
+              primary={!done && !failed}
+            >
+              {done ? "Reopen" : "Mark done"}
+            </RowButton>
+            {failed ? (
+              <RowButton
+                busy={again.isPending}
+                label="Try this task again"
+                onClick={() => again.mutate(task.id)}
+                primary
+              >
+                Try again
+              </RowButton>
+            ) : null}
+          </div>
+        </div>
+        {failed ? <FailureUpdate task={task} /> : null}
       </div>
-      {resolve.error ? (
+      {error ? (
         <p className="type-label px-5 pt-2 text-duet-red" role="alert">
-          {resolve.error.message}
+          {error.message}
         </p>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col px-3">

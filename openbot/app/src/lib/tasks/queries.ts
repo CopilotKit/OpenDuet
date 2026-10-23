@@ -7,13 +7,15 @@ import { client } from "@/lib/client";
  * conversation, and Tasks lists them.
  *
  * `status` is the server's word, worked out on every read from what the task's conversation is doing:
- * its turn running, an approval or a question waiting on the person, or the person's own Mark done.
+ * its turn running, an approval or a question waiting on the person, its turn out of runs without
+ * finishing, or the person's own Mark done.
  */
 
 export type TaskStatus =
   | "needs_input"
   | "working"
   | "resolved"
+  | "failed"
   | "ready_for_review";
 
 export type TaskRecord = {
@@ -28,6 +30,10 @@ export type TaskRecord = {
   sourceApp: string | null;
   sourceLink: string | null;
   status: TaskStatus;
+  /** Why its turn couldn't finish, in plain words, while it is `failed`. Null otherwise. */
+  failure: string | null;
+  /** When it failed, while it is `failed`. Null otherwise. */
+  failedAt: string | null;
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -86,4 +92,20 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   needs_input: "Needs input",
   ready_for_review: "Ready for review",
   resolved: "Resolved",
+  failed: "Failed",
 };
+
+/** What a failed task's row and card say after its status: "Couldn't finish: <reason>." */
+export function couldNotFinish(failure: string | null): string {
+  return failure ? `Couldn't finish: ${failure}.` : "Couldn't finish.";
+}
+
+/**
+ * The Bot's own line when a task's last run fails, as the server records it in the task's
+ * conversation (server/src/openduet/task-threads.ts). The task page shows it as its last update.
+ */
+export function failureLine(failure: string | null): string {
+  return failure
+    ? `I couldn't finish this: ${failure}.`
+    : "I couldn't finish this.";
+}
