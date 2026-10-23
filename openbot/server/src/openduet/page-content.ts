@@ -22,6 +22,12 @@ export const MAX_TITLE = 80;
 export const MAX_SUMMARY = 140;
 export const MAX_BLOCKS = 40;
 export const MAX_SLIDES = 20;
+/**
+ * The most slides a deck has once laid out for a phone. The model writes at most `MAX_SLIDES`; what
+ * runs over continues, and a deck that runs past this is refused. As many as a page has blocks, so a
+ * deck never holds more than a page could.
+ */
+export const MAX_LAID_OUT_SLIDES = MAX_BLOCKS;
 export const MAX_SLIDE_BLOCKS = 3;
 export const MAX_METRICS = 8;
 export const MAX_BARS = 12;
@@ -442,7 +448,7 @@ function layOutSlide(
  * A deck as the viewer shows it: every slide laid out on as many slides as it needs (`layOutSlide`),
  * so nothing a slide holds is cut off and nothing is refused for length. What is still refused is a
  * figure too wide to draw whole even in a whole-width tile, a chart taller than a slide by itself,
- * and a deck that runs past `MAX_SLIDES` once laid out.
+ * and a deck that runs past `MAX_LAID_OUT_SLIDES` once laid out.
  */
 export function layOutDeck(slides: readonly PageSlide[]): {
   slides: PageSlide[];
@@ -463,13 +469,13 @@ export function layOutDeck(slides: readonly PageSlide[]): {
   const failed = laid.flatMap((result) => result.issues);
   if (failed.length > 0) return { slides: [], issues: failed };
   const all = laid.flatMap((result) => result.slides);
-  if (all.length > MAX_SLIDES)
+  if (all.length > MAX_LAID_OUT_SLIDES)
     return {
       slides: [],
       issues: [
         {
           path: ["slides"],
-          message: `Laid out for a phone, this deck runs to ${all.length} slides, and a deck has at most ${MAX_SLIDES}. Keep fewer items, or shorter notes.`,
+          message: `Laid out for a phone, this deck runs to ${all.length} slides, and a deck has at most ${MAX_LAID_OUT_SLIDES}. Keep fewer items, or shorter notes.`,
         },
       ],
     };

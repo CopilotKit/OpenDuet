@@ -484,19 +484,23 @@ describe("what is still refused, silently", () => {
     expect(parsed.refusal).toContain("fewer bars or shorter labels");
   });
 
-  test("a deck that runs past twenty slides once laid out", () => {
-    const rows = Array.from({ length: 8 }, (_, i) => ({
-      text: `Row ${i} with a decision`,
-      note: "Someone is waiting on this",
-    }));
-    const slides = Array.from({ length: 12 }, (_, i) => ({
-      title: `Slide ${i + 1}`,
-      blocks: [{ type: "list", items: rows }],
-    }));
-    const parsed = parsePageInput(deck(...slides));
+  test("a deck that runs past forty slides once laid out, though its written slides may run past twenty", () => {
+    const rows = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        text: `Row ${i} with a decision`,
+        note: "Someone is waiting on this",
+      }));
+    const slides = (count: number, items: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        title: `Slide ${i + 1}`,
+        blocks: [{ type: "list", items: rows(items) }],
+      }));
+    expect(saved(deck(...slides(12, 8))).value.slides).toHaveLength(24);
+    expect(saved(deck(...slides(20, 8))).value.slides).toHaveLength(40);
+    const parsed = parsePageInput(deck(...slides(20, 12)));
     if (parsed.ok) throw new Error("expected a refusal");
     expect(parsed.refusal).toContain(
-      "runs to 24 slides, and a deck has at most 20",
+      "this deck runs to 60 slides, and a deck has at most 40",
     );
   });
 });
