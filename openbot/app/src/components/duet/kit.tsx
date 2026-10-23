@@ -333,7 +333,8 @@ export function Row({
 } & RowAction) {
   const interactive = Boolean(action.onClick || action.link);
   const classes = cn(
-    "duet-face flex w-full min-w-0 items-center gap-3 rounded-[22px] px-3 text-left text-duet-ink",
+    // Gaps in px, not rem: at a large text size the words need the room, not the margins.
+    "duet-face flex w-full min-w-0 items-center gap-[12px] rounded-[22px] px-[12px] text-left text-duet-ink",
     detail || meta ? "min-h-[66px] py-2.5" : "min-h-[50px] py-2",
     current && "bg-duet-tile",
     interactive &&
@@ -350,7 +351,9 @@ export function Row({
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span
           className={cn(
-            "line-clamp-2 font-medium [overflow-wrap:anywhere]",
+            // Breaks between words. A word too long for the line, at a large text size, is
+            // hyphenated rather than cut anywhere.
+            "line-clamp-2 font-medium hyphens-auto [overflow-wrap:break-word]",
             size === "nav" ? "type-nav" : "type-body",
           )}
         >
@@ -412,7 +415,8 @@ export function Segmented<T extends string>({
   return (
     <div
       aria-label={label}
-      className="duet-face flex w-full gap-1 rounded-full bg-duet-tile p-1"
+      // Wraps onto a second line at a large text size rather than running off the screen.
+      className="duet-face flex w-full flex-wrap gap-1 rounded-[26px] bg-duet-tile p-1"
       role="radiogroup"
     >
       {options.map((option, index) => {
@@ -422,7 +426,7 @@ export function Segmented<T extends string>({
           <button
             aria-checked={on}
             className={cn(
-              "type-sub flex min-h-11 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 font-medium transition-colors duration-[var(--duet-dur-swap)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
+              "type-sub flex min-h-11 flex-[1_1_7rem] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 font-medium transition-colors duration-[var(--duet-dur-swap)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
               on
                 ? "bg-duet-card text-duet-ink shadow-duet-float"
                 : "text-duet-ink-2 hover:text-duet-ink",
@@ -458,9 +462,21 @@ export const AI_FOOTER = "is AI and can make mistakes.";
  * "OpenDuet is AI and can make mistakes.", once, under the last thing in a thread. It scrolls with
  * the thread rather than sitting pinned, and it is in every thread.
  */
-export function ThreadFooter({ product }: { product: string }) {
+export function ThreadFooter({
+  product,
+  after = false,
+}: {
+  product: string;
+  /** Drawn as an item of the thread's own column, whose 14px gap already sits above it. */
+  after?: boolean;
+}) {
   return (
-    <p className="duet-face type-caption px-1 pt-4 text-duet-ink-3">
+    <p
+      className={cn(
+        "duet-face type-caption px-1 text-duet-ink-3",
+        after ? "pt-0.5" : "pt-4",
+      )}
+    >
       {product} {AI_FOOTER}
     </p>
   );

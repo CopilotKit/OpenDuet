@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { GENERATIVE_UI_DESIGN_SKILL } from "../src/lib/copilot/generative-ui";
 import { SANDBOX_THEME_ASK, SANDBOX_THEME_MESSAGE } from "../src/lib/theme";
+import { cn, TYPE_SCALE_CLASSES } from "../src/lib/utils";
 import {
   DARK_TOKENS,
   LIGHT_TOKENS,
@@ -177,6 +178,31 @@ describe("the type scale", () => {
     expect(new Set(sizes.values())).toEqual(
       new Set(["1.5rem", "1.125rem", "1.0625rem", "0.9375rem", "0.8125rem"]),
     );
+  });
+});
+
+describe("merging classes", () => {
+  test("a type size given later replaces a primitive's text size and leading", () => {
+    // The bubble primitive carries `text-sm leading-relaxed`; left beside `type-body`, the
+    // stylesheet picked `text-sm` and every message drew at 14px.
+    for (const size of TYPE_SCALE_CLASSES)
+      expect(cn("px-3 text-sm leading-relaxed", size)).toBe(`px-3 ${size}`);
+    expect(cn("text-base font-medium", "type-display font-semibold")).toBe(
+      "type-display font-semibold",
+    );
+  });
+
+  test("a colour does not knock out a type size", () => {
+    expect(cn("type-sub text-duet-ink-2", "text-duet-ink")).toBe(
+      "type-sub text-duet-ink",
+    );
+  });
+
+  test("every type utility in the stylesheet is known to the merge", () => {
+    const declared = [...styles.matchAll(/@utility (type-[\w-]+)/g)].map(
+      (match) => match[1],
+    );
+    expect(new Set(declared)).toEqual(new Set(TYPE_SCALE_CLASSES));
   });
 });
 

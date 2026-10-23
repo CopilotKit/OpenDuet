@@ -21,8 +21,8 @@ import type { AuditInitiator } from "../audit";
  */
 
 export const REPLIES_TOOL = "suggest_replies";
-/** About what fits on one chip at phone width beside another. */
-export const MAX_REPLY_LENGTH = 40;
+/** One to three words: what fits on one chip at phone width beside another (parity-spec 2.14). */
+export const MAX_REPLY_LENGTH = 24;
 
 const REFUSAL = `Refused. ${REPLIES_TOOL} takes two or three different replies, each at most ${MAX_REPLY_LENGTH} characters.`;
 
@@ -46,7 +46,7 @@ export function replyTools(options: {
       name: REPLIES_TOOL,
       ref: `openduet/${REPLIES_TOOL}`,
       description: [
-        "Show two or three short replies as buttons for the person to tap, when you are asking them to choose between a few clear answers.",
+        'Show two or three short replies as buttons for the person to tap, when you are asking them to choose between a few clear answers. Each reply is one to three words, such as "Yes", "Not now" or "SEO blog plan".',
         "Ask the question in words as well: the buttons are drawn under the last thing you write this turn, and never replace the question.",
         "A tap arrives as their next message, so write each reply as they would say it, and never list the replies in your text.",
         "Never use it for an open question. Never use it to ask whether to send, pay, sign or delete: call the tool that does it, and its approval asks them.",
