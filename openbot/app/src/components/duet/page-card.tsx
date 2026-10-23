@@ -1,16 +1,18 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback } from "react";
 import { clockTime } from "@/lib/approval-view";
 import type { PageBlock, PageSummary } from "@/lib/pages/queries";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
 import { DuetCard } from "./kit";
+import { type CardSize, registerCard, rememberOpenedFrom } from "./page-morph";
 import { isDashboard } from "./page-view";
 
 /*
  * The card for something the Bot made: a preview drawn from its content, its title, when it last
- * changed, and a chevron. The same card sits under the Bot's line in Chat and in the Pages list, and
- * pressing it opens the page. The caller supplies the link, since Chat opens it over the
- * conversation and Pages opens it over the list.
+ * changed, and a chevron. The same card sits under the Bot's line in Chat, a row wide, and in the
+ * Make grid, half as wide, and pressing it opens the page. The caller supplies the link, since Chat
+ * opens it over the conversation and Make opens it over the grid. The sheet grows out of the card
+ * (page-morph.tsx), so the card says where it is and what it looks like.
  *
  * The preview is drawn from the page's own blocks in the shell's components, small: never a picture
  * of the page, and never the page itself in a frame.
@@ -22,49 +24,119 @@ export function updatedLabel(iso: string, now = new Date()): string {
   return when ? `Updated ${when}` : "";
 }
 
-/** The preview area's height. Tall enough for a thumbnail, short enough to keep the thread moving. */
-const PREVIEW_HEIGHT = 150;
+/** The preview area's height, by size. Tall enough for a thumbnail, short enough to keep moving. */
+const PREVIEW_HEIGHT: Record<CardSize, number> = { row: 150, grid: 116 };
+
+/** What a page is, in a word: the Make filters and the grid's cards say it this way. */
+export const KIND_LABEL: Record<ReturnType<typeof previewKind>, string> = {
+  page: "Page",
+  slides: "Deck",
+  dashboard: "Dashboard",
+};
 
 export function PageCard({
   page,
   link,
   now,
+  size = "row",
 }: {
   page: PageSummary;
   /** Wraps the card in whatever opens it: a router link, given the card's content and class. */
   link: (props: { className: string; children: ReactNode }) => ReactNode;
   now?: Date;
+  /** A row in Chat, or a cell of the Make grid. */
+  size?: CardSize;
 }) {
-  const updated = updatedLabel(page.updatedAt, now);
+  // On screen, the sheet can find it to grow from and to shrink back into.
+  const register = useCallback(
+    (element: HTMLDivElement | null) =>
+      element ? registerCard(element, page, size) : undefined,
+    [page, size],
+  );
   return link({
-    className:
-      "group block w-full rounded-[22px] outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
+    className: cn(
+      "group block w-full outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
+      size === "grid" ? "rounded-[20px]" : "rounded-[22px]",
+    ),
     children: (
-      <DuetCard className="transition-transform duration-150 motion-safe:group-active:scale-[0.985]">
-        <div
-          aria-hidden
-          className="relative overflow-hidden bg-duet-tile"
-          data-preview={previewKind(page)}
-          style={{ height: PREVIEW_HEIGHT }}
-        >
-          <PagePreview page={page} />
-        </div>
-        <div className="flex min-h-[66px] items-center gap-3 px-4 py-3">
-          <div className="min-w-0 flex-1">
-            <p className="type-row truncate font-semibold text-duet-ink">
-              {page.title}
-            </p>
-            {updated ? (
-              <p className="type-label mt-0.5 text-duet-ink-3">{updated}</p>
-            ) : null}
-          </div>
-          <span className="shrink-0 text-duet-ink-3">
-            <DuetIcon name="chevronRight" size={18} stroke={2.2} />
-          </span>
-        </div>
+      <DuetCard
+        className={cn(
+          "transition-transform duration-150 motion-safe:group-active:scale-[0.985]",
+          size === "grid" && "rounded-[20px]",
+        )}
+        // Before the link navigates: the sheet it opens reads this as it mounts.
+        onClick={(event) => rememberOpenedFrom(event.currentTarget, page, size)}
+        ref={register}
+      >
+        <PageCardFace now={now} page={page} size={size} />
       </DuetCard>
     ),
   });
+}
+
+/**
+ * The card's content without the card: its preview, then its title and when it changed. The sheet's
+ * stand-in draws it too, so what grows into the sheet is what was pressed.
+ */
+export function PageCardFace({
+  page,
+  size = "row",
+  now,
+}: {
+  page: PageSummary;
+  size?: CardSize;
+  now?: Date | undefined;
+}) {
+  const kind = previewKind(page);
+  if (size === "grid") {
+    const when = clockTime(page.updatedAt, now);
+    return (
+      <>
+        <div
+          aria-hidden
+          className="relative overflow-hidden bg-duet-tile"
+          data-preview={kind}
+          style={{ height: PREVIEW_HEIGHT.grid }}
+        >
+          <PagePreview page={page} size="grid" />
+        </div>
+        <div className="min-h-[64px] px-3 pt-2.5 pb-3">
+          <p className="line-clamp-2 font-semibold text-[15px] text-duet-ink leading-[19px] tracking-[-0.01em]">
+            {page.title}
+          </p>
+          <p className="type-label mt-0.5 truncate text-duet-ink-3">
+            {when ? `${KIND_LABEL[kind]} · ${when}` : KIND_LABEL[kind]}
+          </p>
+        </div>
+      </>
+    );
+  }
+  const updated = updatedLabel(page.updatedAt, now);
+  return (
+    <>
+      <div
+        aria-hidden
+        className="relative overflow-hidden bg-duet-tile"
+        data-preview={kind}
+        style={{ height: PREVIEW_HEIGHT.row }}
+      >
+        <PagePreview page={page} size="row" />
+      </div>
+      <div className="flex min-h-[66px] items-center gap-3 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="type-row truncate font-semibold text-duet-ink">
+            {page.title}
+          </p>
+          {updated ? (
+            <p className="type-label mt-0.5 text-duet-ink-3">{updated}</p>
+          ) : null}
+        </div>
+        <span className="shrink-0 text-duet-ink-3">
+          <DuetIcon name="chevronRight" size={18} stroke={2.2} />
+        </span>
+      </div>
+    </>
+  );
 }
 
 /** Which preview a page gets: a deck's first slide, a dashboard's figures, or a page's first lines. */
@@ -75,15 +147,19 @@ export function previewKind(
   return isDashboard(page.preview.blocks) ? "dashboard" : "page";
 }
 
-function PagePreview({ page }: { page: PageSummary }) {
+function PagePreview({ page, size }: { page: PageSummary; size: CardSize }) {
   switch (previewKind(page)) {
     case "slides":
-      return <SlidePreview page={page} />;
+      return <SlidePreview page={page} size={size} />;
     case "dashboard":
-      return <DashboardPreview blocks={page.preview.blocks} />;
+      return <DashboardPreview blocks={page.preview.blocks} size={size} />;
     case "page":
       return (
-        <DocumentPreview blocks={page.preview.blocks} title={page.title} />
+        <DocumentPreview
+          blocks={page.preview.blocks}
+          size={size}
+          title={page.title}
+        />
       );
   }
 }
@@ -95,20 +171,45 @@ function PagePreview({ page }: { page: PageSummary }) {
 function DocumentPreview({
   title,
   blocks,
+  size,
 }: {
   title: string;
   blocks: readonly PageBlock[];
+  size: CardSize;
 }) {
+  const grid = size === "grid";
+  // In the grid, a page that opens with a heading leads with it; any other leads with its title.
+  const [first] = blocks;
+  const opensWithHeading = grid && first?.type === "heading";
+  const heading = opensWithHeading ? first.text : title;
   return (
-    <div className="absolute inset-x-6 top-4 -bottom-6 rounded-[14px] bg-duet-card px-4 pt-4 shadow-[0_0_0_1px_var(--duet-hair),0_8px_20px_-14px_rgb(1_5_7/22%)]">
-      <p className="line-clamp-2 font-semibold text-[17px] text-duet-ink leading-[21px] tracking-[-0.012em]">
-        {title}
+    <div
+      className={cn(
+        "absolute bg-duet-card shadow-[0_0_0_1px_var(--duet-hair),0_8px_20px_-14px_rgb(1_5_7/22%)]",
+        grid
+          ? "inset-x-3 top-3 -bottom-5 rounded-[10px] px-3 pt-3"
+          : "inset-x-6 top-4 -bottom-6 rounded-[14px] px-4 pt-4",
+      )}
+    >
+      <p
+        className={cn(
+          "line-clamp-2 font-semibold text-duet-ink",
+          grid
+            ? "text-[13px] leading-[16px] tracking-[-0.006em]"
+            : "text-[17px] leading-[21px] tracking-[-0.012em]",
+        )}
+      >
+        {heading}
       </p>
-      <div className="mt-3 flex flex-col gap-2.5">
-        {blocks.map((block, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: a page's blocks are fixed in order.
-          <SkeletonBlock block={block} key={index} />
-        ))}
+      <div
+        className={cn("flex flex-col", grid ? "mt-2.5 gap-2" : "mt-3 gap-2.5")}
+      >
+        {(grid ? blocks.slice(opensWithHeading ? 1 : 0, 3) : blocks).map(
+          (block, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a page's blocks are fixed in order.
+            <SkeletonBlock block={block} key={index} />
+          ),
+        )}
       </div>
     </div>
   );
@@ -229,27 +330,67 @@ function MiniBars({
   );
 }
 
-/** A dashboard: its headline sentence over the first three figures. */
-function DashboardPreview({ blocks }: { blocks: readonly PageBlock[] }) {
+/** A dashboard: its headline sentence over its first figures, three a row wide and two in the grid. */
+function DashboardPreview({
+  blocks,
+  size,
+}: {
+  blocks: readonly PageBlock[];
+  size: CardSize;
+}) {
+  const grid = size === "grid";
   const [headline, metrics] = blocks;
   return (
-    <div className="flex h-full flex-col px-4 pt-4">
-      <p className="line-clamp-2 font-semibold text-[16px] text-duet-ink leading-[20px] tracking-[-0.01em]">
+    <div
+      className={cn("flex h-full flex-col", grid ? "px-3 pt-3" : "px-4 pt-4")}
+    >
+      <p
+        className={cn(
+          "font-semibold text-duet-ink",
+          grid
+            ? "line-clamp-2 text-[13px] leading-[16px] tracking-[-0.006em]"
+            : "line-clamp-2 text-[16px] leading-[20px] tracking-[-0.01em]",
+        )}
+      >
         {headline?.type === "text" ? headline.text : ""}
       </p>
-      <div className="mt-3 grid grid-cols-3 gap-2">
+      <div
+        className={cn(
+          "grid",
+          grid ? "mt-2.5 grid-cols-2 gap-1.5" : "mt-3 grid-cols-3 gap-2",
+        )}
+      >
         {(metrics?.type === "metrics" ? metrics.items : [])
-          .slice(0, 3)
+          .slice(0, grid ? 2 : 3)
           .map((metric, index) => (
             <div
-              className="min-w-0 rounded-[12px] bg-duet-card px-2.5 py-2 shadow-[0_0_0_1px_var(--duet-hair-2)]"
+              className={cn(
+                "min-w-0 bg-duet-card shadow-[0_0_0_1px_var(--duet-hair-2)]",
+                grid
+                  ? "rounded-[9px] px-2 py-1.5"
+                  : "rounded-[12px] px-2.5 py-2",
+              )}
               // biome-ignore lint/suspicious/noArrayIndexKey: two tiles may share a label.
               key={index}
             >
-              <p className="truncate font-semibold text-[17px] text-duet-ink tabular-nums leading-[21px] tracking-[-0.015em]">
+              <p
+                className={cn(
+                  "truncate font-semibold text-duet-ink tabular-nums",
+                  grid
+                    ? "text-[15px] leading-[19px] tracking-[-0.012em]"
+                    : "text-[17px] leading-[21px] tracking-[-0.015em]",
+                )}
+              >
                 {metric.value}
               </p>
-              <p className="truncate text-[11px] text-duet-ink-2 leading-[14px]">
+              <p
+                className={cn(
+                  "truncate text-duet-ink-2",
+                  grid
+                    ? "text-[10px] leading-[13px]"
+                    : "text-[11px] leading-[14px]",
+                )}
+              >
                 {metric.label}
               </p>
             </div>
@@ -264,21 +405,49 @@ function DashboardPreview({ blocks }: { blocks: readonly PageBlock[] }) {
  * picks it), with the slide's title and its chart drawn as real bars, the last one violet. A slide
  * with no chart shows its other lines as soft bars.
  */
-function SlidePreview({ page }: { page: PageSummary }) {
+function SlidePreview({ page, size }: { page: PageSummary; size: CardSize }) {
+  const grid = size === "grid";
   const chart = page.preview.blocks.find((block) => block.type === "bars");
   const others = page.preview.blocks.filter((block) => block.type !== "bars");
   return (
-    <div className="absolute inset-x-0 top-4 flex justify-center">
-      <div className="flex aspect-video h-[118px] flex-col rounded-[10px] bg-duet-card px-3 pt-2.5 pb-2.5 shadow-[0_0_0_1px_var(--duet-hair),0_8px_20px_-14px_rgb(1_5_7/22%)]">
-        <p className="line-clamp-1 font-semibold text-[12px] text-duet-ink leading-[15px]">
+    <div
+      className={cn(
+        "absolute inset-x-0 flex justify-center",
+        grid ? "top-3.5" : "top-4",
+      )}
+    >
+      <div
+        className={cn(
+          "flex aspect-video flex-col bg-duet-card shadow-[0_0_0_1px_var(--duet-hair),0_8px_20px_-14px_rgb(1_5_7/22%)]",
+          grid
+            ? "h-[80px] rounded-[7px] px-2 pt-1.5 pb-1.5"
+            : "h-[118px] rounded-[10px] px-3 pt-2.5 pb-2.5",
+        )}
+      >
+        <p
+          className={cn(
+            "line-clamp-1 font-semibold text-duet-ink",
+            grid ? "text-[9.5px] leading-[12px]" : "text-[12px] leading-[15px]",
+          )}
+        >
           {page.preview.title ?? page.title}
         </p>
         {chart && chart.type === "bars" ? (
-          <div className="mt-2 flex min-h-0 flex-1 items-end">
-            <MiniBars items={chart.items} height={64} />
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 items-end",
+              grid ? "mt-1.5" : "mt-2",
+            )}
+          >
+            <MiniBars height={grid ? 44 : 64} items={chart.items} />
           </div>
         ) : (
-          <div className="mt-2.5 flex flex-col gap-2">
+          <div
+            className={cn(
+              "flex flex-col",
+              grid ? "mt-2 gap-1.5" : "mt-2.5 gap-2",
+            )}
+          >
             {others.slice(0, 2).map((block, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
               <SkeletonBlock block={block} key={index} />

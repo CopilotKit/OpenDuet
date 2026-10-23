@@ -1,7 +1,16 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { TasksScreen } from "@/components/shell/tasks-screen";
 
-/** Tasks: what needs the person, what their Bots suggest, and the work under way. */
+/** Tasks: what needs the person, their tasks, their Bots' suggestions and work. A task opens over it. */
 export const Route = createFileRoute("/_authed/_app/tasks")({
-  component: TasksScreen,
+  component: TasksRoute,
 });
+
+function TasksRoute() {
+  return (
+    <>
+      <TasksScreen />
+      <Outlet />
+    </>
+  );
+}

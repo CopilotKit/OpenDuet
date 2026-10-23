@@ -8,8 +8,14 @@
  * event, so a missed sweep costs two seconds where a missed event would cost the name entirely.
  */
 import { and, asc, eq, isNull, notExists, sql } from "drizzle-orm";
+import {
+  describeChannelHello,
+  readChannelHello,
+} from "@openbot/shared/channel-hello";
+import { describeCheckIn, readCheckIn } from "@openbot/shared/check-in";
 import { readFirstDay } from "@openbot/shared/first-day";
 import { readFiring } from "@openbot/shared/routine-firing";
+import { readTaskBrief } from "@openbot/shared/task-brief";
 import type { Database } from "../db/client";
 import {
   channelMemberships,
@@ -303,9 +309,18 @@ async function openingOf(
   if (!rawAsked) return null;
   // A channel a routine opened has the firing frame wrapped around its first message, not a
   // person's words, and Chat's first day has the first-day frame around the request it sent for
-  // them. Unwrapped before either can become the title, same as the transcript unwraps them
-  // before they can become what a person reads.
-  const asked = readFirstDay(rawAsked) ?? readFiring(rawAsked) ?? rawAsked;
+  // them. A check-in the Bot started has its own frame and what it found under it, and a task's
+  // conversation has its frame around the person's ask. Unwrapped before any of them can become the
+  // title, same as the transcript unwraps them before they can become what a person reads.
+  // A channel's hello is the same: it names the channel, and the person typed none of it.
+  const checkIn = readCheckIn(rawAsked);
+  const hello = readChannelHello(rawAsked);
+  const asked =
+    readFirstDay(rawAsked) ??
+    readFiring(rawAsked) ??
+    readTaskBrief(rawAsked) ??
+    (checkIn ? describeCheckIn(checkIn) : null) ??
+    (hello ? describeChannelHello(hello) : rawAsked);
   const replied = answer ? textOf(answer.content) : "";
 
   return oneLine(

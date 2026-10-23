@@ -140,6 +140,16 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Putting it together",
     done: "Put it together",
   },
+  // server/src/openduet/offers.ts. Drawn as the task's card once done; this is the moment before.
+  offer_task: {
+    running: "Adding a task",
+    done: "Added a task",
+  },
+  // server/src/openduet/tasks.ts. Drawn as the started task's card once done.
+  start_task: {
+    running: "Starting a task",
+    done: "Started a task",
+  },
   // server/src/memory. Drawn as plain lines, so without these they read "recall_personal_memory".
   recall_personal_memory: {
     running: "Checking memory",

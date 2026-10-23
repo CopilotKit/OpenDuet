@@ -5,6 +5,7 @@ import {
   queryOptions,
 } from "@tanstack/react-query";
 import { client } from "@/lib/client";
+import { taskKeys } from "@/lib/tasks/queries";
 
 export type ProactiveSetting = {
   id: string;
@@ -21,10 +22,16 @@ export type ProactiveSetting = {
 export type ProactiveSuggestion = {
   id: string;
   agentId: string;
+  /** The research run that left it; one the person asked for starts with `asked:`. */
+  runId?: string;
   title: string;
   detail: string;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** The channel the person asked for it in, which it wears as a tag, or null for Everything. */
+  fromChannelId?: string | null;
+  /** Open until the person starts it or hides it, from any card that shows it. */
+  status?: "open" | "started" | "dismissed";
   createdAt: string;
 };
 
@@ -68,6 +75,11 @@ export type StartedList = {
 
 /** How many checked-off tasks a list shows at first, and how many more each "Show more" adds. */
 export const RESOLVED_PAGE = 20;
+
+/** Whether the person asked for this card themselves, from a conversation or from the + on Tasks. */
+export function personAsked(suggestion: Pick<ProactiveSuggestion, "runId">) {
+  return suggestion.runId?.startsWith("asked:") ?? false;
+}
 
 export const proactiveKeys = {
   settings: ["proactive", "settings"] as const,
@@ -191,6 +203,21 @@ export const retryStartedMutationOptions = (queryClient: QueryClient) =>
       queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
   });
 
+/**
+ * One suggestion, whatever became of it: how a card in Chat knows it was started or hidden. Under
+ * the list's key, so starting or hiding it anywhere refreshes both.
+ */
+export const proactiveSuggestionQueryOptions = (id: string) =>
+  queryOptions({
+    queryKey: [...proactiveKeys.suggestions, id] as const,
+    queryFn: (): Promise<ProactiveSuggestion> =>
+      client(
+        `/api/proactive/suggestions/${encodeURIComponent(id)}`,
+        "suggestion",
+        { fallback: "Could not load this suggestion" },
+      ),
+  });
+
 export const createProactiveSetting = (input: {
   agentId: string;
   channelId: string;
@@ -221,9 +248,18 @@ export const removeProactiveSetting = (id: string) =>
     method: "DELETE",
     fallback: "Could not remove background research",
   });
-export const resolveSuggestion = (id: string, action: "start" | "dismiss") =>
+/**
+ * Start a suggestion, which opens it as a task in a conversation of its own, or hide it. A Start
+ * pressed on a check-in's card says so with `from`, so the task records where it began.
+ */
+export const resolveSuggestion = (
+  id: string,
+  action: "start" | "dismiss",
+  from?: "check_in",
+) =>
   client(`/api/proactive/suggestions/${encodeURIComponent(id)}/${action}`, {
     method: "POST",
+    ...(from ? { body: { from } } : {}),
     fallback:
       action === "start"
         ? "Could not start this suggestion"
@@ -231,21 +267,29 @@ export const resolveSuggestion = (id: string, action: "start" | "dismiss") =>
   });
 
 /**
- * A setting's research produces suggestions, and starting one adds to what was started, so a
- * change to any of them refreshes all three.
+ * A setting's research produces suggestions, so a change to either refreshes both. Starting one
+ * opens a task, so the person's tasks are read again too.
  */
 const settleProactive = (queryClient: QueryClient) => () =>
   Promise.all([
     queryClient.invalidateQueries({ queryKey: proactiveKeys.settings }),
     queryClient.invalidateQueries({ queryKey: proactiveKeys.suggestions }),
     queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.all }),
   ]);
 
 /** Start a suggested next step as a task, or dismiss it. */
 export const resolveSuggestionMutationOptions = (queryClient: QueryClient) =>
   mutationOptions({
-    mutationFn: ({ id, action }: { id: string; action: "start" | "dismiss" }) =>
-      resolveSuggestion(id, action),
+    mutationFn: ({
+      id,
+      action,
+      from,
+    }: {
+      id: string;
+      action: "start" | "dismiss";
+      from?: "check_in";
+    }) => resolveSuggestion(id, action, from),
     onSuccess: settleProactive(queryClient),
   });
 
@@ -257,8 +301,11 @@ export const createProactiveSettingMutationOptions = (
     onSuccess: settleProactive(queryClient),
   });
 
-/** How often research runs when one button turns it on: every four hours, as when OpenBot does. */
-export const DEFAULT_RESEARCH_INTERVAL_MINUTES = 240;
+/**
+ * How often research checks in when one button turns it on: every hour. A check-in reads only what
+ * is new since the last one and usually ends with nothing to say, so an hour costs little.
+ */
+export const DEFAULT_RESEARCH_INTERVAL_MINUTES = 60;
 
 /**
  * Turn a Bot's background research on from one button.

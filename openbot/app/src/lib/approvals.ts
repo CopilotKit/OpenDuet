@@ -88,8 +88,8 @@ export type PersonQuestion = {
 
 /**
  * Everything waiting on the person: the actions still pending and the questions still open, newest
- * first. Tasks lists exactly these under Needs you and its tab badge counts exactly these, so the two
- * agree.
+ * first. Tasks lists them under Needs input, each one raised in a task's conversation as its task,
+ * and the tab's badge counts them the same way (`needsInputCount` in lib/tasks/groups.ts).
  */
 export function waitingOnYou(data: ApprovalInboxData | undefined): {
   requests: ApprovalRequest[];

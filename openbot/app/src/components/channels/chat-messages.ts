@@ -1,6 +1,7 @@
 import type { ActivityMessage, Message, ToolCall } from "@ag-ui/core";
 import { classifyAttachment } from "@/lib/channels/attachments";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
+import { readChannelHello } from "@/lib/channels/channel-hello";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -452,6 +453,9 @@ export function toVisibleChatItems(
 
     if (typeof message.content === "string") {
       const text = message.content;
+      // A new channel's hello: sent for the person, never by them. The Bot speaks first, so nothing
+      // is drawn where their bubble would be (shared/channel-hello.ts).
+      if (readChannelHello(text) !== null) return [];
       return text ? [{ kind: "text", id: message.id, role: "user", text }] : [];
     }
 
@@ -566,12 +570,16 @@ export function toVisibleChatItems(
 }
 
 /**
- * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`, and
- * the pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`. Named here as
+ * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`, the
+ * pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`, the tasks a
+ * check-in offers (server/src/openduet/offers.ts), drawn by `offer-task-tool.tsx`, and the tasks it
+ * starts (server/src/openduet/tasks.ts), drawn by `task-card-tool.tsx`. Named here as
  * `GENERATE_SANDBOXED_UI` is: the projection only needs the strings.
  */
 const SUGGEST_REPLIES = "suggest_replies";
 const MAKE_PAGE = "make_page";
+const OFFER_TASK = "offer_task";
+const START_TASK = "start_task";
 
 /**
  * How the runtime answers for a tool when it rejected the call's arguments before the tool ran, such
@@ -608,14 +616,15 @@ export function repliesHeld(result: string | undefined): boolean {
 }
 
 /**
- * Page cards and reply chips moved to the end of their turn, under the Bot's last words in it:
- * the cards first, then the chips.
+ * Page cards, offered and started tasks, and reply chips moved to the end of their turn, under the
+ * Bot's last words in it: the cards first, in the order they were made, then the chips.
  *
  * WHEREVER IN THE TURN THE BOT CALLED FOR THEM. A model that asks its question and then calls the
  * tool puts the chips under the question by itself, but one that calls first and asks after is just
  * as common, and drawn where the call sits its chips would land above the question they answer. A
  * page is the same: the Bot makes it, then says a line about it, and the card belongs under the
- * line. A turn ends where the person next sends something, so both go just before that.
+ * line, and a check-in's tasks under the sentence that says what it found. A turn ends where the
+ * person next sends something, so they all go just before that.
  *
  * AND ONLY CHIPS THE SERVER ACCEPTED (`repliesShown`). Any other call has no chips to draw, and kept
  * as an item it would still take a row of the transcript's gap: an empty stripe where the chips
@@ -665,6 +674,14 @@ export function repliesLast(
     sinceRefusal = null;
   };
   for (const item of items) {
+    if (
+      item.kind === "tool" &&
+      (item.toolCall.function.name === OFFER_TASK ||
+        item.toolCall.function.name === START_TASK)
+    ) {
+      pages.push(item);
+      continue;
+    }
     if (item.kind === "tool" && item.toolCall.function.name === MAKE_PAGE) {
       if (sinceRefusal) {
         const retried = sinceRefusal;

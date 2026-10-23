@@ -9,6 +9,7 @@ import { motion, useReducedMotion } from "motion/react";
 import {
   memo,
   type ReactNode,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -46,6 +47,12 @@ import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
 import { readFirstDay } from "@/lib/channels/first-day";
+import { readTaskBrief } from "@/lib/channels/task-brief";
+import {
+  type CheckIn,
+  CheckInArrivalContext,
+  readCheckIn,
+} from "@/lib/channels/check-in";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { appConfig } from "@/lib/generated/application-config";
 import { queryClient } from "@/query-client";
@@ -121,6 +128,11 @@ type ChatTranscriptProps = {
   lead?: ReactNode;
   /** Extra classes on the scrolling column, such as room for a header floating over it. */
   contentClassName?: string;
+  /**
+   * Draw the lead alone and keep the conversation folded under it, as a task's report does until
+   * Show conversation is pressed. The conversation is still joined; only its rows are not drawn.
+   */
+  folded?: boolean;
 };
 
 /**
@@ -745,6 +757,36 @@ function FirstDayReplies() {
   );
 }
 
+/** "10:32 AM" in the reader's own clock and locale, or null for a time that cannot be read. */
+export function checkInTime(checkedAt: string | null): string | null {
+  if (!checkedAt) return null;
+  const at = new Date(checkedAt);
+  return Number.isNaN(at.getTime())
+    ? null
+    : at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * A check-in the Bot started, drawn as the quiet line it is: what it looked at, and when.
+ *
+ * The message here is a frame addressed to the model (`shared/check-in.ts`), with what research
+ * found under it as JSON. Nobody typed it, so it is never the person's bubble, and none of it is for
+ * them to read: the Bot says what it found in its own message under this line, and the cards it
+ * offers follow. Chat is told it was drawn, to notify a person who is not looking.
+ */
+function CheckInLine({ checkIn }: { checkIn: CheckIn }) {
+  const arrived = useContext(CheckInArrivalContext);
+  useEffect(() => {
+    arrived?.(checkIn);
+  }, [arrived, checkIn]);
+  const time = checkInTime(checkIn.checkedAt);
+  return (
+    <p className="type-label w-full text-center text-duet-ink-3">
+      Checked your mail and calendar{time ? ` · ${time}` : ""}
+    </p>
+  );
+}
+
 /** `manual/requested` reads as "manual"; anything else keeps its event type beside the source. */
 function describeTrigger(trigger: string): string {
   const [source, type] = trigger.split("/", 2);
@@ -849,10 +891,25 @@ const TranscriptMessage = memo(function TranscriptMessage({
   if (firstDay !== null) {
     return <FirstDayGreeting delay={delay} request={firstDay} />;
   }
+  // A check-in the Bot started itself: a quiet line, and its own words follow.
+  const checkIn = isUser ? readCheckIn(text) : null;
+  if (checkIn !== null) {
+    return (
+      <MessageRow align="start">
+        <MessageContent>
+          <Arriving delay={delay}>
+            <CheckInLine checkIn={checkIn} />
+          </Arriving>
+        </MessageContent>
+      </MessageRow>
+    );
+  }
   const align = isUser ? "end" : "start";
+  // A task's first message is the person's ask under a frame the model reads. They see their ask.
+  const asked = (isUser ? readTaskBrief(text) : null) ?? text;
   // Slack/Teams turns carry a model-facing participant line; show a marker instead of the line.
-  const origin = isUser ? splitChatOrigin(text) : null;
-  const said = origin ? origin.text : text;
+  const origin = isUser ? splitChatOrigin(asked) : null;
+  const said = origin ? origin.text : asked;
   const invoked = isUser ? splitSkillChip(said, commandNames) : null;
 
   return (
@@ -1719,7 +1776,10 @@ export function isPersonSentMessage(
   role: "user" | "assistant",
   text: string,
 ): boolean {
-  return role === "user" && readFiring(text) === null;
+  // A check-in is the same: the Bot started it, and it must not scroll the person's place away.
+  return (
+    role === "user" && readFiring(text) === null && readCheckIn(text) === null
+  );
 }
 
 /**
@@ -1832,6 +1892,7 @@ export function ChatTranscript({
   stopped,
   lead,
   contentClassName,
+  folded = false,
 }: ChatTranscriptProps) {
   const isDrawn = useDrawnTool();
   /*
@@ -1844,10 +1905,9 @@ export function ChatTranscript({
    * cost was markdown parsing and chart SVGs, and those are skipped by the memoised children below,
    * which is where the 25x came from. This runs per render and is not worth guarding.
    */
-  const items = groupToolSteps(
-    repliesLast(toVisibleChatItems(messages)),
-    isDrawn,
-  );
+  const items = folded
+    ? []
+    : groupToolSteps(repliesLast(toVisibleChatItems(messages)), isDrawn);
   /*
    * The first day's answer and its two replies. The replies only once the run has ended, while
    * nothing the person said or parked comes after it, and only on a first day that read mail: they
@@ -1997,12 +2057,12 @@ export function ChatTranscript({
              * position, which is the library's to change and is worth asking for.
              */}
             <div className="contents [&>*]:order-1">
-              {stopped ? (
+              {folded ? null : stopped ? (
                 <Stopped reason={stopped} />
               ) : waitingOnFirstToken ? (
                 <Thinking />
               ) : null}
-              {queued.map((message) => (
+              {(folded ? EMPTY_QUEUE : queued).map((message) => (
                 <Queued
                   attachments={message.attachments}
                   key={message.id}
@@ -2033,7 +2093,9 @@ export function ChatTranscript({
             >
               {lead}
             </div>
-            {items.length === 0 && restoring ? <RestoringTranscript /> : null}
+            {items.length === 0 && restoring && !folded ? (
+              <RestoringTranscript />
+            ) : null}
             {items.map((item, index) =>
               item.kind === "tools" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>

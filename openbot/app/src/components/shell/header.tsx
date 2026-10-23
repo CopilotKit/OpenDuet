@@ -38,7 +38,7 @@ export function initialOf(user: { name?: string | null; email: string }) {
  * While it thinks, a pill under it says what the Bot is doing.
  *
  * `floating` lays it over a screen that scrolls under it, behind a fade, as on Chat, Tasks and
- * Pages. Otherwise it is a bar in the page's flow, for the screens the menu opens.
+ * Make. Otherwise it is a bar in the page's flow, for the screens the menu opens.
  */
 export function ShellHeader({
   floating,

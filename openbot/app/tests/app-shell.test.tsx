@@ -4,24 +4,35 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
+  createRoute,
   createRouter,
+  Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MANAGE_STORAGE_KEY, MenuSheet } from "@/components/shell/menu-sheet";
+import {
+  ARCHIVED_STORAGE_KEY,
+  EVERYTHING_LINE,
+  MANAGE_STORAGE_KEY,
+  MenuSheet,
+} from "@/components/shell/menu-sheet";
 import { TabBar, tabForPath } from "@/components/shell/tab-bar";
 import { authKeys } from "@/lib/auth/queries";
 import { Route as ActivityRoute } from "@/routes/_authed/_app/activity";
 import { Route as InboxRoute } from "@/routes/_authed/_app/inbox";
-import { channelKeys } from "@/lib/channels/queries";
+import { Route as PageLinkRoute } from "@/routes/_authed/_app/pages.$pageId";
+import { Route as PagesRoute } from "@/routes/_authed/_app/pages.index";
+import { agentKeys } from "@/lib/agents/queries";
 import { deploymentKeys } from "@/lib/deployment/queries";
+import { type DuetChannel, duetChannelKeys } from "@/lib/duet-channels/queries";
 import { settleReactWork } from "./settle-react-work";
 
 /**
- * The film's shell: the tab bar at the foot of Chat, Tasks and Pages, and the menu that opens on
- * Chat and the conversations, with every page OpenBot's sidebar listed under Manage and Settings.
+ * The film's shell: the tab bar at the foot of Chat, Tasks and Make, and the drawer that opens on
+ * Everything, then the person's channels, New channel and Archived, with every page OpenBot's
+ * sidebar listed under Manage and Settings.
  */
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3010" }));
@@ -38,13 +49,15 @@ afterEach(() => {
 });
 
 let inbox: Record<string, unknown> = { requests: [], questions: [] };
-let started: unknown[] = [];
+let tasks: unknown[] = [];
+afterEach(() => {
+  tasks = [];
+});
 function serving() {
   global.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/approvals") return Response.json(inbox);
-    if (url.startsWith("/api/proactive/started"))
-      return Response.json({ started, olderResolved: 0 });
+    if (url === "/api/openduet/tasks") return Response.json({ tasks });
     if (url.startsWith("/api/bots/attention"))
       return Response.json({ bots: [] });
     if (url === "/api/settings/preferences")
@@ -97,10 +110,14 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/")).toBe("chat");
   expect(tabForPath("/tasks")).toBe("tasks");
   expect(tabForPath("/tasks/")).toBe("tasks");
-  expect(tabForPath("/pages")).toBe("pages");
-  // A page open over the list is still the Pages tab.
-  expect(tabForPath("/pages/page-1")).toBe("pages");
-  expect(tabForPath("/pages/page-1/more")).toBeNull();
+  expect(tabForPath("/make")).toBe("make");
+  // Something open over the grid is still the Make tab, and a task open over Tasks still Tasks.
+  expect(tabForPath("/make/page-1")).toBe("make");
+  expect(tabForPath("/make/page-1/more")).toBeNull();
+  // Pages became Make; its old paths redirect before a tab is drawn.
+  expect(tabForPath("/pages")).toBeNull();
+  expect(tabForPath("/tasks/task-1")).toBe("tasks");
+  expect(tabForPath("/tasks/task-1/more")).toBeNull();
   expect(tabForPath("/activity")).toBeNull();
   expect(tabForPath("/bots")).toBeNull();
   // A conversation opened from the menu is a page over the app, not Chat.
@@ -108,9 +125,12 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/channel/abc/")).toBeNull();
   expect(tabForPath("/channel/new")).toBeNull();
   expect(tabForPath("/group/abc")).toBeNull();
+  // A channel is a conversation like Chat's, under Chat's tab.
+  expect(tabForPath("/channels/abc")).toBe("chat");
+  expect(tabForPath("/channels/abc/more")).toBeNull();
 });
 
-test("the tab bar draws Chat, Tasks and Pages, the current one marked", async () => {
+test("the tab bar draws Chat, Tasks and Make, the current one marked", async () => {
   inbox = { requests: [], questions: [] };
   serving();
   const view = draw(<TabBar current="tasks" />, undefined, "/tasks");
@@ -119,13 +139,17 @@ test("the tab bar draws Chat, Tasks and Pages, the current one marked", async ()
   expect(links.map((link) => link.textContent)).toEqual([
     "Chat",
     "Tasks",
-    "Pages",
+    "Make",
   ]);
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
     "/",
     "/tasks",
-    "/pages",
+    "/make",
   ]);
+  // Make's glyph is the spark, not Pages' sheet of paper.
+  expect(links[2]?.querySelector("svg path")?.getAttribute("d")).toMatch(
+    /^M10\.6 3\.6/,
+  );
   expect(within(nav).getByRole("link", { current: "page" }).textContent).toBe(
     "Tasks",
   );
@@ -142,37 +166,79 @@ test("/inbox, where earlier notifications and links point, goes to Tasks", () =>
   expect(thrown).toMatchObject({ options: { to: "/tasks", replace: true } });
 });
 
-test("/activity, where earlier links point, goes to Pages", () => {
-  const beforeLoad = ActivityRoute.options.beforeLoad as () => void;
-  let thrown: unknown;
+/** What a redirecting route's `beforeLoad` throws. */
+function redirectOf(beforeLoad: unknown, input: unknown = {}): unknown {
   try {
-    beforeLoad();
+    (beforeLoad as (input: unknown) => void)(input);
   } catch (error) {
-    thrown = error;
+    return error;
   }
-  expect(thrown).toMatchObject({ options: { to: "/pages", replace: true } });
+  return undefined;
+}
+
+test("/activity and /pages, where earlier links point, go to Make", () => {
+  expect(redirectOf(ActivityRoute.options.beforeLoad)).toMatchObject({
+    options: { to: "/make", replace: true },
+  });
+  expect(redirectOf(PagesRoute.options.beforeLoad)).toMatchObject({
+    options: { to: "/make", replace: true },
+  });
 });
 
-test("on a page open over the list, the Pages tab is the one drawn current", async () => {
+test("a /pages/<id> link, as Chat's older cards wrote it, opens the same page under Make", () => {
+  expect(
+    redirectOf(PageLinkRoute.options.beforeLoad, {
+      params: { pageId: "deck-1" },
+    }),
+  ).toMatchObject({
+    options: {
+      to: "/make/$pageId",
+      params: { pageId: "deck-1" },
+      replace: true,
+    },
+  });
+});
+
+test("the redirects land where they say when a router follows them", async () => {
+  const root = createRootRoute({ component: Outlet });
+  const route = (path: string, beforeLoad?: unknown) =>
+    createRoute({
+      getParentRoute: () => root,
+      path,
+      component: () => <p>{path}</p>,
+      ...(beforeLoad ? { beforeLoad: beforeLoad as never } : {}),
+    });
+  const router = createRouter({
+    routeTree: root.addChildren([
+      route("/make"),
+      route("/make/$pageId"),
+      route("/pages/", PagesRoute.options.beforeLoad),
+      route("/pages/$pageId", PageLinkRoute.options.beforeLoad),
+      route("/activity", ActivityRoute.options.beforeLoad),
+    ]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  for (const [from, to] of [
+    ["/pages", "/make"],
+    ["/pages/deck-1", "/make/deck-1"],
+    ["/activity", "/make"],
+  ] as const) {
+    await router.navigate({ to: from as never });
+    await waitFor(() => expect(router.state.location.pathname).toBe(to));
+  }
+});
+
+test("on a page open over the grid, the Make tab is the one drawn current", async () => {
   inbox = { requests: [], questions: [] };
   serving();
-  const view = draw(<TabBar current="pages" />, undefined, "/pages");
+  const view = draw(<TabBar current="make" />, undefined, "/make");
   const nav = await view.findByRole("navigation", { name: "Main" });
   expect(within(nav).getByRole("link", { current: "page" }).textContent).toBe(
-    "Pages",
+    "Make",
   );
 });
 
-test("the tab drawn current is the one announced current, over a page open on Pages too", async () => {
-  inbox = { requests: [], questions: [] };
-  serving();
-  const view = draw(<TabBar current="pages" />, undefined, "/pages/page-1");
-  const nav = await view.findByRole("navigation", { name: "Main" });
-  const current = within(nav).getAllByRole("link", { current: "page" });
-  expect(current.map((link) => link.textContent)).toEqual(["Pages"]);
-});
-
-test("the Tasks badge counts what Needs you lists: pending actions and open questions", async () => {
+test("the Tasks badge counts the approvals and questions waiting outside any task", async () => {
   inbox = {
     requests: [
       pending("a"),
@@ -194,42 +260,45 @@ test("the Tasks badge counts what Needs you lists: pending actions and open ques
   expect(
     await view.findByRole("link", { name: "Tasks, 3 waiting" }),
   ).toBeTruthy();
-  expect(view.getByRole("link", { name: "Pages" })).toBeTruthy();
+  expect(view.getByRole("link", { name: "Make" })).toBeTruthy();
 });
 
-test("the Tasks badge counts started tasks that need input or failed, and each request only once", async () => {
-  inbox = { requests: [pending("a"), pending("b")], questions: [] };
-  const task = (id: string, state: string, waitingOn: unknown = null) => ({
+test("the Tasks badge counts what Needs input lists: a task waiting on the person once, with its own approval", async () => {
+  const task = (id: string, status: string) => ({
     id,
-    agentId: "openduet",
+    botId: "openduet",
+    channelId: `${id}-channel`,
+    threadId: `${id}-thread`,
     title: id,
-    detail: "",
+    why: null,
+    origin: "asked",
+    suggestionId: null,
     sourceApp: null,
     sourceLink: null,
-    startedAt: "2026-10-22T05:00:00Z",
-    state,
-    next: null,
-    waitingOn,
+    status,
     resolvedAt: null,
-    at: "2026-10-22T05:00:00Z",
-    channelId: "chat",
+    createdAt: "2026-10-21T10:00:00Z",
+    updatedAt: "2026-10-21T10:00:00Z",
   });
-  started = [
-    // Waits on request a, so a is not counted again.
-    task("asks-to-send", "needs_input", { kind: "approval", id: "a" }),
-    task("asks-in-its-reply", "needs_input"),
-    task("broke", "failed"),
-    task("running", "working"),
-    task("read", "ready_for_review"),
-    { ...task("checked", "needs_input"), resolvedAt: "2026-10-22T06:00:00Z" },
+  tasks = [
+    task("rosa", "needs_input"),
+    task("sam", "working"),
+    task("hearth", "ready_for_review"),
   ];
+  const inRosa = pending("in-rosa");
+  inbox = {
+    // Rosa's own approval is Rosa's task, counted once; the other is on its own.
+    requests: [
+      { ...inRosa, action: { ...inRosa.action, threadId: "rosa-thread" } },
+      pending("loose"),
+    ],
+    questions: [],
+  };
   serving();
   const view = draw(<TabBar current="chat" />);
-  // Three tasks, and request b.
   expect(
-    await view.findByRole("link", { name: "Tasks, 4 waiting" }),
+    await view.findByRole("link", { name: "Tasks, 2 waiting" }),
   ).toBeTruthy();
-  started = [];
 });
 
 test("with nothing waiting Tasks carries no badge", async () => {
@@ -242,23 +311,52 @@ test("with nothing waiting Tasks carries no badge", async () => {
   );
 });
 
-/** One conversation besides Chat, so the roster has a row to place. */
-const conversation = {
-  id: "c1",
-  name: "OpenDuet",
+/** A channel as the drawer lists it. */
+const channel = (
+  id: string,
+  name: string,
+  purpose: string | null,
+  look: Pick<DuetChannel, "icon" | "colour">,
+  archivedAt: string | null = null,
+): DuetChannel => ({
+  id,
+  name,
+  purpose,
+  ...look,
+  dressed: true,
+  archivedAt,
   agentIds: ["openduet"],
-  threadId: "t1",
-  active: true,
   lastMessageAt: "2026-10-21T10:00:00Z",
-  summary: "Ship date with Ana",
-  lastMessage: "Sent.",
-  lastMessageAgentId: "openduet",
   createdAt: "2026-10-21T09:00:00Z",
-  pinned: false,
-  lastReadAt: "2026-10-21T10:00:00Z",
-};
+});
 
-function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
+const kiln = {
+  ...channel(
+    "c-kiln",
+    "Kiln move",
+    "Moving the studio's kiln to the new space by March.",
+    { icon: "home", colour: "green" },
+  ),
+  createdAt: "2026-10-20T09:00:00Z",
+};
+const glazes = channel("c-glaze", "Glazes", "Ordering glaze for spring.", {
+  icon: "bag",
+  colour: "berry",
+});
+const oldShow = channel(
+  "c-show",
+  "Autumn show",
+  "The October studio show.",
+  { icon: "calendar", colour: "amber" },
+  "2026-10-20T10:00:00Z",
+);
+
+function seedMenu(
+  role: "admin" | "user",
+  localEvaluation: boolean,
+  // As the server lists them, newest activity first; the drawer shows them in the order made.
+  channels: DuetChannel[] = [glazes, kiln, oldShow],
+) {
   return (client: QueryClient) => {
     client.setQueryData(authKeys.currentUser(), {
       id: "u",
@@ -272,9 +370,18 @@ function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
       selfHostBanner: true,
       localEvaluation,
     });
-    client.setQueryData(channelKeys.list(), {
-      pages: [{ channels: [conversation], nextCursor: null }],
-      pageParams: [""],
+    client.setQueryData(agentKeys.list(), [
+      {
+        id: "openduet",
+        name: "OpenDuet",
+        title: "Your proactive assistant",
+        roleDescription: "",
+        visibility: "public",
+      },
+    ]);
+    client.setQueryData(duetChannelKeys.list("openduet"), {
+      everythingId: "c-everything",
+      channels,
     });
   };
 }
@@ -282,7 +389,7 @@ function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
 /** The menu's rows, top to bottom, as a keyboard reaches them. */
 function menuRows(dialog: HTMLElement) {
   const rows = ["link", "button", "textbox"].flatMap((role) =>
-    within(dialog).getAllByRole(role),
+    within(dialog).queryAllByRole(role),
   );
   rows.sort((a, b) =>
     a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
@@ -296,44 +403,166 @@ function manageToggle(dialog: HTMLElement) {
   return within(dialog).getByRole("button", { name: "Manage" });
 }
 
-test("the menu opens on Chat, a new conversation and the conversations, with Manage closed and Settings at the foot", async () => {
+function archivedToggle(dialog: HTMLElement) {
+  return within(dialog).getByRole("button", { name: /^Archived/ });
+}
+
+test("the drawer reads Everything, the channels, New channel, Archived folded, then Manage and Settings", async () => {
   serving();
   const view = draw(
-    <MenuSheet onOpenChange={() => {}} open />,
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
     seedMenu("admin", false),
   );
   const dialog = await view.findByRole("dialog");
-  await within(dialog).findByRole("link", { name: /Ship date with Ana/ });
-  const rows = menuRows(dialog);
-  expect(rows[0]).toBe("Chat");
-  expect(rows[1]).toBe("New conversation");
-  expect(rows[2]).toBe("Search conversations");
-  expect(rows[3]).toContain("Ship date with Ana");
-  // No close button: the drawer closes on the strip beside it, on Escape and on a choice.
-  expect(rows.slice(4)).toEqual(["Manage", "Settings", "Sign out"]);
+  await within(dialog).findByRole("link", { name: /Kiln move/ });
+  expect(menuRows(dialog)).toEqual([
+    `Everything${EVERYTHING_LINE}`,
+    `Kiln move${kiln.purpose}`,
+    `Glazes${glazes.purpose}`,
+    "New channel",
+    "Archived",
+    "Manage",
+    "Settings",
+    "Sign out",
+  ]);
+  // Everything is Chat, the one thread.
   expect(
-    within(dialog).getByRole("link", { name: "Chat" }).getAttribute("href"),
+    within(dialog)
+      .getByRole("link", { name: /Everything/ })
+      .getAttribute("href"),
   ).toBe("/");
   expect(
     within(dialog)
-      .getByRole("link", { name: "New conversation" })
+      .getByRole("link", { name: /Kiln move/ })
       .getAttribute("href"),
-  ).toBe("/start");
+  ).toBe("/channels/c-kiln");
+  // Each channel is its icon, stroked in its colour.
+  const disc = within(dialog)
+    .getByRole("link", { name: /Kiln move/ })
+    .querySelector("[data-channel-icon]");
+  expect(disc?.getAttribute("data-channel-icon")).toBe("home");
+  expect(disc?.getAttribute("data-channel-colour")).toBe("green");
+  // Archived is folded, and the archived channel is not a row until it opens.
+  expect(archivedToggle(dialog).getAttribute("aria-expanded")).toBe("false");
   expect(
-    within(dialog).getByRole("link", { name: "Settings" }).getAttribute("href"),
-  ).toBe("/settings");
+    within(dialog).queryByRole("link", { name: /Autumn show/ }),
+  ).toBeNull();
+  // Earlier conversations and New conversation went away.
+  expect(
+    within(dialog).queryByRole("button", { name: "Earlier conversations" }),
+  ).toBeNull();
+  expect(
+    within(dialog).queryByRole("link", { name: "New conversation" }),
+  ).toBeNull();
   expect(manageToggle(dialog).getAttribute("aria-expanded")).toBe("false");
   expect(within(dialog).queryByRole("link", { name: "Bots" })).toBeNull();
-  expect(within(dialog).queryByRole("link", { name: "Admin" })).toBeNull();
+});
+
+test("Everything's own conversation is never a channel row", async () => {
+  serving();
+  const view = draw(
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const dialog = await view.findByRole("dialog");
+  await within(dialog).findByRole("link", { name: /Kiln move/ });
+  expect(
+    within(dialog)
+      .getAllByRole("link")
+      .some((link) => link.getAttribute("href") === "/channels/c-everything"),
+  ).toBe(false);
+});
+
+test("Archived opens on a click, lists what was put away with Unarchive, and is remembered", async () => {
+  serving();
+  const posted: string[] = [];
+  const base = global.fetch;
+  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST") {
+      posted.push(url);
+      return Response.json({ channel: { ...oldShow, archivedAt: null } });
+    }
+    return base(input, init);
+  }) as typeof fetch;
+  const user = userEvent.setup({ document });
+  const first = draw(
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const dialog = await first.findByRole("dialog");
+  await user.click(archivedToggle(dialog));
+  expect(archivedToggle(dialog).getAttribute("aria-expanded")).toBe("true");
+  const shelf = within(dialog).getByRole("list", { name: "Archived channels" });
+  expect(
+    within(shelf)
+      .getByRole("link", { name: /Autumn show/ })
+      .getAttribute("href"),
+  ).toBe("/channels/c-show");
+  expect(window.localStorage.getItem(ARCHIVED_STORAGE_KEY)).toBe("open");
+  await user.click(
+    within(shelf).getByRole("button", { name: "Unarchive Autumn show" }),
+  );
+  await waitFor(() =>
+    expect(posted).toEqual(["/api/openduet/channels/c-show/unarchive"]),
+  );
+
+  cleanup();
+  const again = draw(
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
+    seedMenu("admin", true),
+  );
+  const reopened = await again.findByRole("dialog");
+  expect(archivedToggle(reopened).getAttribute("aria-expanded")).toBe("true");
+  await user.click(archivedToggle(reopened));
+  expect(window.localStorage.getItem(ARCHIVED_STORAGE_KEY)).toBe("closed");
+});
+
+test("with no channels yet the drawer is Everything and New channel, and no Archived", async () => {
+  serving();
+  const view = draw(
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
+    seedMenu("admin", true, []),
+  );
+  const dialog = await view.findByRole("dialog");
+  await within(dialog).findByRole("button", { name: "New channel" });
+  expect(menuRows(dialog)).toEqual([
+    `Everything${EVERYTHING_LINE}`,
+    "New channel",
+    "Manage",
+    "Settings",
+  ]);
+});
+
+test("New channel asks the shell to open the sheet", async () => {
+  serving();
+  let asked = 0;
+  const user = userEvent.setup({ document });
+  const view = draw(
+    <MenuSheet
+      onNewChannel={() => {
+        asked += 1;
+      }}
+      onOpenChange={() => {}}
+      open
+    />,
+    seedMenu("admin", true),
+  );
+  const dialog = await view.findByRole("dialog");
+  await user.click(
+    await within(dialog).findByRole("button", { name: "New channel" }),
+  );
+  expect(asked).toBe(1);
 });
 
 test("the menu has one heading level", async () => {
   serving();
   const view = draw(
-    <MenuSheet onOpenChange={() => {}} open />,
+    <MenuSheet onNewChannel={() => {}} onOpenChange={() => {}} open />,
     seedMenu("admin", true),
   );
   const dialog = await view.findByRole("dialog");
+  await within(dialog).findByRole("link", { name: /Kiln move/ });
   const headings = within(dialog).getAllByRole("heading");
   expect(headings.map((heading) => heading.tagName)).toEqual([
     "H2",
@@ -342,7 +571,7 @@ test("the menu has one heading level", async () => {
   ]);
   expect(headings.map((heading) => heading.textContent)).toEqual([
     expect.any(String),
-    "Conversations",
+    "Archived",
     "Manage",
   ]);
 });
@@ -406,7 +635,7 @@ test("a member sees no Admin under Manage, and a single-person install has no Si
   expect(within(dialog).queryByRole("button", { name: "Sign out" })).toBeNull();
 });
 
-test("Chat is marked current on Chat and on no other page", async () => {
+test("Everything is marked current on Chat and on no other page", async () => {
   serving();
   const onChat = draw(
     <MenuSheet onOpenChange={() => {}} open />,
@@ -415,7 +644,7 @@ test("Chat is marked current on Chat and on no other page", async () => {
   const dialog = await onChat.findByRole("dialog");
   expect(
     within(dialog).getByRole("link", { current: "page" }).textContent,
-  ).toBe("Chat");
+  ).toBe(`Everything${EVERYTHING_LINE}`);
 
   cleanup();
   const onInbox = draw(
@@ -426,7 +655,7 @@ test("Chat is marked current on Chat and on no other page", async () => {
   const elsewhere = await onInbox.findByRole("dialog");
   expect(
     within(elsewhere)
-      .getByRole("link", { name: "Chat" })
+      .getByRole("link", { name: /Everything/ })
       .getAttribute("aria-current"),
   ).toBeNull();
 });

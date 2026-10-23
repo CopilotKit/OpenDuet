@@ -495,6 +495,69 @@ describe("the adapter against the fake", () => {
     expect(all.resultSizeEstimate).toBe(seeds.length);
   });
 
+  test("delivered mail arrives dated now, and an after: search finds only what is new", async () => {
+    await fetch(`${fake.url}/__fake/reset`, { method: "POST" });
+    const search = async (query: string) =>
+      JSON.parse(
+        (
+          await callTool(connection, "gmail_search_messages", {
+            query,
+            maxResults: 50,
+          })
+        ).text,
+      );
+    // The seeded mail is at least five minutes old, so nothing is newer than a minute ago.
+    const since = Math.floor(Date.now() / 1000) - 60;
+    expect((await search(`in:inbox after:${since}`)).resultSizeEstimate).toBe(
+      0,
+    );
+
+    const deliver = (body: unknown) =>
+      fetch(`${fake.url}/__fake/deliver`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    expect((await deliver({ from: "Priya <priya@example.com>" })).status).toBe(
+      400,
+    );
+    const delivered = await deliver({
+      from: "Priya Natarajan <priya@hearthandco.example>",
+      subject: "My order arrived broken",
+      body: "Two of the six mugs arrived in pieces. Can you send replacements today? We open on Saturday.",
+    });
+    expect(delivered.status).toBe(201);
+    const { id } = (await delivered.json()) as { id: string };
+
+    const fresh = await search(`in:inbox after:${since}`);
+    expect(fresh.messages.map((message: { id: string }) => message.id)).toEqual(
+      [id],
+    );
+    expect(fresh.messages[0]).toMatchObject({
+      subject: "My order arrived broken",
+      from: "Priya Natarajan <priya@hearthandco.example>",
+      to: ["maya@marlowceramics.com"],
+    });
+    expect(fresh.messages[0].labels).toEqual(
+      expect.arrayContaining(["INBOX", "UNREAD"]),
+    );
+    // before: is the other side of the same line, and a date counts from the start of that day.
+    expect(
+      (await search(`before:${since}`)).messages.map(
+        (message: { id: string }) => message.id,
+      ),
+    ).not.toContain(id);
+    expect((await search("after:2001/01/01")).resultSizeEstimate).toBe(
+      seeds.length + 1,
+    );
+
+    // A reset takes delivered mail away again.
+    await fetch(`${fake.url}/__fake/reset`, { method: "POST" });
+    expect((await search(`in:inbox after:${since}`)).resultSizeEstimate).toBe(
+      0,
+    );
+  });
+
   test("the calendar holds the studio's day, in order", async () => {
     // The studio is at UTC-7, so its day is 07:00 UTC to 07:00 UTC the next day.
     const local = new Date(Date.now() - 7 * 3_600_000);

@@ -22,13 +22,22 @@
  *
  * WHAT IT IS NOT. A faithful Gmail. Search understands the operators a person or a model commonly
  * writes (`in:`, `label:`, `category:`, `is:`, `from:`, `to:`, `subject:`, `newer_than:`,
- * `older_than:`, and bare words) and ignores the rest. OAuth consents automatically. It is written
- * independently of the adapter on purpose, from Google's documented shapes, so a misreading in the
- * adapter is not mirrored here and cancelled out.
+ * `older_than:`, `after:`, `before:`, and bare words) and ignores the rest. `after:` and `before:`
+ * take Unix seconds or a `YYYY/MM/DD` date in the studio's day, as Gmail does, which is how a
+ * check-in asks for only what is new. OAuth consents automatically. It is written independently of
+ * the adapter on purpose, from Google's documented shapes, so a misreading in the adapter is not
+ * mirrored here and cancelled out.
  *
- * WHAT A TEST OR A DEMO CAN ASK IT. `GET /__fake/sent` lists what was sent, decoded. `POST
- * /__fake/reset` puts the mailbox and calendar back as they started, dated from now, and forgets
- * what was sent. Issued tokens survive a reset, so a connected deployment stays connected.
+ * WHAT A TEST OR A DEMO CAN ASK IT. Unauthenticated, test-only, and never anything Google has:
+ *
+ * - `GET /__fake/sent` lists what was sent, decoded.
+ * - `POST /__fake/reset` puts the mailbox and calendar back as they started, dated from now, and
+ *   forgets what was sent. Issued tokens survive a reset, so a connected deployment stays connected.
+ * - `POST /__fake/deliver` with JSON `{ "from": "Ana Ruiz <ana@example.com>", "subject": "…",
+ *   "body": "…" }` puts one new message in the inbox, dated now, so a check-in has something new to
+ *   find. `to`, `cc` and `labels` are optional; it is to Maya, unread, in the inbox. It answers the
+ *   new message's `id` and `threadId`. A reset takes delivered mail away again. Use invented
+ *   people and addresses only.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -523,6 +532,20 @@ function matchesQuery(
           field("message-id").replace(/^<|>$/g, "") ===
           value.replace(/^<|>$/g, "");
         break;
+      // Gmail's own: Unix seconds, or a date taken as the start of that day where the mailbox is.
+      case "after":
+      case "before": {
+        const instant = instantOf(value);
+        if (instant === null) {
+          result = true;
+          break;
+        }
+        result =
+          operator === "after"
+            ? message.internalDate > instant
+            : message.internalDate < instant;
+        break;
+      }
       case "newer_than":
       case "older_than": {
         const match = /^(\d+)([dhmy])$/.exec(value);
@@ -555,6 +578,57 @@ function matchesQuery(
     }
     return negated ? !result : result;
   });
+}
+
+/** `after:` and `before:`'s value as an instant: Unix seconds, or `YYYY/MM/DD` in the studio's day. */
+function instantOf(value: string): number | null {
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const date = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(value);
+  if (!date) return null;
+  return (
+    Date.UTC(Number(date[1]), Number(date[2]) - 1, Number(date[3])) -
+    STUDIO_OFFSET_MINUTES * 60_000
+  );
+}
+
+/** What `POST /__fake/deliver` takes: one new message for Maya's inbox. */
+type Delivery = {
+  from: string;
+  subject: string;
+  body: string;
+  to?: string[];
+  cc?: string[];
+  labels?: string[];
+};
+
+/** The delivery, or the sentence saying what is missing. */
+function readDelivery(value: unknown): Delivery | string {
+  const record =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const text = (key: string) =>
+    typeof record[key] === "string" && (record[key] as string).trim()
+      ? (record[key] as string)
+      : null;
+  const list = (key: string) =>
+    Array.isArray(record[key]) &&
+    (record[key] as unknown[]).every((item) => typeof item === "string")
+      ? (record[key] as string[])
+      : undefined;
+  const from = text("from");
+  const subject = text("subject");
+  const body = text("body");
+  if (!from || !subject || !body)
+    return "Send JSON with from, subject and body, each a non-empty string.";
+  return {
+    from,
+    subject,
+    body,
+    ...(list("to") ? { to: list("to") } : {}),
+    ...(list("cc") ? { cc: list("cc") } : {}),
+    ...(list("labels") ? { labels: list("labels") } : {}),
+  };
 }
 
 /** An access token's grant: what it may do, until when, and the refresh token it was minted from. */
@@ -636,6 +710,7 @@ export function startFakeGoogle(
   let messages: StoredMessage[] = [];
   let events: FakeEvent[] = [];
   let sent: SentMessage[] = [];
+  let delivered = 0;
   const reset = () => {
     messages = seedMailbox(mailbox, now());
     events = seedCalendar(now());
@@ -824,6 +899,40 @@ export function startFakeGoogle(
     return Response.json({ id, threadId, labelIds: ["SENT"] });
   };
 
+  /** One new message in the inbox, dated now, as though it had just arrived. */
+  const deliver = (delivery: Delivery) => {
+    const instant = now();
+    delivered += 1;
+    const digest = hex(
+      `fake-google:delivered:${instant}:${delivered}:${delivery.subject}`,
+    );
+    const id = digest.slice(0, 16);
+    const cc = delivery.cc ?? [];
+    messages.unshift({
+      id,
+      threadId: id,
+      labelIds: delivery.labels ?? ["INBOX", "UNREAD", "CATEGORY_PERSONAL"],
+      internalDate: instant,
+      headers: [
+        { name: "From", value: delivery.from },
+        { name: "To", value: (delivery.to ?? [FAKE_ACCOUNT]).join(", ") },
+        ...(cc.length > 0 ? [{ name: "Cc", value: cc.join(", ") }] : []),
+        { name: "Subject", value: delivery.subject },
+        { name: "Date", value: mailDate(instant, STUDIO_OFFSET_MINUTES) },
+        {
+          name: "Message-ID",
+          value: `<${id}.${digest.slice(16, 24)}@${domainOf(delivery.from)}>`,
+        },
+        { name: "MIME-Version", value: "1.0" },
+        { name: "Content-Type", value: 'text/plain; charset="UTF-8"' },
+      ],
+      mimeType: "text/plain",
+      content: delivery.body,
+      text: delivery.body,
+    });
+    return { id, threadId: id };
+  };
+
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -982,6 +1091,13 @@ export function startFakeGoogle(
     if (method === "POST" && path === "/__fake/reset") {
       reset();
       return Response.json({ ok: true });
+    }
+    if (method === "POST" && path === "/__fake/deliver") {
+      const delivery = readDelivery(await request.json().catch(() => null));
+      if (typeof delivery === "string") {
+        return googleError(400, delivery, "invalidArgument");
+      }
+      return Response.json(deliver(delivery), { status: 201 });
     }
     if (method === "GET" && path === "/") {
       return page(
@@ -1168,6 +1284,7 @@ if (import.meta.main) {
       `Fake Google on ${fake.url}, signed in as ${FAKE_ACCOUNT}.`,
       `Point OpenBot at it with OPENDUET_FAKE_GOOGLE_URL=${fake.url} in openbot/.env.`,
       `See what was sent: curl ${fake.url}/__fake/sent`,
+      `Deliver new mail: curl -X POST ${fake.url}/__fake/deliver -H 'content-type: application/json' -d '{"from":"…","subject":"…","body":"…"}'`,
       `Start over: curl -X POST ${fake.url}/__fake/reset`,
     ].join("\n"),
   );

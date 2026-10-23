@@ -138,6 +138,20 @@
   --duet-dur-swap: 200ms;
   --duet-dur-enter: 250ms;
   --duet-dur-sheet: 350ms;
+
+  /*
+   * A channel's colour: its icon in the drawer and the sheet, and its tag on a task. Nine, by the
+   * names shared/channel-look.ts stores. Each at least 4:1 on the light surface, so an icon passes 3:1.
+   */
+  --duet-ch-berry: #9e3b66;
+  --duet-ch-blush: #b0606f;
+  --duet-ch-peach: #ad6550;
+  --duet-ch-amber: #a8650f;
+  --duet-ch-sage: #5f7a4c;
+  --duet-ch-green: #3f7d61;
+  --duet-ch-sky: #4f7f99;
+  --duet-ch-blue: #3f6fa8;
+  --duet-ch-lavender: #6f63a3;
 }
 
 .dark {
@@ -212,6 +226,15 @@
   --duet-veil: rgb(17 17 19 / 72%);
   --duet-glass-edge: inset 0 0.5px 0 rgb(255 255 255 / 8%);
   --duet-shadow-glass: var(--duet-glass-edge), var(--duet-shadow-float);
+  --duet-ch-berry: #d0709a;
+  --duet-ch-blush: #e5c0c5;
+  --duet-ch-peach: #e5bcae;
+  --duet-ch-amber: #e4a04c;
+  --duet-ch-sage: #c6d1ba;
+  --duet-ch-green: #6fb093;
+  --duet-ch-sky: #bdcfda;
+  --duet-ch-blue: #7fa6d6;
+  --duet-ch-lavender: #c1bdd3;
 }
 
 * {
@@ -507,6 +530,55 @@ body {
   .duet-typing-dot {
     animation: none;
     opacity: 0.6;
+  }
+}
+
+/* A task checked off on Tasks: the check pops in a little past full size and settles. */
+.duet-check-land {
+  display: block;
+  animation: duet-check-land 320ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes duet-check-land {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duet-check-land {
+    animation: none;
+  }
+}
+
+/*
+ * A thumbnail still being made on Make: a soft band of the card's own colour sweeps across the
+ * tile. Only `background-position` moves. Held still with reduced motion.
+ */
+.duet-making {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, var(--duet-card) 70%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  animation: tool-line-sweep 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duet-making {
+    animation: none;
+    background-image: none;
   }
 }
 

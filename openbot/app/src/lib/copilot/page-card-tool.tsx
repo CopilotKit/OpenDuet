@@ -40,8 +40,8 @@ export function readPage(result: unknown): PageSummary | null {
 
 /**
  * The card, opening the page over the conversation it is drawn in. The address bar says
- * `/pages/<id>` while the conversation stays underneath, and closing goes back to it. Outside a
- * conversation it opens the page over the Pages list instead.
+ * `/make/<id>` while the conversation stays underneath, and closing goes back to it. Outside a
+ * conversation it opens the page over the Make grid instead.
  */
 export function ConversationPageCard({ page }: { page: PageSummary }) {
   const conversation = useConversationSend();
@@ -52,14 +52,14 @@ export function ConversationPageCard({ page }: { page: PageSummary }) {
         !router ? (
           <a
             className={className}
-            href={`/pages/${encodeURIComponent(page.id)}`}
+            href={`/make/${encodeURIComponent(page.id)}`}
           >
             {children}
           </a>
         ) : conversation ? (
           <Link
             className={className}
-            mask={{ to: "/pages/$pageId", params: { pageId: page.id } }}
+            mask={{ to: "/make/$pageId", params: { pageId: page.id } }}
             search={(previous: Record<string, unknown>) => ({
               ...previous,
               page: page.id,
@@ -72,7 +72,7 @@ export function ConversationPageCard({ page }: { page: PageSummary }) {
           <Link
             className={className}
             params={{ pageId: page.id }}
-            to="/pages/$pageId"
+            to="/make/$pageId"
           >
             {children}
           </Link>

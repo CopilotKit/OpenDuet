@@ -52,6 +52,19 @@ test("a group with the Bot in it and a deleted Bot's channel are not the convers
   expect(found?.id).toBe("this one");
 });
 
+test("a task's own conversation is never Chat's, however recently it was used", () => {
+  const found = ongoingChannel(
+    [
+      channel("task", ["openduet"], "2026-10-22T10:00:00Z", {
+        taskId: "task-1",
+      }),
+      channel("chat", ["openduet"], "2026-10-20T10:00:00Z", { taskId: null }),
+    ],
+    "openduet",
+  );
+  expect(found?.id).toBe("chat");
+});
+
 test("a conversation nobody has spoken in yet counts from when it was made", () => {
   const found = ongoingChannel(
     [
@@ -73,4 +86,17 @@ test("the tabs are about the tenant's own Bot, or the default Bot without one", 
   expect(primaryBot([bot("helper"), bot(own)])?.id).toBe(own);
   expect(primaryBot([bot("helper"), bot("another")])?.id).toBe("helper");
   expect(primaryBot(undefined)).toBeUndefined();
+});
+
+test("one of the person's channels is never Chat's, however recently it was used", () => {
+  const found = ongoingChannel(
+    [
+      channel("kiln move", ["openduet"], "2026-10-22T10:00:00Z", {
+        openduetChannel: true,
+      }),
+      channel("chat", ["openduet"], "2026-10-20T10:00:00Z"),
+    ],
+    "openduet",
+  );
+  expect(found?.id).toBe("chat");
 });

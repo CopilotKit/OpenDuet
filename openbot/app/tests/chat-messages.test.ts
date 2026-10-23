@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { frameChannelHello } from "@openbot/shared/channel-hello";
 import type { Message, ToolCall } from "@ag-ui/core";
 import {
   repliesLast,
@@ -35,6 +36,25 @@ const DRAWING: Message = {
 };
 
 describe("toVisibleChatItems", () => {
+  test("draws nothing for a new channel's hello: the Bot speaks first", () => {
+    const hello: Message = {
+      id: "hello",
+      role: "user",
+      content: frameChannelHello({
+        name: "Kiln move",
+        purpose: "Moving the kiln by March.",
+      }),
+    };
+    expect(toVisibleChatItems([hello, PROSE])).toEqual([
+      {
+        kind: "text",
+        id: "assistant-1",
+        role: "assistant",
+        text: "Here is how those issues group.",
+      },
+    ]);
+  });
+
   test("keeps an activity, carrying the message whole", () => {
     expect(toVisibleChatItems([DRAWING])).toEqual([
       { kind: "activity", id: "activity-1", message: DRAWING },
@@ -1123,6 +1143,52 @@ describe("repliesLast", () => {
         { id: "u2", role: "user", content: "Thanks." },
       ]),
     ).toEqual(["u1", "a3", "call-page", "call-chips", "u2"]);
+  });
+
+  test("draws a check-in's offered tasks under the Bot's words, in the order offered", () => {
+    const offer = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "offer_task", arguments: "{}" },
+    });
+    expect(
+      ids([
+        { id: "check-in", role: "user", content: "(a framed check-in)" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [offer("call-1"), offer("call-2")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: "{}" },
+        { id: "t2", role: "tool", toolCallId: "call-2", content: "{}" },
+        { id: "a2", role: "assistant", content: "Two things came in." },
+        { id: "u2", role: "user", content: "Thanks." },
+      ]),
+    ).toEqual(["check-in", "a2", "call-1", "call-2", "u2"]);
+  });
+
+  test("draws the tasks the Bot started under its On it, in the order started", () => {
+    const start = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "start_task", arguments: "{}" },
+    });
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Reply to Rosa and prep Hearth." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [start("call-1"), start("call-2")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: "{}" },
+        { id: "t2", role: "tool", toolCallId: "call-2", content: "{}" },
+        { id: "a2", role: "assistant", content: "On it." },
+        { id: "u2", role: "user", content: "Thanks." },
+      ]),
+    ).toEqual(["u1", "a2", "call-1", "call-2", "u2"]);
   });
 
   test("leaves out a call the server refused or the runtime rejected, and one not answered yet: none draws chips", () => {

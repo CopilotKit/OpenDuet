@@ -215,16 +215,13 @@ import {
   REFUSAL_MARKER,
   vendorAnswer,
 } from "./plugins/tools";
-import {
-  createProactiveEngine,
-  endedOnReplies,
-  startedTaskTestFailure,
-} from "./proactive/engine";
+import { createProactiveEngine } from "./proactive/engine";
 import {
   createPrivateShareCheck,
   PRIVATE_SHARE_TOOL_REF,
 } from "./proactive/private-share";
 import {
+  allowedForRun,
   createReadOnlyClassifier,
   guardProactiveCallback,
   restrictCoordinationForRun,
@@ -256,13 +253,25 @@ import { createRoutineRunner } from "./routines/runner";
 import { createRoutineStore } from "./routines/store";
 import { createIntentRouter } from "./routing/classify";
 import { createModelCompleter } from "./routing/model";
+import {
+  createChannelHello,
+  createDuetChannelStore,
+} from "./openduet/channels";
 import { createPageStore } from "./openduet/pages";
+import { withRunChannels } from "./openduet/run-channel";
 import {
   createSetupSources,
   modelKeyOf,
   primaryBotIdOf,
 } from "./openduet/setup";
-import { createOpenDuetTools } from "./openduet/wiring";
+import {
+  createTaskReportReader,
+  intelligenceHistory,
+} from "./openduet/task-report";
+import { createTaskStore } from "./openduet/task-store";
+import { createTaskThreads, createTaskTurn } from "./openduet/task-threads";
+import type { TaskStarter } from "./openduet/tasks";
+import { createOpenDuetTools, createTaskIntake } from "./openduet/wiring";
 import { reportIntelligenceEntitlement } from "./intelligence-entitlement-check";
 import { createSelfHostBanner } from "./self-host-banner";
 import { createTeamBots } from "./team-bots/team-bots";
@@ -1346,9 +1355,12 @@ const memoryDefaults = createMemoryDefaults({
   channelBots: async (ownerUserId, channelId) =>
     (await channelStore.get(await actorFor(ownerUserId), channelId))
       ?.agentIds ?? null,
-  // The same rule research delivery uses, read when a person speaks (long after it is defined).
+  // The same rule research delivery uses, read when a person speaks (long after it is defined). Never a
+  // task's own conversation: research writes to the person in Chat, and a task's turn speaks for them.
   canDeliver: async (ownerUserId, channelId, agentId) =>
-    (await deliveryScopeFor(ownerUserId, channelId, agentId)) !== null,
+    (await deliveryScopeFor(ownerUserId, channelId, agentId)) !== null &&
+    !(await openDuetTasks.isTaskConversation(ownerUserId, channelId)) &&
+    !(await openDuetChannels.isChannel(ownerUserId, channelId)),
   mintThreadId: () => threadIdentity.mint(),
   // Read when a Bot turn starts, long after `teamBots` below is defined.
   publishedByAnother: (ownerUserId, agentId) =>
@@ -1393,17 +1405,37 @@ const wakeUpStore = createWakeUpStore(database, { auditStore: bootAuditStore });
 
 /**
  * OpenDuet's own tools: the morning brief, read through the plugin store as the person, reply chips,
- * and the pages it makes. See openduet/wiring.ts.
+ * the pages it makes and the tasks it starts. See openduet/wiring.ts.
  */
 const openDuetPages = createPageStore(database);
+const openDuetTasks = createTaskStore(database);
+// Read when a task starts, long after the engine below is made.
+const openDuetStartTask: TaskStarter = ({ ownerUserId, agentId, task }) =>
+  proactiveEngine.startAsked(ownerUserId, agentId, task);
+const openDuetDirectChannel = async (ownerUserId: string, agentId: string) =>
+  channelStore.direct(await actorFor(ownerUserId), agentId);
 const openDuetTools = createOpenDuetTools({
   database,
   pages: openDuetPages,
+  startTask: openDuetStartTask,
   callTool: (input) => pluginStore.callTool(input),
   complete: chooseSkills,
   model: runtimeModel.defaultModel,
-  directChannel: async (ownerUserId, agentId) =>
-    channelStore.direct(await actorFor(ownerUserId), agentId),
+  directChannel: openDuetDirectChannel,
+});
+/*
+ * A task's report, read from its conversation as the runtime holds it (openduet/task-report.ts).
+ * Built after `routineIntelligence`, the client every headless turn reads history through.
+ */
+const openDuetReport = createTaskReportReader({
+  database,
+  history: intelligenceHistory(routineIntelligence),
+});
+// The + on Tasks: the same start and the same Up next as the tools above.
+const openDuetIntake = createTaskIntake({
+  database,
+  directChannel: openDuetDirectChannel,
+  startTask: openDuetStartTask,
 });
 
 const loadToolsForActor =
@@ -1749,7 +1781,7 @@ const routineRunner = createRoutineRunner({
  * invisible: it runs, and quietly holds different tools or a different role from the one the person
  * is talking to.
  */
-const actorAgentResolver = createActorAgentResolver({
+const baseAgentResolver = createActorAgentResolver({
   loadAgents: loadAgentsForActor,
   model: runtimeModel,
   resolveModelApiKey: resolveRuntimeModelApiKey,
@@ -1779,6 +1811,10 @@ const actorAgentResolver = createActorAgentResolver({
   },
   loadPersonalMemoryForActor,
 });
+// Every Bot a person runs learns which OpenDuet channel its run is in. See openduet/run-channel.ts.
+const actorAgentResolver = withRunChannels(baseAgentResolver, (owner, thread) =>
+  openDuetChannels.ofThread(owner, thread),
+);
 
 const copilotRuntime = mountCopilotRuntime(
   config,
@@ -1920,6 +1956,16 @@ const approvalContinuationRunner = createTurnRunner({
   learningContainerForThread: (input) =>
     copilotRuntime.learning?.containerForThread(input) ??
     Promise.resolve(undefined),
+});
+// The drawer's channels, and the Bot's hello in a new one. See openduet/channels.ts.
+const openDuetChannels = createDuetChannelStore({
+  database,
+  channels: channelStore,
+  hello: createChannelHello({
+    channels: channelStore,
+    actorFor,
+    runTurn: approvalContinuationRunner,
+  }),
 });
 /**
  * Conversations with several Bots. Each Bot turn is an ordinary headless AG-UI turn into that Bot's
@@ -2101,7 +2147,6 @@ deliveryNotifications = (scope, input) => deliveryRouter.notify(scope, input);
  * work queue as routines. Suggestions go to the web inbox and the owner's delivery routing.
  */
 const proactiveStore = createProactiveStore(database);
-const failStartedTaskForTesting = startedTaskTestFailure(process.env);
 conversationSaid = (ownerUserId, channelId, activity) => {
   void proactiveStore
     .noteConversation(ownerUserId, channelId, activity)
@@ -2115,40 +2160,57 @@ conversationSaid = (ownerUserId, channelId, activity) => {
       ),
     );
 };
+/*
+ * One runner for research and for the check-in it writes: only the engine's own tools and refusals,
+ * no computer and no components. A check-in is NOT run through `approvalContinuationRunner` as a
+ * started task is, because that runner offers the Bot's computer, and a check-in only offers cards.
+ */
+const proactiveRunTurn = createTurnRunner({
+  admission: serverTurnAdmission,
+  intelligence: routineIntelligence,
+  runner: routineAgentRunner,
+  buildAgentFor,
+  toolsForTurn: (input) => proactiveEngine.toolsForTurn(input),
+  turnTimeoutMs: 3 * 60_000,
+  learningContainerForThread: (input) =>
+    copilotRuntime.learning?.containerForThread(input) ??
+    Promise.resolve(undefined),
+});
 const proactiveEngine = createProactiveEngine({
   store: proactiveStore,
   memory: personalMemoryStore,
   queue: createWorkQueue(database),
   owner: workOwner("proactive"),
-  runTurn: createTurnRunner({
-    admission: serverTurnAdmission,
-    intelligence: routineIntelligence,
-    runner: routineAgentRunner,
-    buildAgentFor,
-    // Only the run's own two tools and refusals: no computer, no components.
-    toolsForTurn: (input) => proactiveEngine.toolsForTurn(input),
-    turnTimeoutMs: 3 * 60_000,
-    learningContainerForThread: (input) =>
-      copilotRuntime.learning?.containerForThread(input) ??
-      Promise.resolve(undefined),
-  }),
+  runTurn: proactiveRunTurn,
   resolveScope: deliveryScopeFor,
   notify: (scope, input) => deliveryNotifications(scope, input),
-  startTask: async (scope, input) => {
+  // Started work runs as a task, in a conversation of its own. See openduet/task-threads.ts.
+  tasks: createTaskThreads({
+    store: openDuetTasks,
+    channels: channelStore,
+    actorFor,
+    scopeFor: deliveryScopeFor,
+  }),
+  startTask: createTaskTurn({
+    channels: channelStore,
+    actorFor,
+    runTurn: approvalContinuationRunner,
+  }),
+  /*
+   * The Bot writing first, in the setting's conversation, which is Chat. Like a task's turn, except
+   * nobody spoke: no line is recorded for the person, the message is the framed check-in, and the initiator
+   * is the check-in's, so the turn holds `offer_task` and nothing else. The reply is recorded as the
+   * Bot's, which is what tells an open Chat to read the thread again.
+   */
+  checkIn: async (scope, input) => {
     const actor = await actorFor(scope.ownerUserId);
-    await channelStore.recordActivity(
-      actor,
-      scope.channelId,
-      { text: input.text, agentId: null, at: new Date() },
-      { id: `${input.runId}:input` },
-    );
-    failStartedTaskForTesting(input);
-    const result = await approvalContinuationRunner({
+    const result = await proactiveRunTurn({
       ...scope,
       routineId: input.runId,
       instruction: input.text,
       userMessage: { id: input.runId, role: "user", content: input.text },
-      initiator: PERSON_INITIATOR,
+      initiator: input.initiator,
+      runId: input.runId,
       signal: input.signal,
     });
     if (result.replyText)
@@ -2158,21 +2220,12 @@ const proactiveEngine = createProactiveEngine({
         { text: result.replyText, agentId: scope.agentId, at: new Date() },
         { id: `${input.runId}:reply` },
       );
-    // Chips are a tool call, not words, so the thread says whether the turn ended offering them.
-    const offeredReplies = await routineIntelligence
-      .getThreadMessages({
-        threadId: scope.threadId,
-        userId: scope.ownerUserId,
-      })
-      .then(({ messages }) => endedOnReplies(messages, input.runId))
-      .catch(() => false);
-    return { replyText: result.replyText, offeredReplies };
   },
   catalogue: pluginStore,
-  deniedToolNames: async (ownerUserId, agentId) => {
+  deniedToolNames: async (ownerUserId, agentId, initiator) => {
     const [tools, allowed] = await Promise.all([
       loadToolsForActor(ownerUserId)(agentId),
-      proactiveReadOnlyRefs(),
+      allowedForRun(initiator, proactiveReadOnlyRefs),
     ]);
     return tools
       .filter((tool) => !allowed.has(tool.ref) && !allowed.has(tool.name))
@@ -2634,6 +2687,7 @@ const app = createApp(
     proactive: { store: proactiveStore, engine: proactiveEngine },
     openduet: {
       pages: openDuetPages,
+      tasks: openDuetTasks,
       // The checklist onboarding ends on. Facts and verdicts about this configuration, never values.
       setup: createSetupSources({
         productName: tenantPackage.productName,
@@ -2661,6 +2715,9 @@ const app = createApp(
         },
         chat: Boolean(deliveryProviders.slack),
       }),
+      intake: openDuetIntake,
+      report: openDuetReport,
+      channels: openDuetChannels,
     },
     responsibilities: {
       store: responsibilityStore,

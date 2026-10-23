@@ -7,13 +7,12 @@ import type { ActivityItem, ActivityKind } from "@/lib/bot-lifecycle/queries";
 import { cn } from "@/lib/utils";
 
 /*
- * The rows Tasks draws for the product's own Bot's work: Working, Coming up and Resolved, read from
- * the ledgers OpenBot already keeps. This was the Activity tab; its "Handled for you" list is
- * folded under Resolved at the foot of Tasks now, without the approval receipts it had, and the tab
- * is Pages.
+ * The rows Tasks draws for the product's own Bot's work: what is under Working and Resolved on
+ * Active, and Coming up on Up next, read from the ledgers OpenBot already keeps. This was the
+ * Activity tab; its "Handled for you" list is part of Resolved now, and the tab is Pages.
  */
 
-/** One line of Working, Coming up or Resolved on Tasks, from whichever ledger it came from. */
+/** One line of Working, Resolved or Coming up on Tasks, from whichever ledger it came from. */
 export type ActivityRow = {
   id: string;
   icon: DuetIconName;
@@ -22,6 +21,8 @@ export type ActivityRow = {
   detail: string;
   at: string;
   channelId: string | null;
+  /** A task's row opens the task, over Tasks, rather than a conversation. */
+  taskId?: string;
   control?: ReactNode;
 };
 
@@ -225,16 +226,26 @@ export function ActivityLine({
       trailing={trailing}
     />
   );
-  if (!row.channelId) return line(row.control ?? time);
-  const link = (
+  const linkClass =
+    "block min-w-0 flex-1 rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25";
+  const link = row.taskId ? (
     <Link
-      className="block min-w-0 flex-1 rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
+      className={linkClass}
+      params={{ taskId: row.taskId }}
+      to="/tasks/$taskId"
+    >
+      {line(row.control ? undefined : time)}
+    </Link>
+  ) : row.channelId ? (
+    <Link
+      className={linkClass}
       params={{ channelId: row.channelId }}
       to="/channel/$channelId"
     >
       {line(row.control ? undefined : time)}
     </Link>
-  );
+  ) : null;
+  if (!link) return line(row.control ?? time);
   if (!row.control) return link;
   // The control sits beside the link rather than inside it, so a button is never nested in a link
   // and the rest of the row still opens the conversation.

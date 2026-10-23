@@ -13,6 +13,7 @@ import {
   createProactiveEngine,
   endedOnReplies,
   startedTaskTestFailure,
+  type TaskThreads,
 } from "../src/proactive/engine";
 import { createPrivateShareCheck } from "../src/proactive/private-share";
 import {
@@ -28,6 +29,17 @@ import { createTurnRunner, type RunnerLike } from "@openbot/toolkit/run-turn";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { WorkQueue } from "../src/work/queue";
 import { serverTurnAdmission } from "../src/agents/turn-admission";
+
+/** These engines never start a task; one that tried would fail the test loudly. */
+const NO_TASKS: TaskThreads = {
+  open: async () => {
+    throw new Error("This test never opens a task.");
+  },
+  scope: async () => null,
+  failedTurn: async () => {
+    throw new Error("This test never retries a task.");
+  },
+};
 
 const catalogue = (effects: Record<string, "read" | "write">) => ({
   listServers: async () => [
@@ -251,6 +263,8 @@ describe("proactive run", () => {
         statuses.push(status);
       },
       readsFor: async () => [],
+      suggestions: async () => [],
+      hiddenSince: async () => [],
       countSuggestions: async () => suggestions.length,
       addSuggestion: async (input: Record<string, unknown>) => {
         const row = {
@@ -329,6 +343,7 @@ describe("proactive run", () => {
       notify: async (_scope, input) => {
         notified.push(input.text);
       },
+      tasks: NO_TASKS,
       startTask: async () => {
         writes.push("task");
         return undefined;
@@ -393,6 +408,8 @@ describe("proactive run", () => {
         byId: async () => ({ ...setting, enabled: true }),
         recordRun: async () => undefined,
         readsFor: async () => [{ ref: "linear/list_issues", at: new Date(0) }],
+        suggestions: async () => [],
+        hiddenSince: async () => [],
         undelivered: async () => [],
       } as unknown as ProactiveStore,
       memory: {
@@ -442,6 +459,7 @@ describe("proactive run", () => {
         threadId: "t",
       }),
       notify: async () => undefined,
+      tasks: NO_TASKS,
       startTask: async () => undefined,
       catalogue: {
         listServers: async () => [
@@ -585,13 +603,9 @@ describe("private information sharing check", () => {
   });
 });
 
-describe("a started suggestion's turn", () => {
-  /** An engine with one started suggestion queued, whose turn does what `startTask` does. */
-  function withTask(
-    startTask: () => Promise<
-      { replyText?: string; offeredReplies?: boolean } | undefined
-    >,
-  ) {
+describe("a started task's turn", () => {
+  /** An engine with one task's turn queued, whose turn does what `startTask` does. */
+  function withTask(startTask: () => Promise<void>) {
     const calls: { name: string; args: unknown[] }[] = [];
     const record =
       (name: string, answer: unknown = undefined) =>
@@ -599,41 +613,24 @@ describe("a started suggestion's turn", () => {
         calls.push({ name, args });
         return answer;
       };
-    const suggestion = {
-      id: "s1",
-      ownerUserId: "owner",
-      agentId: "bot",
-      settingId: "set",
-      title: "Reply to Rosa",
-      detail: "She asked about the glaze.",
-      sourceLink: null,
-      status: "started",
-    };
     const store = {
       claimDue: async () => [],
-      suggestion: async () => suggestion,
-      get: async () => ({ id: "set", channelId: "chat" }),
-      recordTaskOutcome: record("recordTaskOutcome"),
-      giveUpTask: record("giveUpTask"),
-      resetTask: record("resetTask", "missing"),
     } as unknown as ProactiveStore;
     let queued = [
       {
         kind: "proactive.task",
-        key: "s1",
-        payload: { ownerUserId: "owner", suggestionId: "s1" },
+        key: "task:t1",
+        payload: {
+          ownerUserId: "owner",
+          taskId: "t1",
+          text: "Reply to Rosa",
+          runs: 2,
+        },
       },
     ];
     const queue = {
       offer: record("offer", "queued"),
-      claim: async ({
-        kind,
-        maxAttempts,
-      }: {
-        kind: string;
-        maxAttempts: number;
-      }) => {
-        calls.push({ name: "claim", args: [kind, maxAttempts] });
+      claim: async ({ kind }: { kind: string }) => {
         const items = queued.filter((item) => item.kind === kind);
         queued = queued.filter((item) => item.kind !== kind);
         return items.map((item) => ({ ...item, attempts: 1 }));
@@ -655,46 +652,28 @@ describe("a started suggestion's turn", () => {
       queue,
       owner: "replica",
       runTurn: (async () => ({ replyText: "" })) as never,
-      resolveScope: async (ownerUserId, channelId, agentId) => ({
-        ownerUserId,
-        channelId,
-        agentId,
-        threadId: "chat-thread",
-      }),
+      resolveScope: async () => null,
       notify: async () => undefined,
+      tasks: {
+        ...NO_TASKS,
+        scope: async (ownerUserId) => ({
+          ownerUserId,
+          channelId: "task-channel",
+          agentId: "bot",
+          threadId: "task-thread",
+        }),
+      },
       startTask,
       catalogue: { listServers: async () => [] },
       mintThreadId: () => "t",
+      taskRetryMs: 0,
     });
     return { engine, calls };
   }
   const named = (calls: { name: string; args: unknown[] }[], name: string) =>
     calls.filter((call) => call.name === name).map((call) => call.args);
 
-  test("keeps its reply's last sentence, and is claimed with one retry for a lost lease", async () => {
-    const { engine, calls } = withTask(async () => ({
-      replyText: "I drafted it.\n\nShould I send it to Rosa now?",
-    }));
-    await engine.sweep();
-    expect(named(calls, "claim")).toContainEqual(["proactive.task", 2]);
-    expect(named(calls, "recordTaskOutcome")).toEqual([
-      ["s1", { reply: "Should I send it to Rosa now?", asks: true }],
-    ]);
-    expect(named(calls, "finish")).toHaveLength(1);
-  });
-
-  test("a reply that ends on reply chips asks the person, whatever its last sentence says", async () => {
-    const { engine, calls } = withTask(async () => ({
-      replyText: "Tell me which of the three answers fits.",
-      offeredReplies: true,
-    }));
-    await engine.sweep();
-    expect(named(calls, "recordTaskOutcome")).toEqual([
-      ["s1", { reply: "Tell me which of the three answers fits.", asks: true }],
-    ]);
-  });
-
-  test("stopped on an approval, it ends waiting on that request rather than failing", async () => {
+  test("stopped on an approval, it is finished, never released to be run (and sent) again", async () => {
     const { engine, calls } = withTask(async () => {
       throw new HeadlessToolSuspension(
         "This action is waiting for your approval.",
@@ -702,38 +681,9 @@ describe("a started suggestion's turn", () => {
       );
     });
     await engine.sweep();
-    expect(named(calls, "recordTaskOutcome")).toEqual([
-      ["s1", { waiting: { kind: "approval", id: "approval-1" } }],
-    ]);
+    await engine.idle();
     expect(named(calls, "finish")).toHaveLength(1);
-    expect(named(calls, "giveUpTask")).toEqual([]);
-  });
-
-  test("an error is final on its first try: given up with the reason, never released for another go", async () => {
-    const { engine, calls } = withTask(async () => {
-      throw new Error("The routine's turn was stopped after 180s.");
-    });
-    await engine.sweep().catch(() => undefined);
-    expect(named(calls, "giveUpTask")).toEqual([
-      ["s1", "replica", "The routine's turn was stopped after 180s.", 2],
-    ]);
     expect(named(calls, "release")).toEqual([]);
-    expect(named(calls, "finish")).toEqual([]);
-  });
-
-  test("Try again resets a failed turn, and queues one that never was", async () => {
-    const { engine, calls } = withTask(async () => undefined);
-    expect(await engine.retry("owner", "s1")).toEqual({ retried: true });
-    expect(named(calls, "resetTask")).toEqual([["s1", 2]]);
-    expect(named(calls, "offer")).toEqual([
-      [
-        {
-          kind: "proactive.task",
-          key: "s1",
-          payload: { ownerUserId: "owner", suggestionId: "s1" },
-        },
-      ],
-    ]);
   });
 });
 

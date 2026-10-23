@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { frameCheckIn } from "@openbot/shared/check-in";
 import { frameFiring } from "@openbot/shared/routine-firing";
 import { isPersonSentMessage } from "../src/components/channels/chat-transcript";
 
@@ -20,6 +21,14 @@ describe("isPersonSentMessage", () => {
   test("a routine firing wears role: user but was never typed by anyone", () => {
     const firing = frameFiring("Check the queue and summarize backlog age.");
     expect(isPersonSentMessage("user", firing)).toBe(false);
+  });
+
+  test("a check-in wears role: user too, and the Bot started it", () => {
+    const checkIn = frameCheckIn({
+      checkedAt: "2026-10-22T17:32:00.000Z",
+      offers: [{ id: "s-1", title: "Send Priya new mugs", why: "Broken." }],
+    });
+    expect(isPersonSentMessage("user", checkIn)).toBe(false);
   });
 
   test("an assistant message is never the person's, framed or not", () => {

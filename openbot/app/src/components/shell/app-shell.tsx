@@ -1,4 +1,4 @@
-import { useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   type ReactNode,
   type RefObject,
@@ -10,6 +10,8 @@ import {
 import { AttentionNotifier } from "@/components/bot-profile/attention";
 import { SelfHostBanner } from "@/components/layout/self-host-banner";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
+import { useDuetChannels } from "@/lib/duet-channels/use-channel";
+import { ChannelSheet } from "./channel-sheet";
 import {
   ChatPresenceProvider,
   useChatServerBusy,
@@ -23,7 +25,7 @@ import { TabBar, tabForPath } from "./tab-bar";
 
 /**
  * The signed-in app, as the launch film shows it: one column the width of a phone, centred on a
- * wide screen, with the header floating over it and Chat, Tasks and Pages at its foot.
+ * wide screen, with the header floating over it and Chat, Tasks and Make at its foot.
  *
  * Everything that is not a tab is a page pushed over the app, in one chrome (parity-spec 2.9): a
  * back disc, the page's title in a pill, and no menu disc, avatar or tab bar. Bots, Connections,
@@ -35,6 +37,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   });
   const tab = tabForPath(pathname);
   const [menuOpen, setMenuOpen] = useState(false);
+  // New channel, pressed in the menu: the sheet stands on its own once the menu has closed.
+  const [newChannel, setNewChannel] = useState(false);
+  const { bot } = useDuetChannels();
+  const navigate = useNavigate();
   // Any navigation closes the menu, including a conversation picked from inside it.
   const [shownPath, setShownPath] = useState(pathname);
   if (shownPath !== pathname) {
@@ -68,7 +74,27 @@ export function AppShell({ children }: { children: ReactNode }) {
             <PageColumn>{children}</PageColumn>
           </PageChromeProvider>
         )}
-        <MenuSheet onOpenChange={setMenuOpen} open={menuOpen} />
+        <MenuSheet
+          onNewChannel={() => {
+            setMenuOpen(false);
+            setNewChannel(true);
+          }}
+          onOpenChange={setMenuOpen}
+          open={menuOpen}
+        />
+        {newChannel && bot ? (
+          <ChannelSheet
+            botId={bot.id}
+            onClose={() => setNewChannel(false)}
+            onSaved={(channel) => {
+              setNewChannel(false);
+              void navigate({
+                to: "/channels/$channelId",
+                params: { channelId: channel.id },
+              });
+            }}
+          />
+        ) : null}
       </div>
     </ChatPresenceProvider>
   );

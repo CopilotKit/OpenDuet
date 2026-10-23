@@ -8,7 +8,13 @@ import {
 } from "@copilotkit/react-core/v2";
 import { observeApprovalAgent } from "@/lib/copilot/approval-context";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { HandoffResumeNotice } from "@/components/computer/handoff-resume-notice";
 import { attachmentModality } from "@/components/channels/chat-messages";
 import { toAgentOptions } from "@/components/channels/composer";
@@ -340,11 +346,23 @@ function describeAttachments(attachments: readonly Attachment[]): string {
  * The local agent id is channel-scoped so two channels with the same coworker keep separate
  * durable threads.
  */
+/**
+ * The run was refused because another holds the conversation: the server's own turn, or another
+ * tab's. Said in the person's terms, never with the thread's id.
+ */
+const THREAD_LOCKED = /\bthread\b.*\block/i;
+const STILL_FINISHING =
+  "OpenDuet is still finishing something. Send this again when it's done.";
+
 export function ChannelChat({
   channel,
   runtimeAgentId,
   inShell = false,
   topic,
+  task,
+  lead,
+  folded = false,
+  onSubmitted,
 }: {
   channel: AgentChannel;
   runtimeAgentId: string;
@@ -352,7 +370,28 @@ export function ChannelChat({
   inShell?: boolean;
   /** What the conversation is about, drawn above it as the film's topic label. */
   topic?: string | null;
+  /**
+   * This conversation is a task's own, open on its page (components/duet/task-sheet.tsx).
+   *
+   * `busy` while a turn runs here that this tab may not have started: the task's own on the server,
+   * or another tab's. A send waits in the queue and goes when it ends, and the Bot shows as
+   * thinking. Stop stays for a turn this tab started; for anyone else's there is nothing here to
+   * stop.
+   * `send` while the task couldn't finish: a send is drawn at once and handed there, to run as the
+   * task's own turn with the person's words, instead of running here without the task.
+   */
+  task?: {
+    busy: boolean;
+    send?: (input: { text: string; messageId: string }) => Promise<void>;
+  };
+  /** Drawn above the conversation in place of the topic, such as a task's report. */
+  lead?: ReactNode;
+  /** Keep the conversation folded under the lead; see `ChatTranscript`. */
+  folded?: boolean;
+  /** The person sent something from the composer. */
+  onSubmitted?: () => void;
 }) {
+  const taskBusy = task?.busy ?? false;
   // The core attaches the frontend tool registry; direct agent runs do not.
   const { copilotkit } = useCopilotKit();
   // Mentions are scoped to the channel's permitted agents.
@@ -1556,9 +1595,10 @@ export function ChannelChat({
             taskRunning={agent.isRunning || runsInFlight > 0}
           />
           <ConversationView
+            folded={folded}
             inShell={inShell}
-            lead={topic ? <Topic>{topic}</Topic> : null}
-            placeholder={`Message ${botName}`}
+            lead={lead ?? (topic ? <Topic>{topic}</Topic> : null)}
+            placeholder={task ? `Reply to ${botName}` : `Message ${botName}`}
             queuedNotice={
               following && followQuiet
                 ? `${botName} is still finishing something. I'll send this next.`
@@ -1574,13 +1614,14 @@ export function ChannelChat({
                 : undefined
             }
             agents={toAgentOptions(agentProfiles, channel.agentIds)}
-            channelId={channel.id}
+            // A send handed to the task carries words only.
+            channelId={task?.send ? undefined : channel.id}
             /*
              * THE TURN, not the run. `say` waits for the runtime agent and the join before a run starts,
              * and `agent.isRunning` alone leaves that gap unmarked — which is the one moment the
              * "Thinking" line exists for. Same value as `pending`, deliberately.
              */
-            busy={agent.isRunning || turnsInFlight > 0 || following}
+            busy={agent.isRunning || turnsInFlight > 0 || following || taskBusy}
             // The `/` menu exposes only skills granted to this Bot.
             commands={skillCommands}
             // Readiness is handled by `say`; deletion is the only disabled-chat state.
@@ -1651,6 +1692,27 @@ export function ChannelChat({
               </>
             }
             onSubmit={async (draft) => {
+              onSubmitted?.();
+              if (task?.send) {
+                const messageId = newId();
+                agent.addMessage({
+                  id: messageId,
+                  role: "user",
+                  content: draft.text,
+                });
+                try {
+                  await task.send({ text: draft.text, messageId });
+                } catch (error) {
+                  // Taken back off, and thrown on, so the composer puts the words back in the box.
+                  agent.setMessages(
+                    agent.messages.filter(
+                      (message) => message.id !== messageId,
+                    ),
+                  );
+                  throw error;
+                }
+                return;
+              }
               // `draft.agentId` carries the @mentioned coworker, but nothing routes on it yet: this
               // channel is pinned to one `runtimeAgentId` for the life of its thread, so honouring a
               // per-message mention is a change to that binding, not to the composer.
@@ -1681,7 +1743,9 @@ export function ChannelChat({
              * middle of an answer: a second turn racing the first on one thread, with a fabricated
              * result stitched over a tool call that is still executing.
              */
-            pending={agent.isRunning || turnsInFlight > 0 || following}
+            pending={
+              agent.isRunning || turnsInFlight > 0 || following || taskBusy
+            }
             /*
              * A channel outlives its turns, so it is the screen where waiting is worth offering. A
              * correction typed mid-answer is held here, in this tab, and runs as one follow-up turn the
@@ -1695,7 +1759,10 @@ export function ChannelChat({
              * controller does not exist until `say` has finished waiting for the runtime agent — so
              * this is the one place the narrower fact is the honest one to draw a button from.
              */
-            stoppable={agent.isRunning || runsInFlight > 0 || following}
+            stoppable={
+              (agent.isRunning || runsInFlight > 0 || following) &&
+              !(taskBusy && turnsInFlight === 0)
+            }
             /*
              * At the END OF THE TRANSCRIPT rather than above the composer, which is where this used to
              * be. A turn that ends without an answer leaves a gap exactly where the reply was going to
@@ -1706,7 +1773,11 @@ export function ChannelChat({
              * streaming says so, because the deployment's stall watchdog writes that sentence into the
              * run before closing it; see server/src/channels/stall-guard.ts.
              */
-            stopped={runError ?? undefined}
+            stopped={
+              runError && THREAD_LOCKED.test(runError)
+                ? STILL_FINISHING
+                : (runError ?? undefined)
+            }
           />
         </div>
       </ConversationProvider>

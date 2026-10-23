@@ -1169,6 +1169,30 @@ export function createProactiveStore(database: Database) {
         })
         .onConflictDoNothing();
     },
+    /**
+     * Titles the person hid from this Bot since `since`, newest first. Hide has to mean hide: a later
+     * check-in is told never to suggest them again, as it is for the open ones.
+     */
+    async hiddenSince(
+      owner: string,
+      agentId: string,
+      since: Date,
+    ): Promise<string[]> {
+      const rows = await database
+        .select({ title: proactiveSuggestions.title })
+        .from(proactiveSuggestions)
+        .where(
+          and(
+            eq(proactiveSuggestions.ownerUserId, owner),
+            eq(proactiveSuggestions.agentId, agentId),
+            eq(proactiveSuggestions.status, "dismissed"),
+            gte(proactiveSuggestions.resolvedAt, since),
+          ),
+        )
+        .orderBy(desc(proactiveSuggestions.resolvedAt))
+        .limit(50);
+      return rows.map((row) => row.title);
+    },
     async suggestion(owner: string, id: string): Promise<ProactiveSuggestion> {
       const [row] = await database
         .select()

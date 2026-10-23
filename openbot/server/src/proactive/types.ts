@@ -3,8 +3,12 @@ import { z } from "zod";
 export type ProactiveRunStatus = "idle" | "running" | "succeeded" | "error";
 export type SuggestionStatus = "open" | "dismissed" | "started";
 
-/** Bounds on how often a Bot may look through a person's apps: once an hour at most, once a day at least. */
-export const MIN_INTERVAL_MINUTES = 60;
+/**
+ * Bounds on how often a Bot may look through a person's apps: every fifteen minutes at most, once a
+ * day at least. A check-in reads only what is new since the last one, so a short interval is a short
+ * read, and most check-ins end with nothing recorded.
+ */
+export const MIN_INTERVAL_MINUTES = 15;
 export const MAX_INTERVAL_MINUTES = 1440;
 /** Per run, so one confused run cannot flood the inbox or the memory list. */
 export const MAX_SUGGESTIONS_PER_RUN = 5;
@@ -89,6 +93,11 @@ export type ProactiveSuggestion = {
   sourceApp: string | null;
   sourceRef: string | null;
   sourceLink: string | null;
+  /**
+   * The OpenDuet channel `add_tasks` ran in, or null: Everything, or research's own card. Optional
+   * only so a suggestion can be written without one; every row read back carries it.
+   */
+  fromChannelId?: string | null;
   status: SuggestionStatus;
   deliveredAt: Date | null;
   resolvedAt: Date | null;

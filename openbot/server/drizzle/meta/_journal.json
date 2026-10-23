@@ -435,6 +435,27 @@
       "when": 1792705553488,
       "tag": "0061_openduet_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792710124563,
+      "tag": "0062_check_in_interval",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792713497963,
+      "tag": "0063_openduet_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1792724734568,
+      "tag": "0064_openduet_channels",
+      "breakpoints": true
     }
   ]
 }

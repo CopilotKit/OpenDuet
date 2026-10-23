@@ -36,6 +36,18 @@ export type ChannelSummary = AgentChannel & {
   /** ISO-8601 when this member last had the channel open, or null for never. The caller's, only. */
   lastReadAt: string | null;
   /**
+   * The OpenDuet task this conversation is the work of, or null for an ordinary one. A task works in
+   * a conversation of its own; Chat and the menu leave those out, and Tasks lists them. Absent on a
+   * row this browser made itself, which is never a task's.
+   */
+  taskId?: string | null;
+  /**
+   * Whether this conversation is one of the person's OpenDuet channels, with a look of its own. The
+   * drawer lists those; Chat, which is Everything, leaves them out. Absent on a row this browser made
+   * itself, which is never one.
+   */
+  openduetChannel?: boolean;
+  /**
    * Whether a turn is running in this channel right now.
    *
    * Socket-only and transient: the server never persists it and the roster query never returns it,

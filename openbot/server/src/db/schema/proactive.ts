@@ -13,14 +13,14 @@ import type {
   ProactiveRunStatus,
   SuggestionStatus,
 } from "../../proactive/types";
-import { agents, users } from "./core";
+import { agents, channels, users } from "./core";
 
 /**
  * Background research by one of a person's Bots.
  *
  * On by default: OpenBot writes the row when a person first talks to the Bot in a conversation with
  * it alone (memory/defaults.ts), and never again once they turn it off (`enabled = false`) or remove
- * it (`default_opt_outs`). Bounded by `interval_minutes` (one to twenty-four hours) so a Bot never
+ * it (`default_opt_outs`). Bounded by `interval_minutes` (fifteen minutes to a day) so a Bot never
  * reads a person's apps more often than they chose. The run lands in its own thread, not
  * the person's chat, and what it finds reaches them as suggestions delivered to `channel_id`.
  */
@@ -63,7 +63,7 @@ export const proactiveSettings = pgTable(
     index("proactive_settings_due_idx").on(table.enabled, table.nextRunAt),
     check(
       "proactive_settings_interval_check",
-      sql`${table.intervalMinutes} >= 60 AND ${table.intervalMinutes} <= 1440`,
+      sql`${table.intervalMinutes} >= 15 AND ${table.intervalMinutes} <= 1440`,
     ),
     check(
       "proactive_settings_status_check",
@@ -92,6 +92,14 @@ export const proactiveSuggestions = pgTable(
     sourceApp: text("source_app"),
     sourceRef: text("source_ref"),
     sourceLink: text("source_link"),
+    /**
+     * The OpenDuet channel the person asked for this card in, through `add_tasks`, or null. Carried
+     * until Start makes it a task, which takes it as its own `from_channel_id`, so the task wears
+     * the channel's colour too. Research's own cards are never asked for in a channel.
+     */
+    fromChannelId: text("from_channel_id").references(() => channels.id, {
+      onDelete: "set null",
+    }),
     status: text("status").$type<SuggestionStatus>().notNull().default("open"),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
