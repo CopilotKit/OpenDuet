@@ -6,6 +6,7 @@ import {
   taskDetail,
   taskTools,
 } from "../src/openduet/tasks";
+import { titleFrom } from "../src/openduet/task-store";
 
 const INITIATOR = { kind: "person" } as const;
 
@@ -90,6 +91,38 @@ describe(ADD_TASKS_TOOL, () => {
   test("the card reads the reason first, then the step", () => {
     expect(taskDetail(ROSA)).toBe(
       "Rosa needs a yes or no on Oat Satin by end of day to keep the slot.\n\nNext: Decide between Oat Satin and waiting two weeks, then reply in her thread.",
+    );
+  });
+});
+
+describe("titleFrom", () => {
+  test("is the first sentence of the ask's first line, without its full stop", () => {
+    expect(
+      titleFrom("\n  Find a time for coffee with Sam.  \nHe prefers mornings."),
+    ).toBe("Find a time for coffee with Sam");
+    expect(
+      titleFrom("Find a time for coffee with Sam. He prefers mornings."),
+    ).toBe("Find a time for coffee with Sam");
+    expect(titleFrom("Can you chase Rosa? She owes us a quote.")).toBe(
+      "Can you chase Rosa?",
+    );
+    expect(titleFrom("Wait for it... then send")).toBe(
+      "Wait for it... then send",
+    );
+    expect(titleFrom("Pay invoice no. 5521 today")).toBe(
+      "Pay invoice no. 5521 today",
+    );
+    expect(titleFrom("Reply to   Rosa")).toBe("Reply to Rosa");
+  });
+
+  test("cuts a long line at a word, with an ellipsis", () => {
+    const title = titleFrom(
+      "Draft a reply to Rosa saying we will take Oat Satin instead of the discontinued gloss glaze for the spring order",
+    );
+    expect(title.length).toBeLessThanOrEqual(81);
+    expect(title.endsWith("…")).toBe(true);
+    expect(title).toBe(
+      "Draft a reply to Rosa saying we will take Oat Satin instead of the discontinued…",
     );
   });
 });

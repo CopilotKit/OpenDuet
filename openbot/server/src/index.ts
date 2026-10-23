@@ -255,7 +255,8 @@ import { createModelCompleter } from "./routing/model";
 import { createPageStore } from "./openduet/pages";
 import { createTaskStore } from "./openduet/task-store";
 import { createTaskThreads, createTaskTurn } from "./openduet/task-threads";
-import { createOpenDuetTools } from "./openduet/wiring";
+import type { TaskStarter } from "./openduet/tasks";
+import { createOpenDuetTools, createTaskIntake } from "./openduet/wiring";
 import { reportIntelligenceEntitlement } from "./intelligence-entitlement-check";
 import { createSelfHostBanner } from "./self-host-banner";
 import { createTeamBots } from "./team-bots/team-bots";
@@ -1365,17 +1366,25 @@ const wakeUpStore = createWakeUpStore(database, { auditStore: bootAuditStore });
  */
 const openDuetPages = createPageStore(database);
 const openDuetTasks = createTaskStore(database);
+// Read when a task starts, long after the engine below is made.
+const openDuetStartTask: TaskStarter = ({ ownerUserId, agentId, task }) =>
+  proactiveEngine.startAsked(ownerUserId, agentId, task);
+const openDuetDirectChannel = async (ownerUserId: string, agentId: string) =>
+  channelStore.direct(await actorFor(ownerUserId), agentId);
 const openDuetTools = createOpenDuetTools({
   database,
   pages: openDuetPages,
-  // Read when the tool runs, long after the engine below is made.
-  startTask: ({ ownerUserId, agentId, task }) =>
-    proactiveEngine.startAsked(ownerUserId, agentId, task),
+  startTask: openDuetStartTask,
   callTool: (input) => pluginStore.callTool(input),
   complete: chooseSkills,
   model: runtimeModel.defaultModel,
-  directChannel: async (ownerUserId, agentId) =>
-    channelStore.direct(await actorFor(ownerUserId), agentId),
+  directChannel: openDuetDirectChannel,
+});
+// The + on Tasks: the same start and the same Up next as the tools above.
+const openDuetIntake = createTaskIntake({
+  database,
+  directChannel: openDuetDirectChannel,
+  startTask: openDuetStartTask,
 });
 
 const loadToolsForActor =
@@ -2593,7 +2602,11 @@ const app = createApp(
     },
     memory: { store: personalMemoryStore, ingestion: memoryIngestion },
     proactive: { store: proactiveStore, engine: proactiveEngine },
-    openduet: { pages: openDuetPages, tasks: openDuetTasks },
+    openduet: {
+      pages: openDuetPages,
+      tasks: openDuetTasks,
+      intake: openDuetIntake,
+    },
     responsibilities: {
       store: responsibilityStore,
       engine: responsibilityEngine,

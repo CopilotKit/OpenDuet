@@ -25,7 +25,11 @@ import {
 } from "../src/openduet/task-store";
 import { createTaskThreads } from "../src/openduet/task-threads";
 import { START_TASK_TOOL } from "../src/openduet/tasks";
-import { createOpenDuetTools } from "../src/openduet/wiring";
+import {
+  ASKED_RUN_PREFIX,
+  createOpenDuetTools,
+  createTaskIntake,
+} from "../src/openduet/wiring";
 import {
   createProactiveEngine,
   PROACTIVE_TASK_KIND,
@@ -565,6 +569,12 @@ describe("/api/openduet/tasks", () => {
       true,
     );
 
+    // Each names its conversation's thread, which its approvals and questions carry.
+    const conversation = await channelStore.get(owner, second.channelId);
+    expect(listed.tasks.find((task) => task.id === second.id)?.threadId).toBe(
+      conversation?.threadId ?? "missing",
+    );
+
     const resolved = (await (
       await call(owner.id, `/${second.id}/resolve`, "POST")
     ).json()) as { task: TaskRecord };
@@ -600,5 +610,163 @@ describe("/api/openduet/tasks", () => {
     };
     expect(theirs.tasks).toEqual([]);
     expect((await taskStore.get(owner.id, mine.id)).resolvedAt).toBeNull();
+  });
+});
+
+describe("the + on Tasks", () => {
+  function plus() {
+    const { engine, started } = engineFor();
+    const routes = createTaskRoutes(
+      taskStore,
+      async (context, next) => {
+        context.set("actor", {
+          id: context.req.header("x-person") ?? owner.id,
+        } as AuthenticatedActor);
+        await next();
+      },
+      createTaskIntake({
+        database,
+        directChannel: async (ownerUserId, agentId) =>
+          channelStore.direct(await actorFor(ownerUserId), agentId),
+        startTask: ({ ownerUserId, agentId, task }) =>
+          engine.startAsked(ownerUserId, agentId, task),
+      }),
+    );
+    const post = (path: string, body: unknown, person = owner.id) =>
+      routes.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-person": person },
+        body: JSON.stringify(body),
+      });
+    return { engine, started, post };
+  }
+
+  test("Start now opens a task in a conversation of its own and starts it, titled from its first sentence", async () => {
+    const chat = await chatOf();
+    const { engine, started, post } = plus();
+    const instruction =
+      "Find a time for coffee with Sam next week.\nHe prefers mornings.";
+    const response = await post("/", { botId: bot, instruction });
+    expect(response.status).toBe(201);
+    const { task } = (await response.json()) as { task: TaskRecord };
+    await engine.idle();
+
+    expect(task).toMatchObject({
+      botId: bot,
+      title: "Find a time for coffee with Sam next week",
+      origin: "asked",
+      suggestionId: null,
+      resolvedAt: null,
+    });
+    expect(task.channelId).not.toBe(chat.id);
+    const conversation = await channelStore.get(owner, task.channelId);
+    expect(task.threadId).toBe(conversation?.threadId ?? "missing");
+    // One turn, in its conversation, carrying the whole ask.
+    expect(started).toHaveLength(1);
+    expect(started[0]?.scope.channelId).toBe(task.channelId);
+    expect(started[0]?.text).toBe(frameTaskBrief(instruction));
+    expect((await taskStore.list(owner.id)).map((row) => row.id)).toContain(
+      task.id,
+    );
+  });
+
+  test("a title the person gives is kept", async () => {
+    const { engine, post } = plus();
+    const response = await post("/", {
+      botId: bot,
+      title: "Coffee with Sam",
+      instruction: "Find a time for coffee with Sam next week.",
+    });
+    const { task } = (await response.json()) as { task: TaskRecord };
+    await engine.idle();
+    expect(task.title).toBe("Coffee with Sam");
+  });
+
+  test("Save for Up next adds a card the person asked for, and starts nothing", async () => {
+    const { started, post } = plus();
+    const one = await post("/up-next", {
+      botId: bot,
+      instruction: "Chase the booth deposit.",
+    });
+    expect(one.status).toBe(201);
+    const saved = (await one.json()) as {
+      suggestion: { id: string; title: string };
+    };
+    expect(saved.suggestion.title).toBe("Chase the booth deposit");
+    const many = (await (
+      await post("/up-next", {
+        botId: bot,
+        instruction: "Book the kiln service\nAsk for a Friday slot.",
+      })
+    ).json()) as { suggestion: { id: string } };
+
+    const open = await proactiveStore.suggestions(owner.id);
+    const card = open.find((row) => row.id === saved.suggestion.id);
+    expect(card?.runId.startsWith(ASKED_RUN_PREFIX)).toBe(true);
+    expect(card?.agentId).toBe(bot);
+    // A one-line ask is all title; a longer one keeps the whole ask under it.
+    expect(card?.detail).toBe("");
+    expect(open.find((row) => row.id === many.suggestion.id)?.detail).toBe(
+      "Book the kiln service\nAsk for a Friday slot.",
+    );
+    expect(started).toHaveLength(0);
+    // Research is never turned on by saving a card.
+    const setting = (await proactiveStore.list(owner.id)).find(
+      (row) => row.agentId === bot,
+    );
+    expect(setting?.id).toBe(card?.settingId);
+  });
+
+  test("an empty ask, or no Bot, is refused with what to do", async () => {
+    const { post } = plus();
+    const empty = await post("/", { botId: bot, instruction: "   " });
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as { error: string }).error).toContain(
+      "Say what OpenDuet should do",
+    );
+    const noBot = await post("/up-next", { instruction: "Do a thing" });
+    expect(noBot.status).toBe(400);
+    expect(((await noBot.json()) as { error: string }).error).toBe(
+      "Choose one of your Bots.",
+    );
+    const extra = await post("/", {
+      botId: bot,
+      instruction: "Do a thing",
+      runAs: "someone-else",
+    });
+    expect(extra.status).toBe(400);
+  });
+
+  test("a Bot the person cannot reach is the same as no Bot", async () => {
+    const { started, post } = plus();
+    const before = (await taskStore.list(other.id)).length;
+    const response = await post(
+      "/",
+      { botId: bot, instruction: "Read their mail" },
+      other.id,
+    );
+    expect(response.status).toBe(404);
+    expect(((await response.json()) as { error: string }).error).toBe(
+      "Couldn't find that Bot. Reload the page.",
+    );
+    expect(started).toHaveLength(0);
+    expect(await taskStore.list(other.id)).toHaveLength(before);
+    expect(
+      (await post("/up-next", { botId: bot, instruction: "Read" }, other.id))
+        .status,
+    ).toBe(404);
+  });
+
+  test("without anywhere to start or save a task, the + routes are not served", async () => {
+    const routes = createTaskRoutes(taskStore, async (context, next) => {
+      context.set("actor", { id: owner.id } as AuthenticatedActor);
+      await next();
+    });
+    const response = await routes.request("/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ botId: bot, instruction: "Do a thing" }),
+    });
+    expect(response.status).toBe(404);
   });
 });

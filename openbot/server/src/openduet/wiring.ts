@@ -10,6 +10,7 @@ import { buildMorningBrief, type CallTool, openduetTools } from "./brief";
 import { offerTools } from "./offers";
 import { createPageStore, type PageStore, pageTools } from "./pages";
 import { replyTools } from "./replies";
+import type { TaskIntake } from "./task-store";
 import {
   type TaskSink,
   type TaskStarter,
@@ -17,6 +18,111 @@ import {
   taskTools,
 } from "./tasks";
 import type { Complete } from "./triage";
+
+/** How a card the person asked for is told from research's: its run id starts with this. */
+export const ASKED_RUN_PREFIX = "asked:";
+
+/** One card for Up next: what to do, the detail under it, and where it came from. */
+export type UpNextCard = {
+  title: string;
+  detail: string;
+  sourceApp: string | null;
+  sourceLink: string | null;
+};
+
+/**
+ * Puts cards the person asked for on Tasks' Up next, each with Start and Hide: what `add_tasks`
+ * saves from a conversation, and what Save for Up next saves from the + on Tasks.
+ *
+ * A card belongs to the person's research setting for the Bot, which says where Start runs it. One
+ * that was never set up is made here with research left OFF, in their own conversation with the
+ * Bot: asking for tasks must not start background research nobody turned on. The setting is unique
+ * per person and Bot, so a second request racing this one finds theirs.
+ */
+export function createUpNext(deps: {
+  database: Database;
+  directChannel: (
+    ownerUserId: string,
+    agentId: string,
+  ) => Promise<{ id: string; threadId: string }>;
+}) {
+  const proactive = createProactiveStore(deps.database);
+  return async ({
+    ownerUserId,
+    agentId,
+    cards,
+  }: {
+    ownerUserId: string;
+    agentId: string;
+    cards: UpNextCard[];
+  }): Promise<{ id: string; title: string }[]> => {
+    const existing = async () =>
+      (await proactive.list(ownerUserId)).find(
+        (setting) => setting.agentId === agentId,
+      );
+    let setting = await existing();
+    if (!setting) {
+      const channel = await deps.directChannel(ownerUserId, agentId);
+      try {
+        setting = await proactive.create(
+          ownerUserId,
+          { agentId, channelId: channel.id, enabled: false },
+          channel.threadId,
+        );
+      } catch (error) {
+        setting = await existing();
+        if (!setting) throw error;
+      }
+    }
+    const settingId = setting.id;
+    // One id for the cards asked for together, marked so they can be told from research's.
+    const runId = `${ASKED_RUN_PREFIX}${randomUUID()}`;
+    const added: { id: string; title: string }[] = [];
+    for (const card of cards) {
+      const row = await proactive.addSuggestion({
+        ownerUserId,
+        agentId,
+        settingId,
+        runId,
+        title: card.title,
+        detail: card.detail,
+        sourceApp: card.sourceApp,
+        sourceRef: null,
+        sourceLink: card.sourceLink,
+      });
+      added.push({ id: row.id, title: row.title });
+    }
+    return added;
+  };
+}
+
+/**
+ * The + on Tasks: start a task now, through `startTask` as `start_task` does, or save it for Up
+ * next, through `createUpNext` as `add_tasks` does.
+ */
+export function createTaskIntake(deps: {
+  database: Database;
+  directChannel: (
+    ownerUserId: string,
+    agentId: string,
+  ) => Promise<{ id: string; threadId: string }>;
+  startTask: TaskStarter;
+}): TaskIntake {
+  const upNext = createUpNext(deps);
+  return {
+    start: (ownerUserId, agentId, task) =>
+      deps.startTask({ ownerUserId, agentId, task }),
+    async save(ownerUserId, agentId, card) {
+      const [added] = await upNext({
+        ownerUserId,
+        agentId,
+        cards: [{ ...card, sourceApp: null, sourceLink: null }],
+      });
+      if (!added) throw new Error("The card was not saved.");
+      return added;
+    },
+  };
+}
 
 /**
  * OpenDuet's tools, assembled once and handed per run to the Bot that runs it.
@@ -46,52 +152,19 @@ export function createOpenDuetTools(deps: {
   botId: string,
   initiator: AuditInitiator,
 ) => GrantedTool[] {
-  const proactive = createProactiveStore(deps.database);
-  /*
-   * A task card belongs to the person's research setting for the Bot, which says where Start runs
-   * it. One that was never set up is made here with research left OFF, in their own conversation
-   * with the Bot: asking for tasks must not start background research nobody turned on. The
-   * setting is unique per person and Bot, so a second request racing this one finds theirs.
-   */
-  const save: TaskSink = async ({ ownerUserId, agentId, tasks }) => {
-    const existing = async () =>
-      (await proactive.list(ownerUserId)).find(
-        (setting) => setting.agentId === agentId,
-      );
-    let setting = await existing();
-    if (!setting) {
-      const channel = await deps.directChannel(ownerUserId, agentId);
-      try {
-        setting = await proactive.create(
-          ownerUserId,
-          { agentId, channelId: channel.id, enabled: false },
-          channel.threadId,
-        );
-      } catch (error) {
-        setting = await existing();
-        if (!setting) throw error;
-      }
-    }
-    const settingId = setting.id;
-    // One id for the cards asked for together, marked so they can be told from research's.
-    const runId = `asked:${randomUUID()}`;
-    const added: { id: string; title: string }[] = [];
-    for (const asked of tasks) {
-      const row = await proactive.addSuggestion({
-        ownerUserId,
-        agentId,
-        settingId,
-        runId,
+  const upNext = createUpNext(deps);
+  const save: TaskSink = ({ ownerUserId, agentId, tasks }) =>
+    upNext({
+      ownerUserId,
+      agentId,
+      cards: tasks.map((asked) => ({
         title: asked.title,
         detail: taskDetail(asked),
         sourceApp: asked.source ?? null,
-        sourceRef: null,
         sourceLink: asked.link ?? null,
-      });
-      added.push({ id: row.id, title: row.title });
-    }
-    return added;
-  };
+      })),
+    });
+  const proactive = createProactiveStore(deps.database);
   const pages = deps.pages ?? createPageStore(deps.database);
   return (actorId, botId, initiator) => [
     ...openduetTools({
