@@ -47,6 +47,13 @@ export const REPLIES_AFTER_APPROVAL =
   "Refused. Ask after the person answers the approval, in your reply once the action is done.";
 /** The first day's own replies are drawn by the app (`FirstDayReplies`), under its answer. */
 export const REPLIES_FIRST_DAY = `Refused. Not on the first day: the app draws this turn's own replies under your answer. Don't call ${REPLIES_TOOL} in this turn.`;
+/**
+ * A second set while the first is held for an answer still to come: this one is not drawn, and the
+ * answer is still owed. Told "end your turn" here instead, beside the held answer, the model wrote
+ * "Nothing more to add for now." in place of its answer.
+ */
+export const REPLIES_ALREADY_HELD =
+  "Refused. One set of buttons is already held for this turn. Write your full answer now, as you would with no buttons, and don't mention the buttons.";
 /** A second set in one turn: the first is still on screen, so this one is not drawn. */
 export const REPLIES_ALREADY_SHOWN =
   "Refused. The buttons are already on screen. End your turn now and write nothing more.";

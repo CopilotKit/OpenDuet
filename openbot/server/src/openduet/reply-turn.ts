@@ -8,6 +8,7 @@ import type { PlanLanguageModel } from "../agents/plan-model";
 import { REFUSAL_MARKER } from "../plugins/tools";
 import {
   REPLIES_AFTER_APPROVAL,
+  REPLIES_ALREADY_HELD,
   REPLIES_ALREADY_SHOWN,
   REPLIES_DRAWN_PREFIX,
   REPLIES_FIRST_DAY,
@@ -37,7 +38,9 @@ import {
  *   turn ENDS there: the next step's model call is answered "stop" without reaching the model
  *   (`endingTurns`), because told "write nothing more" the Bot still wrote a line about the buttons.
  * - A shown call replaces a held set, because the choices picked after the answer fit it better.
- *   Any other call once a set was held or shown this turn is REFUSED, so one row is drawn per turn.
+ *   Any other call once a set was held or shown this turn is REFUSED, so one row is drawn per turn,
+ *   in words that match the set it lost to: "write your full answer" beside a held one, "end your
+ *   turn" beside a shown one.
  * - A call made while another tool in its step waits on the person's approval is REFUSED: the next
  *   choice belongs under the reply once the action is done, not under an unanswered card. So is a
  *   call on the first day, whose replies the app draws itself.
@@ -245,10 +248,11 @@ export async function answerReplies(
     : sets.includes("held")
       ? "held"
       : null;
-  if (prior === "shown" || (prior === "held" && early)) {
+  if (prior === "shown") {
     if (!beside && answered) turn.ended = true;
     return REPLIES_ALREADY_SHOWN;
   }
+  if (prior === "held" && early) return REPLIES_ALREADY_HELD;
   const before = turn.drawn;
   turn.drawn = early ? "held" : "shown";
 
@@ -307,8 +311,8 @@ type Part = {
  *
  * `text` is what was written since the last tool the Bot called other than this one. `drawn` is the
  * set of chips already held or shown: any earlier call counts unless it was refused or rejected,
- * and one with no answer at all counts as held, because a resumed run can carry a call whose answer
- * reached the person but not the history it was resumed with.
+ * and one with no answer at all counts as held. A built-in run's history sanitizer drops such a call
+ * before the run starts, so on that path it is the app that keeps one set per turn (`repliesLast`).
  */
 function earlierInTurn(messages: readonly unknown[]): {
   text: string;

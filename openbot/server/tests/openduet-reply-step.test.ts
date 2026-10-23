@@ -350,17 +350,28 @@ describe("one set of chips per turn", () => {
     const [held, second] = replyAnswers(calls);
     expect(held).toStartWith("The buttons are held");
     expect(second).toStartWith("Refused.");
-    expect(second).toContain("already on screen");
+    expect(second).toContain("already held");
   });
 
-  test("two calls held in one step: one is drawn", async () => {
-    const { calls } = await turn([
+  test("two calls held in one step: one is drawn, and the copy still asks for the full answer", async () => {
+    const { calls, steps, text } = await turn([
       { calls: [reads(), chips(), chips(["Draft it", "Not yet"])] },
       { text: ANSWER },
     ]);
     const answers = replyAnswers(calls);
     expect(answers).toHaveLength(2);
     expect(answers.filter(drawn)).toHaveLength(1);
+    /*
+     * Told "End your turn now and write nothing more" beside the held answer, the model obeyed the
+     * shorter of the two and wrote "Nothing more to add for now." So the copy says what the held set
+     * says: the answer is still to be written.
+     */
+    const copy = answers.find((answer) => !drawn(answer)) ?? "";
+    expect(copy).toStartWith("Refused.");
+    expect(copy).toContain("Write your full answer now");
+    expect(copy).not.toContain("End your turn");
+    expect(steps).toBe(2);
+    expect(text).toContain("Should I draft a yes for Tuesday?");
   });
 
   test("a call whose replies the runtime rejected drew nothing, so the next one is not dropped", async () => {
@@ -530,7 +541,9 @@ describe("chips and an approval in the same turn", () => {
     expect(steps).toBe(2);
   });
 
-  test("an earlier call in the turn with no answer counts as a set, so another before the answer is dropped", async () => {
+  test("an earlier set held in the turn counts, so another before the answer is dropped", async () => {
+    // A call with no answer at all never gets this far: the history's sanitizer drops it before the
+    // run starts, and the app draws nothing for it. What a resumed turn can carry is a held answer.
     const history: Message[] = [
       { id: "u1", role: "user", content: "Should I say yes to Ana?" },
       {
@@ -561,7 +574,7 @@ describe("chips and an approval in the same turn", () => {
       [{ calls: [reads(), chips()] }, { text: ANSWER }],
       history,
     );
-    expect(replyAnswers(calls)[0]).toContain("already on screen");
+    expect(replyAnswers(calls)[0]).toContain("already held");
   });
 });
 
