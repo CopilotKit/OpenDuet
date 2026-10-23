@@ -224,6 +224,7 @@ import {
   PRIVATE_SHARE_TOOL_REF,
 } from "./proactive/private-share";
 import {
+  allowedForRun,
   createReadOnlyClassifier,
   guardProactiveCallback,
   restrictCoordinationForRun,
@@ -2110,23 +2111,28 @@ conversationSaid = (ownerUserId, channelId, activity) => {
       ),
     );
 };
+/*
+ * One runner for research and for the check-in it writes: only the engine's own tools and refusals,
+ * no computer and no components. A check-in is NOT run through `approvalContinuationRunner` as a
+ * started task is, because that runner offers the Bot's computer, and a check-in only offers cards.
+ */
+const proactiveRunTurn = createTurnRunner({
+  admission: serverTurnAdmission,
+  intelligence: routineIntelligence,
+  runner: routineAgentRunner,
+  buildAgentFor,
+  toolsForTurn: (input) => proactiveEngine.toolsForTurn(input),
+  turnTimeoutMs: 3 * 60_000,
+  learningContainerForThread: (input) =>
+    copilotRuntime.learning?.containerForThread(input) ??
+    Promise.resolve(undefined),
+});
 const proactiveEngine = createProactiveEngine({
   store: proactiveStore,
   memory: personalMemoryStore,
   queue: createWorkQueue(database),
   owner: workOwner("proactive"),
-  runTurn: createTurnRunner({
-    admission: serverTurnAdmission,
-    intelligence: routineIntelligence,
-    runner: routineAgentRunner,
-    buildAgentFor,
-    // Only the run's own two tools and refusals: no computer, no components.
-    toolsForTurn: (input) => proactiveEngine.toolsForTurn(input),
-    turnTimeoutMs: 3 * 60_000,
-    learningContainerForThread: (input) =>
-      copilotRuntime.learning?.containerForThread(input) ??
-      Promise.resolve(undefined),
-  }),
+  runTurn: proactiveRunTurn,
   resolveScope: deliveryScopeFor,
   notify: (scope, input) => deliveryNotifications(scope, input),
   startTask: async (scope, input) => {
@@ -2163,11 +2169,36 @@ const proactiveEngine = createProactiveEngine({
       .catch(() => false);
     return { replyText: result.replyText, offeredReplies };
   },
+  /*
+   * The Bot writing first. The same turn as `startTask`, in the same conversation, except nobody
+   * spoke: no line is recorded for the person, the message is the framed check-in, and the initiator
+   * is the check-in's, so the turn holds `offer_task` and nothing else. The reply is recorded as the
+   * Bot's, which is what tells an open Chat to read the thread again.
+   */
+  checkIn: async (scope, input) => {
+    const actor = await actorFor(scope.ownerUserId);
+    const result = await proactiveRunTurn({
+      ...scope,
+      routineId: input.runId,
+      instruction: input.text,
+      userMessage: { id: input.runId, role: "user", content: input.text },
+      initiator: input.initiator,
+      runId: input.runId,
+      signal: input.signal,
+    });
+    if (result.replyText)
+      await channelStore.recordActivity(
+        actor,
+        scope.channelId,
+        { text: result.replyText, agentId: scope.agentId, at: new Date() },
+        { id: `${input.runId}:reply` },
+      );
+  },
   catalogue: pluginStore,
-  deniedToolNames: async (ownerUserId, agentId) => {
+  deniedToolNames: async (ownerUserId, agentId, initiator) => {
     const [tools, allowed] = await Promise.all([
       loadToolsForActor(ownerUserId)(agentId),
-      proactiveReadOnlyRefs(),
+      allowedForRun(initiator, proactiveReadOnlyRefs),
     ]);
     return tools
       .filter((tool) => !allowed.has(tool.ref) && !allowed.has(tool.name))

@@ -106,6 +106,11 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Putting it together",
     done: "Put it together",
   },
+  // server/src/openduet/offers.ts. Drawn as the task's card once done; this is the moment before.
+  offer_task: {
+    running: "Adding a task",
+    done: "Added a task",
+  },
 };
 
 /** One of this deployment's own tools in words, or null for any other name. */

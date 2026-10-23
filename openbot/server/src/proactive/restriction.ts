@@ -15,11 +15,18 @@
  * FAIL CLOSED. Anything not positively classified as a read is refused: an unknown ref, a catalogue
  * that could not be read, a tool with no recorded effect.
  */
+import { OFFER_TASK_TOOL } from "@openbot/shared/check-in";
 import type { AuditInitiator } from "../audit";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import { REFUSAL_MARKER } from "../plugins/tools";
 
 export const PROACTIVE_INITIATOR_PREFIX = "proactive:";
+/**
+ * A check-in: the turn research starts in the person's own conversation when it found something new.
+ * Under the proactive prefix on purpose, so every rule written for a proactive run (no coordination,
+ * the remote callback door, the restricted loader) holds it too, and then narrower still.
+ */
+export const CHECK_IN_INITIATOR_PREFIX = `${PROACTIVE_INITIATOR_PREFIX}check-in:`;
 
 /**
  * A proactive run's initiator. Recorded as an unattended routine-kind run, so every policy written
@@ -39,6 +46,31 @@ export function isProactiveInitiator(
     initiator.id.startsWith(PROACTIVE_INITIATOR_PREFIX)
   );
 }
+
+/** A check-in's initiator: an unattended, proactive turn that may only offer what its run found. */
+export function checkInInitiator(runId: string): AuditInitiator {
+  return { kind: "routine", id: `${CHECK_IN_INITIATOR_PREFIX}${runId}` };
+}
+
+export function isCheckInInitiator(
+  initiator: AuditInitiator | undefined | null,
+): boolean {
+  return (
+    isProactiveInitiator(initiator) &&
+    !!initiator &&
+    "id" in initiator &&
+    initiator.id.startsWith(CHECK_IN_INITIATOR_PREFIX)
+  );
+}
+
+/**
+ * The only tools a check-in may call, by either spelling: showing the person a suggestion its run
+ * recorded. No connector, not even a read: the run already read, and this turn only says so.
+ */
+export const CHECK_IN_TOOLS: ReadonlySet<string> = new Set([
+  OFFER_TASK_TOOL,
+  `openduet/${OFFER_TASK_TOOL}`,
+]);
 
 export function proactiveRunIdOf(initiator: AuditInitiator | undefined) {
   return initiator && isProactiveInitiator(initiator) && "id" in initiator
@@ -76,6 +108,19 @@ export function createReadOnlyClassifier(plugins: CatalogueReader) {
 }
 export type ReadOnlyRefs = () => Promise<ReadonlySet<string>>;
 
+/**
+ * What a proactive turn may call: a check-in only offers, and a research run only reads. One answer
+ * for every door, so the loader, the remote callback and the hidden refusals cannot disagree.
+ */
+export function allowedForRun(
+  initiator: AuditInitiator | undefined | null,
+  readOnlyRefs: ReadOnlyRefs,
+): Promise<ReadonlySet<string>> {
+  return isCheckInInitiator(initiator)
+    ? Promise.resolve(CHECK_IN_TOOLS)
+    : readOnlyRefs();
+}
+
 function refused(name: string) {
   return `${REFUSAL_MARKER} ${name} is not available during background research, which can only read. Suggest it as a next step instead.`;
 }
@@ -93,13 +138,16 @@ export function restrictToolsForRun<A extends unknown[]>(
 ): (...args: A) => Promise<GrantedTool[]> {
   if (!isProactiveInitiator(initiator)) return load;
   return async (...args: A) => {
-    const [tools, allowed] = await Promise.all([load(...args), readOnlyRefs()]);
+    const [tools, allowed] = await Promise.all([
+      load(...args),
+      allowedForRun(initiator, readOnlyRefs),
+    ]);
     return tools
       .filter((tool) => allowed.has(tool.ref) || allowed.has(tool.name))
       .map((tool) => ({
         ...tool,
         execute: async (input: unknown) => {
-          const current = await readOnlyRefs();
+          const current = await allowedForRun(initiator, readOnlyRefs);
           if (!current.has(tool.ref) && !current.has(tool.name))
             return refused(tool.name);
           return tool.execute(input);
@@ -135,7 +183,7 @@ export async function guardProactiveCallback(
   if (!isProactiveInitiator(initiator)) return null;
   let allowed: ReadonlySet<string>;
   try {
-    allowed = await readOnlyRefs();
+    allowed = await allowedForRun(initiator, readOnlyRefs);
   } catch {
     return { text: refused(input.name), isError: true };
   }

@@ -841,8 +841,8 @@ function ResearchOptIn({
           Let {bot.name} suggest tasks
         </p>
         <p className="type-sub text-duet-ink-2">
-          It looks through your connected apps every 4 hours and lists what to
-          do next. It can only read.
+          It checks your connected apps every hour and writes to you when
+          something needs you. It can only read.
         </p>
         {turnOn.error ? (
           <p className="type-label mt-1 text-duet-red" role="alert">

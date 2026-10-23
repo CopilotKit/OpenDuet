@@ -810,6 +810,7 @@ test("with research off for OpenDuet, one card offers to turn it on in Chat's co
   serving();
   const view = draw();
   expect(await view.findByText("Let OpenDuet suggest tasks")).toBeTruthy();
+  expect(view.getByText(/checks your connected apps every hour/)).toBeTruthy();
   expect(view.queryByText("Nothing to suggest right now.")).toBeNull();
   const turnOn = view.getByRole("button", { name: "Turn on" });
   await waitFor(() => expect(turnOn.hasAttribute("disabled")).toBe(false));
@@ -822,7 +823,8 @@ test("with research off for OpenDuet, one card offers to turn it on in Chat's co
         agentId: "openduet",
         channelId: "chat-1",
         focus: expect.stringContaining("mail and calendar"),
-        intervalMinutes: 240,
+        // A check-in every hour: each reads only what is new, and most say nothing.
+        intervalMinutes: 60,
       },
     }),
   );

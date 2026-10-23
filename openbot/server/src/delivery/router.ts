@@ -476,7 +476,8 @@ export function createDeliveryRouter(deps: {
           throw new DeliveryRefusedError("Push device unavailable.");
         result = await deps.providers.push.send({
           token: device.token,
-          title: "OpenBot",
+          // Named for the Bot that wrote it, so the line under it says what is ready and who has it.
+          title: (await deps.store.botIdentity(row.agentId))?.name ?? "OpenBot",
           body: row.text,
           channelId: row.channelId,
           kind: row.kind,

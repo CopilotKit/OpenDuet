@@ -102,6 +102,15 @@ export function createProactiveRoutes(
       await engine.retry(context.var.actor.id, context.req.param("id")),
     ),
   );
+  // One of the person's suggestions, whatever its status: how a card in Chat says Started or Hidden.
+  routes.get("/suggestions/:id", async (context) =>
+    context.json({
+      suggestion: await store.suggestion(
+        context.var.actor.id,
+        context.req.param("id"),
+      ),
+    }),
+  );
   routes.post("/suggestions/:id/start", async (context) =>
     context.json({
       suggestion: await engine.start(

@@ -1,19 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  type ComponentProps,
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
-import { DuetCard } from "@/components/duet/kit";
 import {
   proactiveSuggestionsQueryOptions,
   resolveSuggestionMutationOptions,
 } from "@/lib/proactive";
 import { cn } from "@/lib/utils";
-import { SwipeToAnswer } from "./swipe-to-answer";
+import { SuggestionCard } from "./suggestion-card";
 
 /** How long "Started" stays above the composer, or Tasks' tab bar, before it goes. */
 export const STARTED_MS = 4000;
@@ -46,7 +46,15 @@ export function StartedLine({
 
 type ChatBot = { id: string; name: string };
 
-const ChatBotContext = createContext<ChatBot | null>(null);
+type ChatSuggestions = {
+  bot: ChatBot;
+  /** Suggestions a check-in already put in the thread as cards, so the dock does not draw them twice. */
+  inThread: ReadonlySet<string>;
+  /** A card in the thread says which suggestion it shows; the returned function takes it back. */
+  showInThread: (id: string) => () => void;
+};
+
+const ChatSuggestionsContext = createContext<ChatSuggestions | null>(null);
 
 /**
  * Chat's Bot, for the card above its composer. Only Chat provides it: a suggestion is that Bot's
@@ -59,9 +67,41 @@ export function ChatSuggestionProvider({
   bot: ChatBot;
   children: ReactNode;
 }) {
-  return (
-    <ChatBotContext.Provider value={bot}>{children}</ChatBotContext.Provider>
+  const [inThread, setInThread] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
+  const showInThread = useCallback((id: string) => {
+    setInThread((shown) => new Set(shown).add(id));
+    return () =>
+      setInThread((shown) => {
+        const next = new Set(shown);
+        next.delete(id);
+        return next;
+      });
+  }, []);
+  const value = useMemo(
+    () => ({ bot, inThread, showInThread }),
+    [bot, inThread, showInThread],
+  );
+  return (
+    <ChatSuggestionsContext.Provider value={value}>
+      {children}
+    </ChatSuggestionsContext.Provider>
+  );
+}
+
+/** Chat's Bot, or null in any other conversation. */
+export function useChatBot(): ChatBot | null {
+  return useContext(ChatSuggestionsContext)?.bot ?? null;
+}
+
+/**
+ * Say, for as long as it is drawn, that a card in the thread shows this suggestion, so the card
+ * above the composer moves on to another. Does nothing outside Chat.
+ */
+export function useShownInThread(id: string) {
+  const showInThread = useContext(ChatSuggestionsContext)?.showInThread;
+  useEffect(() => showInThread?.(id), [showInThread, id]);
 }
 
 /**
@@ -69,15 +109,24 @@ export function ChatSuggestionProvider({
  * above the composer. Start runs it as a task the person asked for, in the conversation the
  * research belongs to; Hide dismisses it. Both are the same actions Tasks offers, so a suggestion
  * answered here is answered there too. On a touch screen the card also slides off: right to start
- * it, left to hide it. Nothing is drawn outside Chat, or when there is nothing new.
+ * it, left to hide it. Nothing is drawn outside Chat, or when there is nothing new, or for a
+ * suggestion a check-in already put in the thread above.
  */
 export function ChatSuggestionCard() {
-  const bot = useContext(ChatBotContext);
+  const chat = useContext(ChatSuggestionsContext);
   // Split so that a conversation outside Chat never asks for suggestions at all.
-  return bot ? <SuggestionFor bot={bot} /> : null;
+  return chat ? (
+    <SuggestionFor bot={chat.bot} inThread={chat.inThread} />
+  ) : null;
 }
 
-function SuggestionFor({ bot }: { bot: ChatBot }) {
+function SuggestionFor({
+  bot,
+  inThread,
+}: {
+  bot: ChatBot;
+  inThread: ReadonlySet<string>;
+}) {
   const queryClient = useQueryClient();
   const suggestions = useQuery(proactiveSuggestionsQueryOptions());
   const act = useMutation(resolveSuggestionMutationOptions(queryClient));
@@ -90,83 +139,31 @@ function SuggestionFor({ bot }: { bot: ChatBot }) {
   }, [started]);
 
   if (started) return <StartedLine botName={bot.name} className="mb-2.5" />;
-  const suggestion = suggestions.data?.find((item) => item.agentId === bot.id);
+  const suggestion = suggestions.data?.find(
+    (item) => item.agentId === bot.id && !inThread.has(item.id),
+  );
   if (!suggestion) return null;
-  const busy = act.isPending && act.variables?.id === suggestion.id;
-  // One path for the buttons and the drag. `comeBack` puts a card the drag sent off back in place
-  // when the answer fails, so the error below is there to read.
-  const answer = (action: "start" | "dismiss", comeBack?: () => void) =>
-    act.mutate(
-      { id: suggestion.id, action },
-      {
-        onSuccess: () => {
-          if (action === "start") setStarted(true);
-        },
-        onError: () => comeBack?.(),
-      },
-    );
+  const mine = act.variables?.id === suggestion.id;
   return (
     // Keyed so that the next suggestion arrives at rest, not where the last one was sent.
-    <SwipeToAnswer
-      disabled={busy}
+    <SuggestionCard
+      busy={act.isPending && mine}
+      error={act.error && mine ? act.error.message : null}
+      glass
+      heading={`${bot.name} could take this on`}
       key={suggestion.id}
-      onHide={(comeBack) => answer("dismiss", comeBack)}
-      onStart={(comeBack) => answer("start", comeBack)}
-    >
-      <DuetCard
-        aria-label={`${bot.name} could take this on`}
-        className="px-4 py-3"
-        glass
-        role="region"
-      >
-        <p className="type-label font-semibold text-duet-violet">
-          {bot.name} could take this on
-        </p>
-        <p className="type-row mt-0.5 font-semibold [overflow-wrap:anywhere]">
-          {suggestion.title}
-        </p>
-        {suggestion.detail ? (
-          <p className="type-sub line-clamp-2 text-duet-ink-2 [overflow-wrap:anywhere]">
-            {suggestion.detail}
-          </p>
-        ) : null}
-        {suggestion.sourceApp ? (
-          <p className="type-label mt-0.5 text-duet-ink-3">
-            From {suggestion.sourceApp}
-          </p>
-        ) : null}
-        {act.error && act.variables?.id === suggestion.id ? (
-          <p className="type-label mt-1 text-duet-red" role="alert">
-            {act.error.message}
-          </p>
-        ) : null}
-        <div className="mt-2.5 flex gap-2">
-          <SmallPill disabled={busy} onClick={() => answer("dismiss")}>
-            Hide
-          </SmallPill>
-          <SmallPill disabled={busy} onClick={() => answer("start")} primary>
-            Start
-          </SmallPill>
-        </div>
-      </DuetCard>
-    </SwipeToAnswer>
-  );
-}
-
-function SmallPill({
-  primary = false,
-  ...props
-}: ComponentProps<"button"> & { primary?: boolean }) {
-  return (
-    <button
-      className={cn(
-        "type-label h-9 flex-1 rounded-full font-semibold transition-[filter,transform,opacity] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
-        primary
-          ? "bg-duet-black text-duet-on-black hover:brightness-125"
-          : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
-      )}
-      type="button"
-      {...props}
+      onAnswer={(action, comeBack) =>
+        act.mutate(
+          { id: suggestion.id, action },
+          {
+            onSuccess: () => {
+              if (action === "start") setStarted(true);
+            },
+            onError: () => comeBack?.(),
+          },
+        )
+      }
+      suggestion={suggestion}
     />
   );
 }
