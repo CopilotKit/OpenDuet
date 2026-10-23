@@ -55,7 +55,7 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 | Capability                   | What it means for you                                                                 | Status          |
 | ---------------------------- | ------------------------------------------------------------------------------------- | --------------- |
 | A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away.         | Available today |
-| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Every action is checked against policy and recorded. | Available today |
+| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Anything you type while it carries an action out waits its turn and is answered after. Every action is checked against policy and recorded. | Available today |
 | Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. | Available today |
 | Memory                       | Threads and memory carry over through CopilotKit Intelligence.                        | Available today |
 | Skills                       | Reusable instructions you write once and call with `/`.                               | Available today |
