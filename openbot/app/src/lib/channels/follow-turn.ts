@@ -13,23 +13,27 @@ import { newId } from "@/lib/new-id";
  */
 
 /**
- * Whether a run holds this thread right now, as the runtime's own join answers it.
+ * The run holding this thread right now, as the runtime's own join answers it: its id, or null when
+ * the thread is idle.
  *
  * The realtime join answers with the id of the run holding the thread, and with none when it is idle.
  * The SDK keeps that answer to itself, and the events a join replays cannot say it either: a long
  * history replays for seconds, and at any moment of it the last run replayed may be one that ended
- * long ago or the one still going. So when it matters, the question is put again directly.
+ * long ago or the one still going. So the question is put directly, as Chat opens.
  *
- * Null when the runtime cannot say: a transport that answers a join with a replay rather than an
- * answer, or a join that failed. The caller then falls back on what the replay showed.
+ * Undefined when the runtime cannot say: a transport that answers a join with a replay rather than
+ * an answer, or a join that failed. The caller then falls back on what the replay shows.
+ *
+ * `forwardedProps.openbotAsk` names the request for whoever reads the traffic; the runtime reads
+ * only the thread from a join.
  */
-export async function threadRunning({
+export async function liveRun({
   agentId,
   threadId,
 }: {
   agentId: string;
   threadId: string;
-}): Promise<boolean | null> {
+}): Promise<string | null | undefined> {
   try {
     const response = await tryClient(
       `/api/copilotkit/agent/${encodeURIComponent(agentId)}/connect`,
@@ -42,20 +46,22 @@ export async function threadRunning({
           tools: [],
           context: [],
           state: {},
-          forwardedProps: {},
+          forwardedProps: { openbotAsk: "live-run" },
         },
       },
     );
-    if (response.status === 204) return false;
-    if (!response.ok) return null;
+    if (response.status === 204) return null;
+    if (!response.ok) return undefined;
     if (!response.headers.get("content-type")?.includes("application/json")) {
       await response.body?.cancel().catch(() => undefined);
-      return null;
+      return undefined;
     }
     const answer = (await response.json()) as { runId?: unknown };
-    return typeof answer.runId === "string" && answer.runId.length > 0;
+    return typeof answer.runId === "string" && answer.runId.length > 0
+      ? answer.runId
+      : null;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -147,4 +153,24 @@ export async function followTurn({
     await wait(retryMs);
     if (stopped()) return;
   }
+}
+
+/**
+ * After Stop, let the agent build a fresh realtime connection for its next run.
+ *
+ * WHY. Stop asks the realtime channel to stop the run and leaves it in the same breath, so the
+ * channel's reply to the stop is never read, and the SDK's handler for that reply fires instead on
+ * the push's 10-second timeout. That handler cleans up whatever channel and socket the agent holds
+ * AT THAT MOMENT: a message sent within those 10 seconds had its run's socket closed under it two
+ * seconds in, so its answer never streamed into the tab (the server did answer), and a reload was
+ * the only way to see it.
+ *
+ * Forgetting the agent's realtime delegate means the next run builds its own, and the stale handler
+ * cleans up the old one, which is already closed. The cost is the old delegate's replay cursor, so
+ * the next join replays the thread from the start, which `follow` counts runs against already.
+ * `delegate` is not public API: on an agent without one this does nothing, and Stop behaves as before.
+ */
+export function freshConnectionAfterStop(agent: object): void {
+  const holder = agent as { delegate?: unknown };
+  if (holder.delegate !== undefined) holder.delegate = undefined;
 }

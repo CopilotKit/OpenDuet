@@ -40,6 +40,7 @@ export function ConversationView({
   messages,
   busy = false,
   notice,
+  queuedNotice,
   agents = [],
   commands,
   channelId,
@@ -61,6 +62,11 @@ export function ConversationView({
   busy?: boolean;
   /** Shown above the composer. An error, or why this conversation is read-only. */
   notice?: ReactNode;
+  /**
+   * Shown above the composer while something is Queued, and only then: why it has not gone yet.
+   * A caller sets it when the turn it waits behind has gone quiet.
+   */
+  queuedNotice?: string;
   agents?: readonly AgentOption[];
   /**
    * The `/` menu for this Bot's granted skills, supplied by the route that owns grant loading.
@@ -583,6 +589,11 @@ export function ConversationView({
       >
         {/* Chat's Bot's newest suggestion; nothing in any other conversation. */}
         {inShell ? <ChatSuggestionCard /> : null}
+        {queuedNotice && queued.length > 0 ? (
+          <p className="pb-2 text-sm text-muted-foreground" role="status">
+            {queuedNotice}
+          </p>
+        ) : null}
         {notice}
         <Composer
           agents={agents}

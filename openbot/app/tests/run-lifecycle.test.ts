@@ -1,21 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Message } from "@ag-ui/core";
 import { frameFirstDay } from "@/lib/channels/first-day";
+import { followTurn, joinOrFollow, liveRun } from "@/lib/channels/follow-turn";
 import {
-  followTurn,
-  joinOrFollow,
-  threadRunning,
-} from "@/lib/channels/follow-turn";
-import {
+  APPROVAL_DECIDED_RESULT,
+  APPROVAL_WAITING_RESULT,
   claimSeed,
   firstDayAsked,
   forgetSeedClaims,
   interruptsToAnswer,
   isThreadBusyError,
+  isApprovalWaitingResult,
   isThreadLocked,
   sayableReason,
   seedStillNeeded,
+  staleApprovalWaits,
   ThreadBusyError,
+  waitingToolCalls,
+  withApprovalWaits,
   withoutMessages,
 } from "@/lib/channels/run-lifecycle";
 
@@ -132,6 +134,8 @@ describe("sayableReason", () => {
       "Thread has 1 pending interrupt(s) not addressed by resume: toolu_01FNPKUh78",
       'HTTP 502: {"error":"Failed to initialize thread"}',
       "REST run request failed: fetch failed",
+      "Failed to fetch",
+      "TypeError: NetworkError when attempting to fetch resource.",
     ]) {
       expect(sayableReason(raw)).toBe("Couldn't reach the Bot. Try again.");
     }
@@ -287,7 +291,7 @@ describe("followTurn", () => {
   });
 });
 
-describe("threadRunning", () => {
+describe("liveRun", () => {
   const realFetch = globalThis.fetch;
   let asked: { url: string; body: unknown }[] = [];
   afterEach(() => {
@@ -310,16 +314,19 @@ describe("threadRunning", () => {
 
   test("asks the runtime's join for the thread, and reads the run holding it", async () => {
     answer(() => Response.json({ threadId: "thread-1", runId: "run-9" }));
-    expect(await threadRunning(where)).toBe(true);
+    expect(await liveRun(where)).toBe("run-9");
     expect(asked[0]?.url).toBe("/api/copilotkit/agent/openduet/connect");
-    expect(asked[0]?.body).toMatchObject({ threadId: "thread-1" });
+    expect(asked[0]?.body).toMatchObject({
+      threadId: "thread-1",
+      forwardedProps: { openbotAsk: "live-run" },
+    });
   });
 
   test("an answer with no run, or no thread yet, is an idle thread", async () => {
     answer(() => Response.json({ threadId: "thread-1", joinToken: "t" }));
-    expect(await threadRunning(where)).toBe(false);
+    expect(await liveRun(where)).toBeNull();
     answer(() => new Response(null, { status: 204 }));
-    expect(await threadRunning(where)).toBe(false);
+    expect(await liveRun(where)).toBeNull();
   });
 
   test("cannot say when the join answers with a replay, fails, or is unreachable", async () => {
@@ -329,12 +336,136 @@ describe("threadRunning", () => {
           headers: { "content-type": "text/event-stream" },
         }),
     );
-    expect(await threadRunning(where)).toBeNull();
+    expect(await liveRun(where)).toBeUndefined();
     answer(() => new Response("down", { status: 502 }));
-    expect(await threadRunning(where)).toBeNull();
+    expect(await liveRun(where)).toBeUndefined();
     answer(() => {
       throw new Error("offline");
     });
-    expect(await threadRunning(where)).toBeNull();
+    expect(await liveRun(where)).toBeUndefined();
+  });
+});
+
+describe("approval waits in the history sent to the model", () => {
+  const ask = {
+    id: "ask",
+    role: "assistant",
+    toolCalls: [
+      {
+        id: "call-send",
+        type: "function",
+        function: { name: "gmail_send_reply", arguments: "{}" },
+      },
+    ],
+  } as Message;
+  const question: Message = { id: "q", role: "user", content: "Who is Leo?" };
+  let minted = 0;
+  const mint = () => `minted-${++minted}`;
+
+  test("the inbox's waits name their calls", () => {
+    expect(
+      waitingToolCalls([
+        {
+          id: "toolu_1",
+          metadata: { openbotWaiting: { approvalId: "a" } },
+        },
+        {
+          id: "i2",
+          toolCallId: "call-2",
+          metadata: { openbotWaiting: {} },
+        },
+        { id: "ask-3", metadata: {} },
+      ]),
+    ).toEqual(new Set(["toolu_1", "call-2"]));
+  });
+
+  test("a call still waiting in its card is answered with the truth, right after the call", () => {
+    const sent = withApprovalWaits(
+      [ask, question],
+      new Set(["call-send"]),
+      mint,
+    );
+    expect(sent.map((message) => message.id)).toEqual([
+      "ask",
+      expect.stringMatching(/^minted-/),
+      "q",
+    ]);
+    expect(sent[1]).toMatchObject({
+      role: "tool",
+      toolCallId: "call-send",
+      content: APPROVAL_WAITING_RESULT,
+    });
+    expect(isApprovalWaitingResult(sent[1] as Message)).toBe(true);
+    expect(APPROVAL_WAITING_RESULT).not.toMatch(/interrupted/i);
+  });
+
+  test("once the action's real result arrives, it takes the placeholder's place", () => {
+    const placeholder = {
+      id: "wait",
+      role: "tool",
+      toolCallId: "call-send",
+      content: APPROVAL_WAITING_RESULT,
+    } as Message;
+    const real = {
+      id: "real",
+      role: "tool",
+      toolCallId: "call-send",
+      content: "Sent.",
+    } as Message;
+    const reply: Message = {
+      id: "r",
+      role: "assistant",
+      content: "Sent to Ana.",
+    };
+    const sent = withApprovalWaits(
+      [ask, placeholder, question, real, reply],
+      new Set(),
+      mint,
+    );
+    expect(sent.map((message) => message.id)).toEqual([
+      "ask",
+      "real",
+      "q",
+      "r",
+    ]);
+  });
+
+  test("a placeholder whose card was decided, with no result here yet, says so without inventing one", () => {
+    const placeholder = {
+      id: "wait",
+      role: "tool",
+      toolCallId: "call-send",
+      content: APPROVAL_WAITING_RESULT,
+    } as Message;
+    expect(staleApprovalWaits([ask, placeholder], new Set())).toBe(true);
+    expect(staleApprovalWaits([ask, placeholder], new Set(["call-send"]))).toBe(
+      false,
+    );
+    const sent = withApprovalWaits(
+      [ask, placeholder, question],
+      new Set(),
+      mint,
+    );
+    expect(sent[1]).toMatchObject({
+      id: "wait",
+      content: APPROVAL_DECIDED_RESULT,
+    });
+    // Still waiting: unchanged.
+    const waiting = [ask, placeholder, question];
+    expect(withApprovalWaits(waiting, new Set(["call-send"]), mint)).toBe(
+      waiting,
+    );
+  });
+
+  test("nothing waiting and nothing to settle is the same array", () => {
+    const messages = [ask, question];
+    expect(withApprovalWaits(messages, new Set(), mint)).toBe(messages);
+    const answered = [
+      ask,
+      { id: "t", role: "tool", toolCallId: "call-send", content: "Sent." },
+    ] as Message[];
+    expect(withApprovalWaits(answered, new Set(["call-send"]), mint)).toBe(
+      answered,
+    );
   });
 });

@@ -347,14 +347,20 @@ test("a drained turn whose send fails keeps the rows behind the message the tran
   firstRun.settle(finished(runs[0] as RunAgentInput));
   await waitFor(() => expect(runs).toHaveLength(2));
 
-  // The drained message reached the wire carrying the row, which is what makes the release below
-  // wrong: the same message is now in `agent.messages` and drawn in the transcript.
+  // The drained message reached the wire carrying the row. The send never reached the server's
+  // run, so it is not left on the agent as a sent turn: it goes back to the queue below, still
+  // pointing at the row, which is what makes a release here wrong.
+  const drained = (runs[1] as RunAgentInput).messages.filter(
+    (message) => message.role === "user",
+  );
+  expect(JSON.stringify(drained.at(-1)?.content)).toContain(
+    attachmentUrl("stored-plan.txt"),
+  );
   await waitFor(() =>
-    expect(JSON.stringify(lastUserContent())).toContain(
+    expect(JSON.stringify(lastUserContent())).not.toContain(
       attachmentUrl("stored-plan.txt"),
     ),
   );
-  expect(view.getAllByText("Use the attached plan").length).toBeGreaterThan(0);
 
   // THE FINDING. Nothing may delete a row that a message on this screen still points at. The
   // release that used to happen here left the transcript showing an attachment whose bytes were
