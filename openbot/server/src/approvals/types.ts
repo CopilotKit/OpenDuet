@@ -207,6 +207,8 @@ export type ApprovalStore = {
   open(action: ApprovalAction): Promise<ApprovalRecord>;
   get(ownerUserId: string, id: string): Promise<ApprovalRecord>;
   list(ownerUserId: string): Promise<ApprovalRecord[]>;
+  /** Every request one run of a Bot opened. Without it, the recent ones in `list` are searched. */
+  forRun?(ownerUserId: string, runId: string): Promise<ApprovalRecord[]>;
   decide(
     ownerUserId: string,
     id: string,

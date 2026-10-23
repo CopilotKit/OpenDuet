@@ -88,6 +88,17 @@ export function createApprovalStore(database: Database): ApprovalStore {
         .orderBy(desc(approvalRequests.createdAt))
         .limit(100);
     },
+    async forRun(owner, runId) {
+      return database
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.ownerUserId, owner),
+            eq(approvalRequests.runId, runId),
+          ),
+        );
+    },
     async open(action) {
       return database.transaction(async (tx) => {
         // A request the policy gate opened was opened because something asked for the person; a

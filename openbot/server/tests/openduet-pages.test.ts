@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { FIX_SILENTLY } from "../src/openduet/page-content";
 import {
   PAGE_TOOL,
   type PageInput,
@@ -213,7 +214,8 @@ describe("the make_page tool", () => {
           slides: [
             {
               title: "Too much",
-              blocks: Array.from({ length: 4 }, () => ({
+              // More than a slide takes from the model; a fifth block continues.
+              blocks: Array.from({ length: 9 }, () => ({
                 type: "text",
                 text: "a",
               })),
@@ -229,7 +231,9 @@ describe("the make_page tool", () => {
       const answer = await tool().execute(args);
       expect(answer).toStartWith("Refused. make_page could not save this.");
       expect(answer).toContain(where);
-      expect(answer).toEndWith("Fix it and call make_page again.");
+      expect(answer).toEndWith(
+        `Fix it and call make_page again. ${FIX_SILENTLY}`,
+      );
     }
   });
 

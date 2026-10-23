@@ -25,6 +25,7 @@ test("an always-allow for a group does not cover people added to it later", asyn
     approvals: {
       rules: async () => rules as never,
       list: async () => [],
+      consume: async () => true,
       open: async (action: never) => {
         opened.push(action);
         return {

@@ -27,6 +27,17 @@ type NativeRun = {
 };
 const nativeRuns = new AsyncLocalStorage<NativeRun>();
 
+/**
+ * Whether the run the caller is part of is waiting on a person: one of its tool calls was held for
+ * an approval or a question, and the run has stopped to wait for the answer.
+ *
+ * Read by a tool that must not act on a turn the person has not finished, such as the reply chips,
+ * which would otherwise offer the next choice under an approval card nobody has answered yet.
+ */
+export function nativeRunWaiting(): boolean {
+  return nativeRuns.getStore()?.waiting !== undefined;
+}
+
 export async function executeNativeApprovalTool<T>(
   name: string,
   args: unknown,
@@ -63,7 +74,14 @@ export async function executeNativeApprovalTool<T>(
   try {
     return await withApprovalContext(continuation, execute);
   } catch (error) {
-    if (error instanceof HeadlessToolSuspension) {
+    /*
+     * The run stops on the first decision. Another call the same step made can still stop on a
+     * decision of its own while this one is ending the run: that decision stands, is drawn as its
+     * own card, and is carried on with the first in one continuation once both are answered
+     * (`server/src/approvals/service.ts`, `carryOn`). It must not replace the decision the run
+     * already ended on.
+     */
+    if (error instanceof HeadlessToolSuspension && !run.waiting) {
       run.waiting = error;
       run.suspend(error);
     }

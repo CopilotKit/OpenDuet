@@ -55,9 +55,10 @@ function isSilent(message: Message): boolean {
  *
  * The rules, in order:
  *  1. A tool call is ANSWERED if a later message carries it as `toolCallId` before the next user
- *     message, or if the caller says it is answered elsewhere. Later, not merely present: a result
- *     ahead of its call is not a pairing any provider accepts either. And before the next user
- *     message, because that is where the model API stops looking: see `boundaryAfter` below.
+ *     or assistant message, or if the caller says it is answered elsewhere. Later, not merely
+ *     present: a result ahead of its call is not a pairing any provider accepts either. And before
+ *     the next user or assistant message, because that is where the model API stops looking: see
+ *     `boundaryAfter` below.
  *  2. An assistant message keeps only its answered calls. If that leaves it with no calls and
  *     nothing said, the message is dropped — an empty assistant husk is itself invalid for some
  *     providers, so stripping the call is not enough.
@@ -84,7 +85,8 @@ export function sanitizeSeededHistory(
   answeredElsewhere: ReadonlySet<string> = new Set(),
 ): Message[] {
   /*
-   * Where a call's answer may still land: before the next thing a person said.
+   * Where a call's answer may still land: before the next thing a person said, and before the
+   * assistant speaks again.
    *
    * The model API walks the CONVERTED conversation in order and refuses it the moment a user or
    * system message arrives while a call is still unanswered (`ai`'s `MissingToolResultsError`, in
@@ -101,6 +103,13 @@ export function sanitizeSeededHistory(
    * after one of those is answered as far as the model call is concerned, and treating the row as
    * a boundary would drop a call the request would have carried fine. If either forwarding flag is
    * ever turned on, that role becomes a boundary here too.
+   *
+   * A LATER ASSISTANT ROW IS A BOUNDARY TOO. A provider wants a call's result in the very next
+   * message: Anthropic refuses "`tool_use` ids were found without `tool_result` blocks immediately
+   * after", and OpenAI wants the tool rows straight after the call. Found live, on a conversation
+   * where an approval's continuation ran again from an older point: the thread is append-only, so
+   * the late run's answer to a call landed dozens of rows after it, behind other turns, and every
+   * message the person sent after that was refused with that error in red.
    */
   const boundaryAfter: number[] = new Array(history.length).fill(
     history.length,
@@ -112,7 +121,7 @@ export function sanitizeSeededHistory(
   ) {
     boundaryAfter[index] = next;
     const { role } = history[index] as { role?: string };
-    if (role === "user") next = index;
+    if (role === "user" || role === "assistant") next = index;
   }
 
   /** Where each call was made: the first assistant row carrying its id. */

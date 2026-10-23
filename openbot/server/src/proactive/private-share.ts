@@ -9,9 +9,15 @@
  *
  * WHERE PERMISSION LIVES. In the existing approvals ledger, always on, regardless of the owner's
  * general approvals switch: this is a check dots makes unconditionally. An "allow always" answer is
- * a standing rule for this Bot and this audience; "allow once" covers the same content to the same
- * audience in the same conversation for thirty minutes, so the Bot's retry after an approval passes
- * instead of asking again.
+ * a standing rule for this Bot and this audience; "allow once" covers ONE send of the same content
+ * to the same audience in the same conversation, within thirty minutes of the person's last answer
+ * in that step, so the Bot's retry after an approval passes instead of asking again.
+ *
+ * ONCE MEANS ONE SEND. The approval is the whole action here: the Bot is told to send again, and it
+ * is that send which goes out. So the send spends the approval, atomically, before it goes, and a
+ * second send of the same thing in the same conversation is refused rather than let through. Before
+ * that, every send inside the window passed, and a continuation retried five times sent the same
+ * email five times.
  *
  * OUTCOMES. `allowed`; `denied` (the person said no); or `pending`, where the caller must not send
  * and either throws the returned suspension (headless turns wait and resume on the decision) or
@@ -101,8 +107,16 @@ export function sharesWithOthers(input: PrivateShareInput) {
   );
 }
 
+/** What the Bot hears when it sends again something the person allowed once and that already went. */
+export const alreadySent = (audience: string) =>
+  `Not sent again: you allowed this once, and that permission was already used to send it to ${audience}. Do not send it again unless the person asks you to.`;
+
+const userTurns = (continuation: ApprovalContinuation | undefined) =>
+  (continuation?.messages ?? []).filter((message) => message.role === "user")
+    .length;
+
 export function createPrivateShareCheck(deps: {
-  approvals: Pick<ApprovalStore, "open" | "list" | "rules">;
+  approvals: Pick<ApprovalStore, "open" | "list" | "rules" | "consume">;
   now?: () => Date;
 }) {
   const now = deps.now ?? (() => new Date());
@@ -125,30 +139,30 @@ export function createPrivateShareCheck(deps: {
         };
     }
     const scope = audienceScope(input.audience);
-    const rules = await deps.approvals.rules(input.ownerUserId);
-    if (
-      rules.some(
+    const alwaysAllowed = async () =>
+      (await deps.approvals.rules(input.ownerUserId)).some(
         (rule) =>
           !rule.revokedAt &&
           rule.botId === input.botId &&
           rule.toolRef === PRIVATE_SHARE_TOOL_REF &&
           rule.effect === PRIVATE_SHARE_EFFECT &&
           rule.scope === scope,
-      )
-    )
-      return {
-        status: "allowed",
-        reason: "You always allow this.",
-        byPerson: true,
-      };
+      );
+    const label = input.audience.label ?? scope;
 
     const continuation = input.continuation ?? currentApprovalContext();
     if (!continuation)
-      return {
-        status: "denied",
-        message:
-          "Sharing private information with other people needs your permission, and this send is not part of a run that can ask. It was not sent.",
-      };
+      return (await alwaysAllowed())
+        ? {
+            status: "allowed",
+            reason: "You always allow this.",
+            byPerson: true,
+          }
+        : {
+            status: "denied",
+            message:
+              "Sharing private information with other people needs your permission, and this send is not part of a run that can ask. It was not sent.",
+          };
     const contentDigest = createHash("sha256")
       .update(input.content)
       .digest("hex");
@@ -159,7 +173,7 @@ export function createPrivateShareCheck(deps: {
       effect: PRIVATE_SHARE_EFFECT,
       scope,
       args: {
-        audience: input.audience.label ?? scope,
+        audience: label,
         recipients: input.audience.recipientUserIds.length,
         contentDigest,
         preview: approvalPreview(input.content.slice(0, 280)),
@@ -169,20 +183,59 @@ export function createPrivateShareCheck(deps: {
     };
     const action = approvalAction(candidate);
 
-    // The retry after an "allow once": same content, same audience, same conversation, recently.
-    const recent = (await deps.approvals.list(input.ownerUserId)).find(
+    /*
+     * The send after an approval: same content, same audience, same conversation, recently. Recent
+     * from the person's last answer in the step it was asked in, because a step that asked twice is
+     * carried on only once both are answered, however far apart.
+     */
+    const records = await deps.approvals.list(input.ownerUserId);
+    const answeredAt = (runId: string) =>
+      Math.max(
+        ...records
+          .filter((record) => record.action.runId === runId)
+          .map((record) => record.decidedAt?.getTime() ?? 0),
+      );
+    const allowed = records.filter(
       (record) =>
         record.action.actionDigest === action.actionDigest &&
         record.action.threadId === action.threadId &&
         (record.decision === "allow_once" ||
           record.decision === "allow_always") &&
-        record.decidedAt &&
-        now().getTime() - record.decidedAt.getTime() < ONCE_WINDOW_MS,
+        now().getTime() - answeredAt(record.action.runId) < ONCE_WINDOW_MS,
     );
-    if (recent)
+    // One send per answer: the first to spend it sends, and nobody else can spend it after.
+    for (const permit of allowed)
+      if (
+        permit.status === "approved" &&
+        (await deps.approvals.consume(
+          input.ownerUserId,
+          permit.id,
+          permit.action.actionDigest,
+        ))
+      )
+        return {
+          status: "allowed",
+          reason: "You allowed this share.",
+          byPerson: true,
+        };
+    /*
+     * Spent already, and the person has said nothing since: the same send again (a continuation run
+     * a second time, or the Bot repeating itself), not a new one to put to them. Once they have
+     * spoken, it is a new send and goes through the rule or the question below.
+     */
+    if (
+      allowed.some(
+        (permit) =>
+          permit.consumedAt &&
+          userTurns(permit.action.continuation) >= userTurns(continuation),
+      )
+    )
+      return { status: "denied", message: alreadySent(label) };
+
+    if (await alwaysAllowed())
       return {
         status: "allowed",
-        reason: "You allowed this share.",
+        reason: "You always allow this.",
         byPerson: true,
       };
 
@@ -192,9 +245,18 @@ export function createPrivateShareCheck(deps: {
         status: "denied",
         message: "You declined sharing this with them. It was not sent.",
       };
+    // This very send was answered before (a held group reply let out on its decision): it goes out
+    // only if it spends that answer now.
     if (request.status !== "pending")
-      return { status: "allowed", reason: "You allowed this share." };
-    const message = `Waiting for permission to share private information with ${input.audience.label ?? scope}. Nothing was sent.`;
+      return request.status === "approved" &&
+        (await deps.approvals.consume(
+          input.ownerUserId,
+          request.id,
+          action.actionDigest,
+        ))
+        ? { status: "allowed", reason: "You allowed this share." }
+        : { status: "denied", message: alreadySent(label) };
+    const message = `Waiting for permission to share private information with ${label}. Nothing was sent.`;
     return {
       status: "pending",
       approvalId: request.id,

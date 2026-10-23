@@ -56,6 +56,26 @@ function harness(overrides: Partial<ApprovedActionDependencies> = {}) {
   return { execute: createApprovedActionExecutor(deps), calls, coordination };
 }
 
+test("an approved share tells the Bot nothing went out yet, so it never reports a second send", async () => {
+  const args = { to: "rosa@clayworks.example", body: "We'll take Oat Satin." };
+  const action = approvalAction({
+    actorId: "person",
+    botId: "openduet",
+    toolRef: "openbot/private_share",
+    effect: "share_private",
+    scope: "external:rosa@clayworks.example",
+    args,
+    target: {},
+    continuation: continuation("gmail_send_reply", args),
+  });
+  const { execute, calls } = harness();
+  const told = await execute(action);
+  expect(told).toContain("Nothing has been sent yet");
+  expect(String(told)).not.toMatch(/\bagain\b/i);
+  // The approval is the action: nothing is called here, the Bot's own call sends it.
+  expect(calls).toHaveLength(0);
+});
+
 test("an approved hand-off is carried out by the coordination tool, not as a connector call", async () => {
   const args = { bot: "research-desk", task: "Define AG-UI" };
   const action = approvalAction({

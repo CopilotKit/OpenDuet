@@ -738,3 +738,150 @@ test("a request body that is not JSON answers 400, not a 500 with the parser's m
     expect(await response.json()).toEqual({ error: "Supply a valid request." });
   }
 });
+
+/**
+ * One step of a run that made two calls the person had to decide on: two cards, from one assistant
+ * message. Each decision is carried out on its own; the run is carried on once, by the last one.
+ */
+function stepOfTwo() {
+  const step = {
+    id: "step",
+    role: "assistant" as const,
+    toolCalls: ["call-a", "call-b"].map((id) => ({
+      id,
+      type: "function" as const,
+      function: { name: "computer_click", arguments: "{}" },
+    })),
+  };
+  return ["call-a", "call-b"].map((toolCallId) => ({
+    ...candidate,
+    args: { ref: toolCallId },
+    target: { ref: toolCallId, name: toolCallId },
+    continuation: { ...context, toolCallId, messages: [step] },
+  }));
+}
+
+async function twoWaiting() {
+  const store = storeFixture();
+  const service = serviceModule.createApprovalService(store);
+  for (const call of stepOfTwo())
+    await expect(service.gate(call)).rejects.toThrow();
+  const rows = await store.list("owner");
+  const first = rows.find((row) => row.action.toolCallId === "call-a");
+  const second = rows.find((row) => row.action.toolCallId === "call-b");
+  if (!first || !second) throw new Error("the step did not ask twice");
+  const effects: string[] = [];
+  const continued: {
+    approvalId: string;
+    continuation: { toolCallId: string; messages: unknown[] };
+    result: { content: string; error?: string };
+    answered?: { approvalId: string }[];
+  }[] = [];
+  const dependencies = {
+    validate: async (action: ApprovalAction) => action,
+    execute: async (action: ApprovalAction) => {
+      effects.push(action.toolCallId);
+      return `clicked ${action.toolCallId}`;
+    },
+    continue: async (input: (typeof continued)[number]) => {
+      continued.push(input);
+    },
+  };
+  // Decided one after the other, as a person does: the decision times differ.
+  const decide = async (id: string, decision: "allow_once" | "deny") => {
+    await Bun.sleep(3);
+    await service.decide("owner", id, decision);
+  };
+  return {
+    store,
+    service,
+    decide,
+    first,
+    second,
+    effects,
+    continued,
+    dependencies,
+  };
+}
+
+test("a step that asked twice carries on once both are decided, each carried out once", async () => {
+  const {
+    store,
+    service,
+    decide,
+    first,
+    second,
+    effects,
+    continued,
+    dependencies,
+  } = await twoWaiting();
+  await decide(first.id, "allow_once");
+  await service.resume("owner", first.id, dependencies);
+  // The first is done, and the run waits for the second instead of going on without it.
+  expect(effects).toEqual(["call-a"]);
+  expect(continued).toEqual([]);
+  expect((await store.get("owner", first.id)).status).toBe("consumed");
+
+  await decide(second.id, "allow_once");
+  await service.resume("owner", second.id, dependencies);
+  expect(effects).toEqual(["call-a", "call-b"]);
+  expect(continued).toHaveLength(1);
+  // One continuation answers both calls of the step, right after it.
+  expect(continued[0]?.continuation.toolCallId).toBe("call-b");
+  expect(continued[0]?.result.content).toBe("clicked call-b");
+  expect(continued[0]?.continuation.messages).toContainEqual(
+    expect.objectContaining({
+      role: "tool",
+      toolCallId: "call-a",
+      content: "clicked call-a",
+    }),
+  );
+  expect(continued[0]?.answered?.map((entry) => entry.approvalId)).toEqual([
+    second.id,
+    first.id,
+  ]);
+  for (const row of [first, second])
+    expect((await store.get("owner", row.id)).status).toBe("completed");
+
+  // Retried, in either order, nothing runs again and the run is not carried on twice.
+  await service.resume("owner", first.id, dependencies);
+  await service.resume("owner", second.id, dependencies);
+  expect(effects).toEqual(["call-a", "call-b"]);
+  expect(continued).toHaveLength(1);
+});
+
+test("in the reverse order, a refusal and an allow: one continuation, and only the allowed one runs", async () => {
+  const { service, decide, first, second, effects, continued, dependencies } =
+    await twoWaiting();
+  await decide(second.id, "deny");
+  await service.resume("owner", second.id, dependencies);
+  expect(continued).toEqual([]);
+  await decide(first.id, "allow_once");
+  await service.resume("owner", first.id, dependencies);
+  expect(effects).toEqual(["call-a"]);
+  expect(continued).toHaveLength(1);
+  expect(continued[0]?.continuation.messages).toContainEqual(
+    expect.objectContaining({
+      toolCallId: "call-b",
+      error: serviceModule.DECLINED_BY_PERSON,
+    }),
+  );
+});
+
+test("the last decision waits, as a retry, while the earlier one is still being carried out", async () => {
+  const { service, decide, first, second, effects, continued, dependencies } =
+    await twoWaiting();
+  await decide(first.id, "allow_once");
+  await decide(second.id, "allow_once");
+  // The second's work runs first: it is carried out, but the first's has not saved its result yet.
+  await expect(
+    service.resume("owner", second.id, dependencies),
+  ).rejects.toThrow(serviceModule.STEP_STILL_RUNNING);
+  expect(continued).toEqual([]);
+  await service.resume("owner", first.id, dependencies);
+  expect(continued).toEqual([]);
+  // Its retry finds both done, and carries the run on, without running the second again.
+  await service.resume("owner", second.id, dependencies);
+  expect(effects).toEqual(["call-b", "call-a"]);
+  expect(continued).toHaveLength(1);
+});

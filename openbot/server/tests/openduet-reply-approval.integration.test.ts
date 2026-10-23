@@ -397,6 +397,28 @@ describe("a reply OpenDuet drafted", () => {
     if (left) await approvals.decide(owner, left.id, "deny");
   });
 
+  test("Allow once is one send: the same reply again in the same conversation is not sent", async () => {
+    fake.reset();
+    const args = replyTo();
+    await inRun("thread-once-only", args, () => send(args)).catch(
+      () => undefined,
+    );
+    const [request] = await pending();
+    if (!request) throw new Error("nothing was waiting");
+    await approvals.decide(owner, request.id, "allow_once");
+    await inRun("thread-once-only", args, () => send(args));
+    expect(fake.sent()).toHaveLength(1);
+
+    // A continuation carried on twice, or a Bot repeating itself: refused, nothing sent, nobody asked.
+    const again = await inRun("thread-once-only", args, () => send(args)).catch(
+      (error: unknown) => error,
+    );
+    expect(again).toBeInstanceOf(PluginRefusedError);
+    expect(String((again as Error).message)).toContain("Not sent again");
+    expect(fake.sent()).toHaveLength(1);
+    expect(await pending()).toEqual([]);
+  });
+
   test("Always allow sends this one and the next one to the same person without asking", async () => {
     fake.reset();
     const args = replyTo();
