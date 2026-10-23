@@ -5,8 +5,8 @@ import { CardRow, DuetCard, OutcomePill, type PillTone } from "./kit";
 
 /*
  * A task OpenDuet is working on, as one compact row: what it is, where it stands, and a chevron that
- * opens it. The same row sits under the Bot's "On it" in Chat and in Tasks' Your tasks. The caller
- * supplies the link, since a task opens from both.
+ * opens it. It sits under the Bot's "On it" in Chat; Tasks draws its own rows (tasks-active.tsx).
+ * The caller supplies the link.
  */
 
 const PILL: Record<TaskStatus, { tone: PillTone; icon: DuetIconName | null }> =

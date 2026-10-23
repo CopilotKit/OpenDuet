@@ -14,12 +14,12 @@ import type { ActivityItem, ActivityKind } from "@/lib/bot-lifecycle/queries";
 import { cn } from "@/lib/utils";
 
 /*
- * The rows Tasks draws for the product's own Bot's work: Working on, Coming up and Done, read from
- * the ledgers OpenBot already keeps. This was the Activity tab; its "Handled for you" list is Done
- * at the foot of Tasks now, and the tab is Pages.
+ * The rows Tasks draws for the product's own Bot's work: what is under Working and Resolved on
+ * Active, and Coming up on Up next, read from the ledgers OpenBot already keeps. This was the
+ * Activity tab; its "Handled for you" list is part of Resolved now, and the tab is Pages.
  */
 
-/** One line of Working on, Coming up or Done on Tasks, from whichever ledger it came from. */
+/** One line of Working, Resolved or Coming up on Tasks, from whichever ledger it came from. */
 export type ActivityRow = {
   id: string;
   icon: DuetIconName;
@@ -163,7 +163,7 @@ export function answeredRows(
 /**
  * What the product's own Bot finished for the person, newest first: its routines, follow-ups and
  * delegated work from the ledgers OpenBot keeps, and the actions the person answered. Tasks lists
- * them under Done.
+ * them under Resolved.
  */
 export function handledRows(
   completed: readonly ActivityItem[],

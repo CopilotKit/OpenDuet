@@ -21,6 +21,8 @@ export type TaskRecord = {
   botId: string;
   /** The task's own conversation. */
   channelId: string;
+  /** That conversation's thread, which its approvals and questions name. Null once it is gone. */
+  threadId: string | null;
   title: string;
   why: string | null;
   origin: "asked" | "suggestion" | "check_in";

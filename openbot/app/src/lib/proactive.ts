@@ -21,6 +21,8 @@ export type ProactiveSetting = {
 export type ProactiveSuggestion = {
   id: string;
   agentId: string;
+  /** The research run that left it; one the person asked for starts with `asked:`. */
+  runId?: string;
   title: string;
   detail: string;
   sourceApp: string | null;
@@ -29,6 +31,11 @@ export type ProactiveSuggestion = {
   status?: "open" | "started" | "dismissed";
   createdAt: string;
 };
+
+/** Whether the person asked for this card themselves, from a conversation or from the + on Tasks. */
+export function personAsked(suggestion: Pick<ProactiveSuggestion, "runId">) {
+  return suggestion.runId?.startsWith("asked:") ?? false;
+}
 
 export const proactiveKeys = {
   settings: ["proactive", "settings"] as const,

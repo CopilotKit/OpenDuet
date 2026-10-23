@@ -64,6 +64,7 @@ const rosa = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
   id: "rosa",
   botId: "openduet",
   channelId: "rosa-channel",
+  threadId: "rosa-thread",
   title: "Draft a reply to Rosa about Oat Satin",
   why: null,
   origin: "asked",

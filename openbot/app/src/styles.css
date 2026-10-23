@@ -428,6 +428,32 @@ body {
   }
 }
 
+/* A task checked off on Tasks: the check pops in a little past full size and settles. */
+.duet-check-land {
+  display: block;
+  animation: duet-check-land 320ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes duet-check-land {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duet-check-land {
+    animation: none;
+  }
+}
+
 .tool-line[open] .tool-line-chevron {
   transform: rotate(90deg);
 }

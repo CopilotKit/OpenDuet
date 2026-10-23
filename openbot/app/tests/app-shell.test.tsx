@@ -43,10 +43,15 @@ afterEach(() => {
 });
 
 let inbox: Record<string, unknown> = { requests: [], questions: [] };
+let tasks: unknown[] = [];
+afterEach(() => {
+  tasks = [];
+});
 function serving() {
   global.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/approvals") return Response.json(inbox);
+    if (url === "/api/openduet/tasks") return Response.json({ tasks });
     if (url.startsWith("/api/bots/attention"))
       return Response.json({ bots: [] });
     if (url === "/api/settings/preferences")
@@ -163,7 +168,7 @@ test("on a page open over the list, the Pages tab is the one drawn current", asy
   );
 });
 
-test("the Tasks badge counts what Needs you lists: pending actions and open questions", async () => {
+test("the Tasks badge counts the approvals and questions waiting outside any task", async () => {
   inbox = {
     requests: [
       pending("a"),
@@ -186,6 +191,44 @@ test("the Tasks badge counts what Needs you lists: pending actions and open ques
     await view.findByRole("link", { name: "Tasks, 3 waiting" }),
   ).toBeTruthy();
   expect(view.getByRole("link", { name: "Pages" })).toBeTruthy();
+});
+
+test("the Tasks badge counts what Needs input lists: a task waiting on the person once, with its own approval", async () => {
+  const task = (id: string, status: string) => ({
+    id,
+    botId: "openduet",
+    channelId: `${id}-channel`,
+    threadId: `${id}-thread`,
+    title: id,
+    why: null,
+    origin: "asked",
+    suggestionId: null,
+    sourceApp: null,
+    sourceLink: null,
+    status,
+    resolvedAt: null,
+    createdAt: "2026-10-21T10:00:00Z",
+    updatedAt: "2026-10-21T10:00:00Z",
+  });
+  tasks = [
+    task("rosa", "needs_input"),
+    task("sam", "working"),
+    task("hearth", "ready_for_review"),
+  ];
+  const inRosa = pending("in-rosa");
+  inbox = {
+    // Rosa's own approval is Rosa's task, counted once; the other is on its own.
+    requests: [
+      { ...inRosa, action: { ...inRosa.action, threadId: "rosa-thread" } },
+      pending("loose"),
+    ],
+    questions: [],
+  };
+  serving();
+  const view = draw(<TabBar current="chat" />);
+  expect(
+    await view.findByRole("link", { name: "Tasks, 2 waiting" }),
+  ).toBeTruthy();
 });
 
 test("with nothing waiting Tasks carries no badge", async () => {

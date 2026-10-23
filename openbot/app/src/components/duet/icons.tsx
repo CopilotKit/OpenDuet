@@ -31,7 +31,10 @@ export type DuetIconName =
   | "x"
   | "stop"
   | "page"
-  | "chevronLeft";
+  | "chevronLeft"
+  | "search"
+  | "sort"
+  | "calendar";
 
 const PATHS: Record<DuetIconName, ReactNode> = {
   menu: <path d="M4 7h16M4 12h16M4 17h10" />,
@@ -132,6 +135,19 @@ const PATHS: Record<DuetIconName, ReactNode> = {
     </>
   ),
   chevronLeft: <path d="m15 18-6-6 6-6" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.6-3.6" />
+    </>
+  ),
+  sort: <path d="m21 16-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16" />,
+  calendar: (
+    <>
+      <rect x="3" y="4.5" width="18" height="17" rx="2.5" />
+      <path d="M8 2.5v4M16 2.5v4M3 10h18" />
+    </>
+  ),
 };
 
 export function DuetIcon({
