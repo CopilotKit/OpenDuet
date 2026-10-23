@@ -1234,4 +1234,96 @@ describe("repliesLast", () => {
       ]),
     ).toEqual(["u1", "a3", "call-again"]);
   });
+
+  test("leaves out a page the tool refused, so a retry leaves no empty row above the card", () => {
+    const page = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "make_page", arguments: "{}" },
+    });
+    const saved = JSON.stringify({ id: "deck-1", kind: "slides" });
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Make me a deck." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [page("call-1"), page("call-2"), page("call-3")],
+        },
+        {
+          id: "t1",
+          role: "tool",
+          toolCallId: "call-1",
+          content:
+            "Refused. make_page could not save this. slides.0: This slide is too full to read on a phone.",
+        },
+        {
+          id: "t2",
+          role: "tool",
+          toolCallId: "call-2",
+          content:
+            "Error: Invalid input for tool make_page: Type validation failed",
+        },
+        // Saved, and encoded once more on the way through the runtime.
+        {
+          id: "t3",
+          role: "tool",
+          toolCallId: "call-3",
+          content: JSON.stringify(saved),
+        },
+        { id: "a2", role: "assistant", content: "It's a 2-minute read." },
+        {
+          id: "a3",
+          role: "assistant",
+          content: "",
+          toolCalls: [page("call-4")],
+        },
+      ]),
+      // A call still in flight is kept: it draws the placeholder while the page is made.
+    ).toEqual(["u1", "a2", "call-3", "call-4"]);
+  });
+
+  test("leaves out what the Bot said between a refused page and its retry, but not after a last refusal", () => {
+    const page = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "make_page", arguments: "{}" },
+    });
+    const refusal = "Refused. make_page could not save this.";
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Make me a one-slide deck." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [page("call-1")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: refusal },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "Two slides it is.",
+          toolCalls: [page("call-2")],
+        },
+        {
+          id: "t2",
+          role: "tool",
+          toolCallId: "call-2",
+          content: JSON.stringify({ id: "deck-1" }),
+        },
+        { id: "a3", role: "assistant", content: "The deck is ready." },
+        { id: "u2", role: "user", content: "And a page?" },
+        {
+          id: "a4",
+          role: "assistant",
+          content: "",
+          toolCalls: [page("call-3")],
+        },
+        { id: "t3", role: "tool", toolCallId: "call-3", content: refusal },
+        { id: "a5", role: "assistant", content: "I couldn't make that page." },
+      ]),
+    ).toEqual(["u1", "a3", "call-2", "u2", "a5"]);
+  });
 });
