@@ -229,8 +229,11 @@ describe("a deck the review made, which the viewer cut short", () => {
     expect(lists[0]?.type === "list" && lists[0].title).toBe(
       "Order-related items",
     );
-    for (const list of lists.slice(1))
-      expect(list?.type === "list" && list.title).toBeUndefined();
+    // Every continuation is a list, and none repeats the title.
+    for (const list of lists.slice(1)) {
+      expect(list?.type).toBe("list");
+      expect(list && "title" in list).toBe(false);
+    }
   });
 
   test("a deck's thumbnail shows a continued chart slide under its own title", () => {
