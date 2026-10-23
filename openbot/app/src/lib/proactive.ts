@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   mutationOptions,
   type QueryClient,
   queryOptions,
@@ -51,6 +52,8 @@ export type StartedSuggestion = Pick<
   waitingOn: { kind: "approval" | "question"; id: string } | null;
   /** When the person checked it off. Null while it is still theirs to deal with. */
   resolvedAt: string | null;
+  /** Whether Try again can run it: the server's verdict, false for a decision it couldn't carry out. */
+  canRetry: boolean;
   /** When it last changed. */
   at: string;
   /** Where the turn runs and its reply lands: the research setting's conversation. */
@@ -102,6 +105,8 @@ export const proactiveSuggestionsQueryOptions = () =>
 export const startedSuggestionsQueryOptions = (resolvedLimit = RESOLVED_PAGE) =>
   queryOptions({
     queryKey: proactiveKeys.startedList(resolvedLimit),
+    // Showing more is the same list, longer: what is on screen stays while the rest arrives.
+    placeholderData: keepPreviousData,
     queryFn: async (): Promise<StartedList> =>
       (
         await client(`/api/proactive/started?resolved=${resolvedLimit}`, {

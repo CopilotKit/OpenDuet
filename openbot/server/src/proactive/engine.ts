@@ -11,6 +11,7 @@
 import { z } from "zod";
 import type { AuditInitiator } from "../audit";
 import type { MemoryStore } from "../memory/store";
+import { REPLIES_TOOL } from "../openduet/replies";
 import { REFUSAL_MARKER } from "../plugins/tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import {
@@ -69,11 +70,17 @@ export type ProactiveEngineDeps = {
     scope: ProactiveScope,
     input: { id: string; text: string; kind: "reply" },
   ): Promise<void>;
-  /** A person-started turn in their channel with this text as their message, and what it replied. */
+  /**
+   * A person-started turn in their channel with this text as their message. Returns the turn's
+   * reply, and whether it ended by offering reply chips: a choice put to the person, as
+   * much a question as one ending in "?".
+   */
   startTask(
     scope: ProactiveScope,
     input: { runId: string; text: string; signal: AbortSignal },
-  ): Promise<{ replyText?: string | null } | undefined>;
+  ): Promise<
+    { replyText?: string | null; offeredReplies?: boolean } | undefined
+  >;
   catalogue: {
     listServers(): Promise<
       { id: string; title: string; tools: { ref: string }[] }[]
@@ -509,8 +516,10 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
               text: `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`,
               signal,
             });
+            const ending = replyEnding(result?.replyText);
             await deps.store.recordTaskOutcome(suggestion.id, {
-              reply: replyTail(result?.replyText),
+              reply: ending.tail,
+              asks: ending.asks || Boolean(result?.offeredReplies),
             });
           } catch (error) {
             // Stopped on a request only the person can answer. That is where it ended, not a failure.
@@ -556,38 +565,106 @@ export function startedTaskTestFailure(
   };
 }
 
+/**
+ * Whether the turn that answered `messageId` ended by offering reply chips: an assistant message
+ * after it, in the thread's history, called the chips tool. A choice put to the person, as much a
+ * question as one ending in "?".
+ */
+export function endedOnReplies(
+  messages: readonly {
+    id: string;
+    role: string;
+    toolCalls?: { name: string }[];
+  }[],
+  messageId: string,
+): boolean {
+  const asked = messages.findLastIndex((message) => message.id === messageId);
+  if (asked < 0) return false;
+  return messages
+    .slice(asked + 1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        (message.toolCalls ?? []).some((call) => call.name === REPLIES_TOOL),
+    );
+}
+
 /** How long a kept reply tail may be. A next step is one line on Tasks. */
 const REPLY_TAIL_MAX = 240;
 /** A last sentence shorter than this is kept with the one before it. */
 const SHORT_SENTENCE = 20;
 
+/** A paragraph that is a list: every line of it is an item. */
+const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/;
+/** A paragraph that is something the Bot drafted for the person, not what it says to them. */
+const DRAFT =
+  /^\s*(?:>|```|["“'‘]|\*{0,2}_{0,2}(?:draft|subject|to|dear|hi|hello)\b[^\n]{0,40}?:)/i;
+/** What can trail a question and still leave it one: closing quotes, brackets, emoji, spaces. */
+const TRAILING = /(?:[\s"”'’)\]}»\p{Extended_Pictographic}]|\uFE0F|\u200D)+$/u;
+
+/** Whether a sentence asks something, once what trails its question mark is set aside. */
+const asksIn = (sentence: string) =>
+  sentence.replace(TRAILING, "").endsWith("?");
+
+const plain = (line: string) =>
+  line
+    .replace(/^\s*(?:[-*+>•]|#{1,6}|\d+[.)])\s+/, "")
+    .replace(/[*_`]+/g, "")
+    .trim();
+
 /**
- * The last sentence of a reply, without its Markdown, for Tasks' next step. A Bot ends a turn on
- * what comes next, so its last sentence is the next step in its own words; one ending in a question
- * is the Bot waiting on the person. Null when there is nothing to say.
+ * How a reply ends, for Tasks: the sentence to show as the next step, and whether it asks the
+ * person something.
+ *
+ * A Bot ends a turn on what comes next, in the last paragraph it writes to the person. Lists and
+ * drafts that close a reply are what it prepared, not what it says, so they are set aside. Within
+ * that last paragraph its last question is the next step, even with a remark after it; without
+ * one, its last sentence is. A short closing sentence keeps the one before it, so "Do you want me
+ * to?" never stands alone. Null when there is nothing to say.
  */
-export function replyTail(reply: string | null | undefined): string | null {
-  const lines = (reply ?? "")
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/^\s*(?:[-*+>]|#{1,6}|\d+[.)])\s+/, "")
-        .replace(/[*_`]+/g, "")
-        .trim(),
-    )
-    .filter((line) => /[\p{L}\p{N}]/u.test(line));
-  const sentences = lines.flatMap((line) =>
-    line.split(/(?<=[.!?])\s+(?=\S)/).map((part) => part.trim()),
-  );
-  const last = sentences.at(-1);
-  if (!last) return null;
-  // A short closing line leans on the one before it: "Do you want me to?" says nothing alone.
-  const before = sentences.at(-2);
+export function replyEnding(reply: string | null | undefined): {
+  tail: string | null;
+  asks: boolean;
+} {
+  const paragraphs = (reply ?? "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => /[\p{L}\p{N}]/u.test(paragraph));
+  const spoken = paragraphs.filter((paragraph) => {
+    const lines = paragraph.split("\n").filter((line) => line.trim());
+    return !(
+      lines.every((line) => LIST_ITEM.test(line)) || DRAFT.test(paragraph)
+    );
+  });
+  const kept = spoken.length ? spoken : paragraphs.slice(-1);
+  const sentencesOf = (paragraph: string | undefined) =>
+    (paragraph ?? "")
+      .split("\n")
+      .map(plain)
+      .flatMap((line) => line.split(/(?<=[.!?][\s"”'’)\]]*)\s+(?=\S)/))
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => /[\p{L}\p{N}]/u.test(sentence));
+  const sentences = sentencesOf(kept.at(-1));
+  const question = sentences.findLastIndex(asksIn);
+  const at = question >= 0 ? question : sentences.length - 1;
+  const chosen = sentences[at];
+  if (!chosen) return { tail: null, asks: false };
+  // A paragraph of its own still leans on the paragraph before it.
+  const before = sentences[at - 1] ?? sentencesOf(kept.at(-2)).at(-1);
   const sentence =
-    last.length < SHORT_SENTENCE && before ? `${before} ${last}` : last;
-  return sentence.length > REPLY_TAIL_MAX
-    ? `${Array.from(sentence)
-        .slice(0, REPLY_TAIL_MAX - 1)
-        .join("")}…`
-    : sentence;
+    chosen.length < SHORT_SENTENCE && before ? `${before} ${chosen}` : chosen;
+  return {
+    tail:
+      sentence.length > REPLY_TAIL_MAX
+        ? `${Array.from(sentence)
+            .slice(0, REPLY_TAIL_MAX - 1)
+            .join("")}…`
+        : sentence,
+    asks: question >= 0,
+  };
+}
+
+/** The sentence `replyEnding` would show, alone. */
+export function replyTail(reply: string | null | undefined): string | null {
+  return replyEnding(reply).tail;
 }

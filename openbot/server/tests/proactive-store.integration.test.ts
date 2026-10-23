@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { createAuditStore } from "../src/audit";
 import { createCredentialStore } from "../src/credentials";
 import { createDatabase } from "../src/db/client";
 import { approvalRequests } from "../src/db/schema/approvals";
+import { channels, intelligenceChannelMappings } from "../src/db/schema/core";
 import { agents, users } from "../src/db/schema/core";
 import { agentProfiles } from "../src/db/schema/coworker";
 import { mcpServers, mcpTools } from "../src/db/schema/plugins";
@@ -15,6 +16,7 @@ import {
 import { workItems } from "../src/db/schema/work";
 import {
   PROACTIVE_TASK_KIND,
+  replyEnding,
   replyTail,
   TASK_ATTEMPTS,
 } from "../src/proactive/engine";
@@ -23,7 +25,11 @@ import { createMemoryStore } from "../src/memory/store";
 import { MemoryRefusedError } from "../src/memory/types";
 import { createPluginStore } from "../src/plugins/store";
 import { proactiveInitiator } from "../src/proactive/restriction";
-import { createProactiveStore } from "../src/proactive/store";
+import {
+  createProactiveStore,
+  recordQuestionContinuation,
+  recordTaskContinuation,
+} from "../src/proactive/store";
 import {
   ProactiveNotFoundError,
   ProactiveRefusedError,
@@ -300,6 +306,9 @@ test("what the person started is listed with where it stands, its next step, and
     "Asked through a tool",
     "Stopped on an approval",
     "Approval decided",
+    "Approval carried out",
+    "Decision gave up",
+    "Answer gave up",
     "Errored",
     "Lost once",
     "Lost twice",
@@ -339,6 +348,9 @@ test("what the person started is listed with where it stands, its next step, and
   });
   const pendingApproval = `${prefix}-approval-pending`;
   const decidedApproval = `${prefix}-approval-decided`;
+  const runningApproval = `${prefix}-approval-running`;
+  const stuckApproval = `${prefix}-approval-stuck`;
+  const stalledQuestion = `${prefix}-question-stalled`;
   const questionKey = `${prefix}-question`;
   await database.insert(workItems).values([
     task("Queued"),
@@ -348,6 +360,38 @@ test("what the person started is listed with where it stands, its next step, and
     task("Asked through a tool", { attempts: 1, finishedAt: askerFinished }),
     task("Stopped on an approval", { attempts: 1, finishedAt: finished }),
     task("Approval decided", { attempts: 1, finishedAt: finished }),
+    task("Approval carried out", { attempts: 1, finishedAt: finished }),
+    task("Decision gave up", { attempts: 1, finishedAt: finished }),
+    task("Answer gave up", { attempts: 1, finishedAt: finished }),
+    // The question it stopped on, answered; carrying the answer on failed on its one try.
+    {
+      kind: "person.question",
+      key: stalledQuestion,
+      finishedAt: new Date(),
+      payload: {
+        actorId: owner,
+        botId: bot,
+        channelId: setting.channelId,
+        threadId: "t",
+        question: "Shall I tell Ana?",
+      },
+    },
+    {
+      kind: "person.response",
+      key: stalledQuestion,
+      attempts: 1,
+      lastError:
+        "Waiting for permission to share private information with google-workspace: ana@hearth.example. Nothing was sent.",
+      payload: { ownerUserId: owner, response: "Yes." },
+    },
+    // Carrying that decision out failed at every try, and stopped being offered.
+    {
+      kind: "approval.resume",
+      key: stuckApproval,
+      attempts: 5,
+      lastError:
+        "Waiting for permission to share private information with google-workspace: rosa@clayworks.example. Nothing was sent.",
+    },
     // Given up after an error on its first try: at the cap, with the runner's reason.
     task("Errored", { claimedBy: "a", leaseUntil: later, attempts: 1 }),
     // Its replica died mid-run; it gets one more go.
@@ -367,28 +411,32 @@ test("what the person started is listed with where it stands, its next step, and
     },
   ]);
   await database.insert(approvalRequests).values(
-    [pendingApproval, decidedApproval].map((approvalId) => ({
-      id: approvalId,
-      ownerUserId: owner,
-      runId: approvalId,
-      toolCallId: "call",
-      actionDigest: "digest",
-      ...(approvalId === decidedApproval
-        ? { status: "completed" as const, decision: "allow_once" as const }
-        : {}),
-      action: {
-        actorId: owner,
-        botId: bot,
-        toolRef: "mail/send",
-        effect: "send",
-        scope: "once",
-        args: {},
+    [pendingApproval, decidedApproval, runningApproval, stuckApproval].map(
+      (approvalId) => ({
+        id: approvalId,
+        ownerUserId: owner,
         runId: approvalId,
-        threadId: "t",
         toolCallId: "call",
         actionDigest: "digest",
-      },
-    })),
+        ...(approvalId === decidedApproval
+          ? { status: "completed" as const, decision: "allow_once" as const }
+          : approvalId === runningApproval || approvalId === stuckApproval
+            ? { status: "approved" as const, decision: "allow_once" as const }
+            : {}),
+        action: {
+          actorId: owner,
+          botId: bot,
+          toolRef: "mail/send",
+          effect: "send",
+          scope: "once",
+          args: {},
+          runId: approvalId,
+          threadId: "t",
+          toolCallId: "call",
+          actionDigest: "digest",
+        },
+      }),
+    ),
   );
   await proactive.recordTaskOutcome(id("Answered"), {
     reply: "The draft is in your conversation.",
@@ -398,6 +446,15 @@ test("what the person started is listed with where it stands, its next step, and
   });
   await proactive.recordTaskOutcome(id("Stopped on an approval"), {
     waiting: { kind: "approval", id: pendingApproval },
+  });
+  await proactive.recordTaskOutcome(id("Approval carried out"), {
+    waiting: { kind: "approval", id: runningApproval },
+  });
+  await proactive.recordTaskOutcome(id("Decision gave up"), {
+    waiting: { kind: "approval", id: stuckApproval },
+  });
+  await proactive.recordTaskOutcome(id("Answer gave up"), {
+    waiting: { kind: "person_question", id: stalledQuestion },
   });
   await proactive.recordTaskOutcome(id("Approval decided"), {
     waiting: { kind: "approval", id: decidedApproval },
@@ -423,7 +480,7 @@ test("what the person started is listed with where it stands, its next step, and
     });
     expect(of("Lost once")).toEqual({
       state: "working",
-      next: "Starting again",
+      next: "Just started",
     });
     expect(of("Answered")).toEqual({
       state: "ready_for_review",
@@ -442,9 +499,31 @@ test("what the person started is listed with where it stands, its next step, and
       state: "needs_input",
       next: null,
     });
+    // Decided and being carried out: working until the conversation replies, with no stock phrase.
+    expect(of("Approval carried out")).toEqual({
+      state: "working",
+      next: null,
+    });
+    // A decision that could not be carried out never reads Working for good, and can't be retried.
+    expect(of("Decision gave up")).toEqual({
+      state: "failed",
+      next: "it needed another approval to carry on",
+    });
+    expect(
+      started.find((entry) => entry.id === id("Decision gave up"))?.canRetry,
+    ).toBe(false);
+    // Nor does an answer that could not be carried on.
+    expect(of("Answer gave up")).toEqual({
+      state: "failed",
+      next: "it needed another approval to carry on",
+    });
+    expect(started.find((entry) => entry.id === id("Errored"))?.canRetry).toBe(
+      true,
+    );
+    // Carried out, with nothing to say yet: no stock phrase either.
     expect(of("Approval decided")).toEqual({
       state: "ready_for_review",
-      next: "You allowed what it asked to do.",
+      next: null,
     });
     // A failure is said in plain words, never as the runner's message.
     expect(of("Errored")).toEqual({
@@ -532,15 +611,72 @@ test("what the person started is listed with where it stands, its next step, and
     expect(await proactive.resetTask(justStarted, TASK_ATTEMPTS)).toBe(
       "missing",
     );
+
+    // Answered on its card: working on the answer while it is carried on, then where its reply
+    // leaves it.
+    const card = async () => {
+      const row = (await proactive.started(owner)).started.find(
+        (entry) => entry.id === id("Asked through a tool"),
+      );
+      return { state: row?.state, next: row?.next };
+    };
+    await database
+      .update(workItems)
+      .set({ finishedAt: new Date() })
+      .where(
+        and(
+          eq(workItems.kind, "person.question"),
+          eq(workItems.key, questionKey),
+        ),
+      );
+    await database.insert(workItems).values({
+      kind: "person.response",
+      key: questionKey,
+      payload: { ownerUserId: owner, response: "The large box." },
+    });
+    expect(await card()).toEqual({
+      state: "working",
+      next: "“The large box.”",
+    });
+    await recordQuestionContinuation(database, {
+      ownerUserId: owner,
+      questionKey,
+      replyText: "Quoted the large box to Ana. Anything else?",
+    });
+    await database
+      .update(workItems)
+      .set({ finishedAt: new Date() })
+      .where(
+        and(
+          eq(workItems.kind, "person.response"),
+          eq(workItems.key, questionKey),
+        ),
+      );
+    expect(await card()).toEqual({
+      state: "needs_input",
+      next: "Quoted the large box to Ana. Anything else?",
+    });
   } finally {
     await database
       .delete(workItems)
       .where(
-        inArray(workItems.key, [...made.map((row) => row.id), questionKey]),
+        inArray(workItems.key, [
+          ...made.map((row) => row.id),
+          questionKey,
+          stuckApproval,
+          stalledQuestion,
+        ]),
       );
     await database
       .delete(approvalRequests)
-      .where(inArray(approvalRequests.id, [pendingApproval, decidedApproval]));
+      .where(
+        inArray(approvalRequests.id, [
+          pendingApproval,
+          decidedApproval,
+          runningApproval,
+          stuckApproval,
+        ]),
+      );
   }
 });
 
@@ -561,6 +697,267 @@ test("a reply's last sentence is kept as its next step, without its Markdown", (
   expect(replyTail("   \n\n")).toBeNull();
   expect(replyTail(undefined)).toBeNull();
   expect(replyTail("x".repeat(500))?.length).toBe(240);
+});
+
+test("how a reply ends: its last question even before a remark, past lists and drafts, through emoji and quotes", () => {
+  expect(
+    replyEnding(
+      "I read it. Should Sam have Friday off? If so, someone else has to finish packing. I haven't replied to Sam.",
+    ),
+  ).toEqual({ tail: "Should Sam have Friday off?", asks: true });
+  expect(
+    replyEnding("Here are the options:\n\n- Send draft A\n- Send draft B"),
+  ).toEqual({ tail: "Here are the options:", asks: false });
+  expect(
+    replyEnding(
+      "I drafted it. Want me to send it?\n\n**Draft:** Hi Leah, thanks!",
+    ),
+  ).toEqual({ tail: "I drafted it. Want me to send it?", asks: true });
+  expect(replyEnding("Done. Shall I?")).toEqual({
+    tail: "Done. Shall I?",
+    asks: true,
+  });
+  expect(replyEnding("Should I send it (to Rosa)?)").asks).toBe(true);
+  expect(replyEnding("Is this ok? 🙂")).toEqual({
+    tail: "Is this ok?",
+    asks: true,
+  });
+  expect(replyEnding('Which one: "A" or "B?"').asks).toBe(true);
+  expect(
+    replyEnding("Paste the key terms here and I'll go through them with you."),
+  ).toEqual({
+    tail: "Paste the key terms here and I'll go through them with you.",
+    asks: false,
+  });
+});
+
+test("a task the person answers in its conversation works on their answer, then stands where the reply leaves it", async () => {
+  const [setting] = await proactive.list(owner);
+  if (!setting) throw new Error("setting missing");
+  const runId = randomUUID();
+  const make = (title: string) =>
+    proactive.addSuggestion({
+      ownerUserId: owner,
+      agentId: bot,
+      settingId: setting.id,
+      runId,
+      title,
+      detail: `${title}.`,
+      sourceApp: null,
+      sourceRef: null,
+      sourceLink: null,
+    });
+  const [asks, said, waits] = await Promise.all(
+    ["Asks the person", "Said its piece", "Waits on an approval"].map(make),
+  );
+  if (!asks || !said || !waits) throw new Error("suggestions missing");
+  for (const suggestion of [asks, said, waits])
+    await proactive.resolveSuggestion(owner, suggestion.id, "started");
+  const at = (seconds: number) => new Date(Date.now() + seconds * 1_000);
+  const followUp = `${prefix}-follow-up`;
+  const nextApproval = `${prefix}-next-approval`;
+  const stopped = `${prefix}-stopped`;
+  await database.insert(workItems).values(
+    [
+      [said, at(-60)],
+      [asks, at(-30)],
+      [waits, at(-90)],
+    ].map(([suggestion, finishedAt]) => ({
+      kind: PROACTIVE_TASK_KIND,
+      key: (suggestion as { id: string }).id,
+      payload: {
+        ownerUserId: owner,
+        suggestionId: (suggestion as { id: string }).id,
+      },
+      attempts: 1,
+      finishedAt: finishedAt as Date,
+    })),
+  );
+  await proactive.recordTaskOutcome(said.id, {
+    reply: "The draft is in your conversation.",
+    asks: false,
+  });
+  await proactive.recordTaskOutcome(asks.id, {
+    reply: "Do you want me to ask him, or add this to your tasks?",
+    asks: true,
+  });
+  await proactive.recordTaskOutcome(waits.id, {
+    waiting: { kind: "approval", id: stopped },
+  });
+  const stateOf = async (suggestionId: string) => {
+    const row = (await proactive.started(owner)).started.find(
+      (entry) => entry.id === suggestionId,
+    );
+    return (
+      row && { state: row.state, next: row.next, waitingOn: row.waitingOn }
+    );
+  };
+  try {
+    expect((await stateOf(asks.id))?.state).toBe("needs_input");
+    // The person answers in the conversation: the task that last asked them works on it.
+    await proactive.noteConversation(owner, setting.channelId, {
+      text: "Ask him, please.",
+      agentId: null,
+      at: at(-20),
+    });
+    expect(await stateOf(asks.id)).toEqual({
+      state: "working",
+      next: "“Ask him, please.”",
+      waitingOn: null,
+    });
+    // A task that didn't ask, and one waiting on its approval card, are not answered by words.
+    expect((await stateOf(said.id))?.state).toBe("ready_for_review");
+    // The turn their answer started asks for an approval: that is the same task's, counted once.
+    await database.insert(approvalRequests).values({
+      id: followUp,
+      ownerUserId: owner,
+      runId: followUp,
+      toolCallId: "call",
+      actionDigest: "digest",
+      action: {
+        actorId: owner,
+        botId: bot,
+        toolRef: "mail/send",
+        effect: "send",
+        scope: "dev@kilnworks.example",
+        args: {},
+        runId: followUp,
+        threadId: `${prefix}-thread`,
+        toolCallId: "call",
+        actionDigest: "digest",
+      },
+    });
+    await database
+      .insert(channels)
+      .values({
+        id: setting.channelId,
+        name: "OpenDuet",
+        description: "",
+      })
+      .onConflictDoNothing();
+    await database.insert(intelligenceChannelMappings).values({
+      userId: owner,
+      channelId: setting.channelId,
+      threadId: `${prefix}-thread`,
+    });
+    expect(await stateOf(asks.id)).toEqual({
+      state: "needs_input",
+      next: null,
+      waitingOn: { kind: "approval", id: followUp },
+    });
+    // Decided: working while the decision is carried out.
+    await database
+      .update(approvalRequests)
+      .set({ status: "denied", decision: "deny" })
+      .where(eq(approvalRequests.id, followUp));
+    expect(await stateOf(asks.id)).toEqual({
+      state: "working",
+      next: null,
+      waitingOn: null,
+    });
+    // Carried out: the reply it continued with is where the task now stands.
+    await recordTaskContinuation(database, {
+      ownerUserId: owner,
+      approvalId: followUp,
+      channelId: setting.channelId,
+      askedAt: at(-10),
+      replyText:
+        "Nothing was sent to Dev. Who should I ask instead, you or the vendor?",
+    });
+    await database
+      .update(approvalRequests)
+      .set({ status: "completed" })
+      .where(eq(approvalRequests.id, followUp));
+    expect(await stateOf(asks.id)).toEqual({
+      state: "needs_input",
+      next: "Who should I ask instead, you or the vendor?",
+      waitingOn: null,
+    });
+    // Answered again, and the browser's reply settles it.
+    await proactive.noteConversation(owner, setting.channelId, {
+      text: "The vendor.",
+      agentId: null,
+      at: at(1),
+    });
+    expect((await stateOf(asks.id))?.state).toBe("working");
+    await proactive.noteConversation(owner, setting.channelId, {
+      text: "I emailed the vendor. I'll tell you when they answer.",
+      agentId: bot,
+      at: at(2),
+    });
+    expect(await stateOf(asks.id)).toEqual({
+      state: "ready_for_review",
+      next: "I'll tell you when they answer.",
+      waitingOn: null,
+    });
+    // A decision on the approval a task stopped on: it takes the continuation's reply.
+    await recordTaskContinuation(database, {
+      ownerUserId: owner,
+      approvalId: stopped,
+      channelId: setting.channelId,
+      askedAt: at(-100),
+      replyText: "Sent to Ana. Anything else for her?",
+    });
+    expect(await stateOf(waits.id)).toEqual({
+      state: "needs_input",
+      next: "Anything else for her?",
+      waitingOn: null,
+    });
+    // An answer whose reply never came (the browser closed mid-turn) stops counting after a while.
+    await database
+      .update(workItems)
+      .set({
+        payload: sql`${workItems.payload} || jsonb_build_object('reply', 'Shall I send it?'::text, 'asks', true, 'answeredAt', ${new Date(Date.now() - 6 * 60_000).toISOString()}::text, 'answer', 'Yes.'::text)`,
+      })
+      .where(eq(workItems.key, said.id));
+    expect(await stateOf(said.id)).toEqual({
+      state: "needs_input",
+      next: "Shall I send it?",
+      waitingOn: null,
+    });
+    // Carried on, then stopped on another approval: the task now waits on that one.
+    await proactive.recordTaskOutcome(waits.id, {
+      waiting: { kind: "approval", id: stopped },
+    });
+    await database.insert(approvalRequests).values({
+      id: nextApproval,
+      ownerUserId: owner,
+      runId: nextApproval,
+      toolCallId: "call",
+      actionDigest: "digest",
+      action: {
+        actorId: owner,
+        botId: bot,
+        toolRef: "mail/send",
+        effect: "send",
+        scope: "rosa@clayworks.example",
+        args: {},
+        runId: nextApproval,
+        threadId: `${prefix}-thread`,
+        toolCallId: "call",
+        actionDigest: "digest",
+      },
+    });
+    await recordTaskContinuation(database, {
+      ownerUserId: owner,
+      approvalId: stopped,
+      channelId: setting.channelId,
+      askedAt: at(-100),
+      replyText: null,
+      stoppedOn: { kind: "approval", id: nextApproval },
+    });
+    const waiting = await stateOf(waits.id);
+    expect(waiting?.state).toBe("needs_input");
+    expect(waiting?.waitingOn).toEqual({ kind: "approval", id: nextApproval });
+  } finally {
+    await database
+      .delete(workItems)
+      .where(inArray(workItems.key, [asks.id, said.id, waits.id]));
+    await database
+      .delete(approvalRequests)
+      .where(inArray(approvalRequests.id, [followUp, nextApproval]));
+    await database.delete(channels).where(eq(channels.id, setting.channelId));
+  }
 });
 
 test("Bot-formed memories carry provenance, await review, and never come back once forgotten", async () => {

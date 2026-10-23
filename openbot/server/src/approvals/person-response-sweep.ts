@@ -1,9 +1,12 @@
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import { z } from "zod";
 import type { RunAssertion } from "../agents/callback-token";
 import type { AgentActor } from "../agents/profile-types";
 import type { ChannelStore } from "../channels/routes";
+import type { Database } from "../db/client";
 import type { DeliveryScope } from "../delivery/types";
+import { recordQuestionContinuation } from "../proactive/store";
 import type { ResponsibilityStore } from "../responsibilities/types";
 import type { WorkQueue } from "../work/queue";
 import { resumePersonQuestion } from "./question-resume";
@@ -24,6 +27,8 @@ import { ApprovalRefusedError } from "./types";
  */
 export function createPersonResponseTick(deps: {
   approvalQueue: WorkQueue;
+  /** For the started task that asked: it takes the reply (proactive/store.ts). */
+  database: Database;
   personResponseOwner: string;
   authoriseQuestion: (question: PersonQuestion) => Promise<unknown>;
   approvalContinuationRunner: TurnRunner;
@@ -43,6 +48,7 @@ export function createPersonResponseTick(deps: {
 }): () => Promise<void> {
   const {
     approvalQueue,
+    database,
     personResponseOwner,
     authoriseQuestion,
     approvalContinuationRunner,
@@ -76,20 +82,59 @@ export function createPersonResponseTick(deps: {
             "The saved question owner does not match.",
           );
         await authoriseQuestion(payload.question);
-        const outcome = await resumePersonQuestion({
-          ownerUserId: payload.ownerUserId,
-          question: payload.question,
-          response: payload.response,
-          messageId: `person-response:${item.key}`,
-          runTurn: approvalContinuationRunner,
-          responsibilities: responsibilityStore,
-          responsibilityTurn: responsibilityAnswerTurn,
-        });
+        let outcome: { replyText: string };
+        try {
+          outcome = await resumePersonQuestion({
+            ownerUserId: payload.ownerUserId,
+            question: payload.question,
+            response: payload.response,
+            messageId: `person-response:${item.key}`,
+            runTurn: approvalContinuationRunner,
+            responsibilities: responsibilityStore,
+            responsibilityTurn: responsibilityAnswerTurn,
+          });
+        } catch (error) {
+          /*
+           * Carried on with the answer, then stopped on a decision only the person can make: the
+           * conversation now waits on that, and this answer is done. Thrown, the answer was
+           * recorded as failed and the conversation was left waiting on nothing anybody could see.
+           */
+          if (!(error instanceof HeadlessToolSuspension)) throw error;
+          await recordQuestionContinuation(database, {
+            ownerUserId: payload.ownerUserId,
+            questionKey: item.key,
+            replyText: null,
+            stoppedOn: error.waiting.requestId
+              ? { kind: error.waiting.kind, id: error.waiting.requestId }
+              : undefined,
+          }).catch(() => undefined);
+          await approvalQueue.finish({
+            kind: item.kind,
+            key: item.key,
+            owner: personResponseOwner,
+          });
+          return;
+        }
         const source = await sourceForCoordinationRun({
           ...payload.question,
           botId: questionConversationBot(payload.question),
           depth: 0,
         });
+        // A started task that asked this takes the reply as where it now stands. Never thrown:
+        // the conversation has already continued.
+        await recordQuestionContinuation(database, {
+          ownerUserId: payload.ownerUserId,
+          questionKey: item.key,
+          replyText: outcome.replyText,
+        }).catch((error: unknown) =>
+          console.error(
+            JSON.stringify({
+              type: "started-task-continuation-error",
+              error: error instanceof Error ? error.name : "UnknownError",
+              timestamp: new Date().toISOString(),
+            }),
+          ),
+        );
         if (source && outcome.replyText)
           await channelStore.recordActivity(
             await actorFor(payload.ownerUserId),

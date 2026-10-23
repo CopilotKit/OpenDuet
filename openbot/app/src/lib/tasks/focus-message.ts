@@ -28,14 +28,29 @@ export const startedTaskMessageId = (suggestionId: string) =>
   `suggestion-${suggestionId}`;
 
 /** How long to keep the message in view while the transcript fills in and settles, in ms. */
-const SETTLE_MS = 2_000;
+const SETTLE_MS = 2_500;
 const STEP_MS = 120;
+/** How far from the top of the visible area the message may sit before it is moved, in px. */
+const TOLERANCE = 8;
+
+/** The element that scrolls `element`: its nearest ancestor with room to scroll. */
+function scrollerOf(element: HTMLElement): HTMLElement | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (
+      /(auto|scroll)/.test(getComputedStyle(node).overflowY) &&
+      node.scrollHeight > node.clientHeight
+    )
+      return node;
+  }
+  return null;
+}
 
 /**
  * Scroll the conversation under `root` to the message the navigation asked for, once it renders.
  *
  * The transcript arrives over a replay and its scroller follows the bottom as it grows, so one
- * scroll on mount is undone a moment later. This puts the message at the top each time it moves
+ * scroll on mount is undone a moment later. This puts the message's top at the top of the area the
+ * transcript scrolls in, under the conversation's own bar and never behind it, each time it moves
  * away while the transcript settles, then stops. It stops at once when the person scrolls, taps or
  * types, so it never fights them.
  */
@@ -61,10 +76,13 @@ export function useFocusMessage(root: RefObject<HTMLElement | null>) {
       );
       if (message) {
         foundAt ??= Date.now();
-        const top = message.getBoundingClientRect().top;
-        const area = frame.getBoundingClientRect().top;
-        if (Math.abs(top - area) > 140)
-          message.scrollIntoView({ block: "start" });
+        const scroller = scrollerOf(message);
+        const visibleTop = (scroller ?? frame).getBoundingClientRect().top;
+        const off = message.getBoundingClientRect().top - visibleTop;
+        if (Math.abs(off) > TOLERANCE) {
+          if (scroller) scroller.scrollTop += off;
+          else message.scrollIntoView({ block: "start" });
+        }
       }
       const now = Date.now();
       if (

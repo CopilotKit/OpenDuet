@@ -148,6 +148,7 @@ const startedItem = (overrides: Record<string, unknown> = {}) => ({
   next: "Just started",
   waitingOn: null,
   resolvedAt: null,
+  canRetry: false,
   at: "2026-10-22T05:00:00Z",
   channelId: "research-chat",
   ...overrides,
@@ -501,7 +502,17 @@ test("a failed run is never Ready for review: Failed, in plain words, under Need
     startedItem({
       state: "failed",
       next: "it ran out of time",
+      canRetry: true,
       at: "2026-10-22T05:03:00Z",
+    }),
+    // A decision that couldn't be carried out: failed, and running the task again wouldn't help.
+    startedItem({
+      id: "s-2",
+      title: "Send Leah her samples",
+      state: "failed",
+      next: "it needed another approval to carry on",
+      canRetry: false,
+      at: "2026-10-22T05:02:00Z",
     }),
   ];
   serving();
@@ -511,6 +522,14 @@ test("a failed run is never Ready for review: Failed, in plain words, under Need
     "Failed · Couldn't finish: it ran out of time.",
   );
   expect(needs.textContent).not.toContain("stopped after");
+  expect(needs.textContent).toContain(
+    "Failed · Couldn't finish: it needed another approval to carry on.",
+  );
+  expect(
+    within(needs).queryByRole("button", {
+      name: "Try again: Send Leah her samples",
+    }),
+  ).toBeNull();
   expect(view.queryByRole("region", { name: "Ready for review" })).toBeNull();
   expect(view.queryByRole("region", { name: "Working" })).toBeNull();
   fireEvent.click(
@@ -583,11 +602,12 @@ test("checking a task off fills its box, then moves it to the folded Resolved, w
   );
 });
 
-test("older resolved tasks are paged in with Show more, never dropped", async () => {
+test("older resolved tasks are paged in with Show more, never dropped, and Resolved stays open with its rows", async () => {
   quiet();
   started = [
     startedItem({
       state: "ready_for_review",
+      next: "The draft is in your conversation.",
       resolvedAt: "2026-10-22T05:10:00Z",
     }),
   ];
@@ -597,14 +617,85 @@ test("older resolved tasks are paged in with Show more, never dropped", async ()
   const resolved = await view.findByRole("region", { name: "Resolved" });
   expect(startedRead).toBe("/api/proactive/started?resolved=20");
   fireEvent.click(within(resolved).getByRole("button", { name: "Resolved" }));
+  // Checked off, a row says only what it last said: no status word.
+  expect(resolved.textContent).toContain("The draft is in your conversation.");
+  expect(resolved.textContent).not.toContain("Ready for review");
+  started = [
+    startedItem({
+      state: "ready_for_review",
+      next: "The draft is in your conversation.",
+      resolvedAt: "2026-10-22T05:10:00Z",
+    }),
+    startedItem({
+      id: "s-old",
+      title: "Pay ParcelGo",
+      state: "ready_for_review",
+      resolvedAt: "2026-10-20T05:10:00Z",
+    }),
+  ];
+  olderResolved = 0;
   fireEvent.click(
     within(resolved).getByRole("button", {
       name: "Show 3 more resolved tasks",
     }),
   );
+  // While the longer page loads, what was on screen stays: Resolved open, its row there.
+  const still = view.getByRole("region", { name: "Resolved" });
+  expect(
+    within(still)
+      .getByRole("button", { name: "Resolved" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  expect(still.textContent).toContain("Reply to Rosa about the glaze");
   await waitFor(() =>
     expect(startedRead).toBe("/api/proactive/started?resolved=40"),
   );
+  await waitFor(() =>
+    expect(
+      view.getByRole("region", { name: "Resolved" }).textContent,
+    ).toContain("Pay ParcelGo"),
+  );
+  expect(
+    within(view.getByRole("region", { name: "Resolved" }))
+      .getByRole("button", { name: "Resolved" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+});
+
+test("the list says once how fresh it is, on the first heading's line", async () => {
+  quiet();
+  started = [startedItem({ state: "ready_for_review", next: "Done." })];
+  serving();
+  const view = draw();
+  await view.findByRole("region", { name: "Ready for review" });
+  expect(view.getAllByText("Updated just now")).toHaveLength(1);
+});
+
+test("deciding an approval refreshes the tasks at once, and a task whose request is gone says only Needs input", async () => {
+  quiet();
+  inbox = { requests: [email], questions: [] };
+  started = [
+    startedItem({
+      state: "needs_input",
+      next: null,
+      waitingOn: { kind: "approval", id: "gone" },
+    }),
+  ];
+  serving();
+  let reads = 0;
+  const serve = global.fetch;
+  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith("/api/proactive/started?")) reads += 1;
+    return serve(input, init);
+  }) as typeof fetch;
+  const view = draw();
+  const needs = await view.findByRole("region", { name: "Needs input" });
+  // No stock phrase for a request that isn't in the inbox.
+  expect(needs.textContent).toContain("Reply to Rosa about the glaze");
+  expect(needs.textContent).not.toContain("Waiting for your OK");
+  const before = reads;
+  fireEvent.click(within(needs).getByRole("button", { name: "Allow once" }));
+  await waitFor(() => expect(reads).toBeGreaterThan(before));
 });
 
 test("Ready for review leads, then Needs input and Working, with Suggested and the folded Resolved after them", async () => {

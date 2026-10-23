@@ -101,6 +101,23 @@ export function TasksScreen() {
   }, [startedBy]);
   const sections = startedSections(started.data?.started ?? []);
   const revealed = useRevealStarted(sections.working);
+  // A task can be waiting on a request before the inbox has read it: read the inbox again, so the
+  // card is drawn under its row now rather than at the inbox's next poll.
+  const missing = sections.needsInput
+    .flatMap((item) => (item.waitingOn ? [item.waitingOn.id] : []))
+    .filter(
+      (id) =>
+        inbox.data &&
+        !inbox.data.requests.some((request) => request.id === id) &&
+        !inbox.data.questions.some((question) => question.id === id),
+    )
+    .join(" ");
+  useEffect(() => {
+    if (missing)
+      void queryClient.invalidateQueries({
+        queryKey: approvalInboxOptions().queryKey,
+      });
+  }, [missing]);
   // Nothing while the Bots load: every section names one, and a placeholder here is a flicker.
   if (agents.isPending) return null;
   return (
@@ -131,7 +148,13 @@ export function TasksScreen() {
             </button>
           </p>
         ) : null}
-        <div className="flex flex-col gap-6">
+        <div className="relative flex flex-col gap-6">
+          {started.dataUpdatedAt ? (
+            // Once, on the first heading's line: how fresh the whole list is.
+            <span className="pointer-events-none absolute top-0 right-1 flex min-h-6 items-center text-[15px] text-duet-ink-2 leading-5">
+              {updatedAgo(started.dataUpdatedAt)}
+            </span>
+          ) : null}
           {sections.ready.length ? (
             <TaskSection
               items={sections.ready.map((item) => ({
@@ -223,6 +246,12 @@ function useRevealStarted(working: readonly StartedSuggestion[]) {
   return revealed;
 }
 
+/** "Updated just now", "Updated 1 min. ago": how long since the list was last read. */
+function updatedAgo(at: number) {
+  const minutes = Math.floor((Date.now() - at) / 60_000);
+  return minutes < 1 ? "Updated just now" : `Updated ${minutes} min. ago`;
+}
+
 /** Each state's word and its colour, as the status line draws them. */
 const STATUS: Record<StartedState, { word: string; tone: string }> = {
   working: { word: "Working", tone: "text-duet-blue" },
@@ -232,10 +261,10 @@ const STATUS: Record<StartedState, { word: string; tone: string }> = {
 };
 
 /** What a task waiting on an approval needs, from the request itself. */
-function approvalAsk(request: ApprovalRequest | undefined): string {
+function approvalAsk(request: ApprovalRequest | undefined): string | null {
   return request
     ? `Allow it to ${describeApproval(request).title.toLowerCase()}?`
-    : "Waiting for your OK";
+    : null;
 }
 
 /**
@@ -262,7 +291,7 @@ function StartedRow({
   const next =
     item.state === "failed"
       ? `Couldn't finish: ${item.next ?? "something went wrong"}.`
-      : item.waitingOn?.kind === "approval"
+      : item.waitingOn?.kind === "approval" && !item.next
         ? approvalAsk(request)
         : item.next;
   const toggle = () => {
@@ -287,7 +316,8 @@ function StartedRow({
       data-started-row={item.id}
     >
       <div className="flex items-start gap-[13px] px-4 py-3">
-        <label className="-m-[11px] grid size-11 shrink-0 cursor-pointer place-items-center rounded-full has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-duet-violet/25">
+        {/* A 22px box in a 44px target. Pixels, not rem: the root font is 15px here. */}
+        <label className="-m-[11px] grid size-[44px] shrink-0 cursor-pointer place-items-center rounded-full has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-duet-violet/25">
           <input
             aria-label={item.title}
             checked={filled}
@@ -299,10 +329,12 @@ function StartedRow({
           <span
             aria-hidden
             className={cn(
-              "grid size-[22px] place-items-center rounded-[6px] border-[1.5px] transition-colors",
+              "grid size-[22px] place-items-center rounded-[6px] transition-colors",
               filled
-                ? "border-duet-ink bg-duet-ink text-duet-surface"
-                : "border-duet-hair-2 bg-duet-card",
+                ? "bg-duet-ink text-duet-surface"
+                : // Duet's 1.5px hairline and fill, light and dark (spec S0). A ring, not a border:
+                  // Chrome rounds a 1.5px border down to 1px.
+                  "bg-white shadow-[inset_0_0_0_1.5px_#D4D4D2] dark:bg-[#171717] dark:shadow-[inset_0_0_0_1.5px_#3C3C3C]",
             )}
           >
             {filled ? <DuetIcon name="check" size={14} stroke={2.6} /> : null}
@@ -323,15 +355,22 @@ function StartedRow({
             >
               {item.title}
             </span>
-            <span className="type-sub mt-1 block truncate text-duet-ink-2">
-              <span className={resolved ? undefined : status.tone}>
-                {status.word}
+            {/* Checked off, it is done whatever it last was: only what it last said. */}
+            {resolved ? (
+              next ? (
+                <span className="type-sub mt-1 block truncate text-duet-ink-3">
+                  {next}
+                </span>
+              ) : null
+            ) : (
+              <span className="type-sub mt-1 block truncate text-duet-ink-2">
+                <span className={status.tone}>{status.word}</span>
+                {next ? ` · ${next}` : null}
               </span>
-              {next ? ` · ${next}` : null}
-            </span>
+            )}
           </Link>
           {/* Under the status line, never beside it, so the reason it failed is read in full. */}
-          {item.state === "failed" && !resolved ? (
+          {item.state === "failed" && item.canRetry && !resolved ? (
             <div className="mt-2 flex">
               <RowButton
                 busy={retry.isPending}

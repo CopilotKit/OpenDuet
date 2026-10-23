@@ -13,14 +13,15 @@ import {
 } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { approvalRequests } from "../db/schema/approvals";
-import { auditEvents } from "../db/schema/core";
+import { auditEvents, intelligenceChannelMappings } from "../db/schema/core";
 import {
   proactiveSettings,
   proactiveSuggestions,
 } from "../db/schema/proactive";
 import { workItems } from "../db/schema/work";
+import { DEFAULT_MAX_ATTEMPTS } from "../work/queue";
 import { lockDefaults, recordOptOut } from "../memory/defaults";
-import { PROACTIVE_TASK_KIND, TASK_ATTEMPTS } from "./engine";
+import { PROACTIVE_TASK_KIND, replyEnding, TASK_ATTEMPTS } from "./engine";
 import { PROACTIVE_INITIATOR_PREFIX } from "./restriction";
 import {
   ProactiveNotFoundError,
@@ -47,8 +48,236 @@ const ASKED_SLACK_MS = 15_000;
 /** Written on a queue row made only to hold a check mark, for a turn that was never queued. */
 const NEVER_QUEUED = "It was never queued.";
 
-/** What a started suggestion's work queue row carries, beyond who and which. */
-type TaskPayload = TaskOutcome & { resolvedAt?: string };
+/**
+ * What a started suggestion's work queue row carries, beyond who and which: what its turn ended
+ * on, the check mark, and its conversation since. A person who answers it in that conversation sets
+ * `answeredAt` and `answer`; the reply that follows, from their browser or from a decision being
+ * carried out, sets `repliedAt` with a new `reply`.
+ */
+type TaskPayload = TaskOutcome & {
+  resolvedAt?: string;
+  answeredAt?: string;
+  answer?: string;
+  repliedAt?: string;
+};
+
+/** Approval states in which the conversation is still waiting on it, or still carrying it out. */
+const LIVE_APPROVAL = ["pending", "approved", "denied", "consumed"] as const;
+
+const timeOf = (iso: string | undefined) => (iso ? Date.parse(iso) : 0);
+/**
+ * How long an answer waits for its reply before it stops counting. The turn it started runs in the
+ * person's browser, and a browser closed mid-turn never reports a reply.
+ */
+const ANSWER_REPLY_WAIT_MS = 5 * 60_000;
+/** Answered in its conversation, and nothing has replied to that answer yet. */
+const awaitingReply = (payload: TaskPayload) =>
+  Boolean(payload.answeredAt) &&
+  timeOf(payload.answeredAt) > timeOf(payload.repliedAt) &&
+  Date.now() - timeOf(payload.answeredAt) < ANSWER_REPLY_WAIT_MS;
+/** Ended on something the person has to say, in words. Older rows carry only their reply. */
+const asksPerson = (payload: TaskPayload) =>
+  payload.asks ?? Boolean(payload.reply?.endsWith("?"));
+
+/**
+ * The work queue payload with `remove` taken out and these fields written, built in SQL: a JSON
+ * string parameter would be stored as a string.
+ */
+function patchPayload(
+  fields: TaskOutcome & {
+    repliedAt?: Date;
+    answer?: { at: Date; text: string };
+  },
+  remove: readonly ("waiting" | "answeredAt" | "answer")[] = [],
+) {
+  const base = remove.reduce(
+    (payload, key) => sql`${payload} - ${key}::text`,
+    sql`${workItems.payload}`,
+  );
+  const parts = [
+    ...("reply" in fields
+      ? [sql`jsonb_build_object('reply', ${fields.reply ?? null}::text)`]
+      : []),
+    ...(fields.asks === undefined
+      ? []
+      : [sql`jsonb_build_object('asks', ${fields.asks}::boolean)`]),
+    ...(fields.waiting
+      ? [
+          sql`jsonb_build_object('waiting', jsonb_build_object('kind', ${fields.waiting.kind}::text, 'id', ${fields.waiting.id}::text))`,
+        ]
+      : []),
+    ...(fields.repliedAt
+      ? [
+          sql`jsonb_build_object('repliedAt', ${fields.repliedAt.toISOString()}::text)`,
+        ]
+      : []),
+    ...(fields.answer
+      ? [
+          sql`jsonb_build_object('answeredAt', ${fields.answer.at.toISOString()}::text, 'answer', ${Array.from(fields.answer.text.trim()).slice(0, 160).join("")}::text)`,
+        ]
+      : []),
+  ];
+  return parts.length ? sql`${base} || ${sql.join(parts, sql` || `)}` : base;
+}
+
+/**
+ * An answer to a question was carried on and its conversation replied: the started task that
+ * asked takes the reply as where it now stands. The task that asked is the one waiting on that
+ * question, or failing that the first task turn in its conversation to finish after it was asked:
+ * task turns run one at a time. Called by the person-response sweep.
+ */
+export async function recordQuestionContinuation(
+  database: Database,
+  input: {
+    ownerUserId: string;
+    questionKey: string;
+    replyText: string | null | undefined;
+    /** The request the conversation stopped on next, when it did: the task now waits on that. */
+    stoppedOn?: { kind: string; id: string };
+  },
+) {
+  const [question] = await database
+    .select({ createdAt: workItems.createdAt, payload: workItems.payload })
+    .from(workItems)
+    .where(
+      and(
+        eq(workItems.kind, "person.question"),
+        eq(workItems.key, input.questionKey),
+      ),
+    )
+    .limit(1);
+  if (!question) return;
+  const channelId = String(question.payload.channelId ?? "");
+  const tasks = await database
+    .select({
+      key: workItems.key,
+      finishedAt: workItems.finishedAt,
+      startedAt: proactiveSuggestions.resolvedAt,
+      payload: workItems.payload,
+    })
+    .from(workItems)
+    .innerJoin(proactiveSuggestions, eq(proactiveSuggestions.id, workItems.key))
+    .innerJoin(
+      proactiveSettings,
+      eq(proactiveSettings.id, proactiveSuggestions.settingId),
+    )
+    .where(
+      and(
+        eq(workItems.kind, PROACTIVE_TASK_KIND),
+        eq(proactiveSuggestions.ownerUserId, input.ownerUserId),
+        eq(proactiveSettings.channelId, channelId),
+        isNotNull(workItems.finishedAt),
+      ),
+    );
+  const own = tasks.find(
+    (task) => (task.payload as TaskPayload).waiting?.id === input.questionKey,
+  );
+  const asked = question.createdAt.getTime();
+  const asker =
+    own ??
+    tasks
+      .filter(
+        (task) =>
+          task.finishedAt &&
+          (task.startedAt?.getTime() ?? 0) <= asked &&
+          task.finishedAt.getTime() + ASKED_SLACK_MS >= asked,
+      )
+      .sort(
+        (a, b) =>
+          (a.finishedAt?.getTime() ?? 0) - (b.finishedAt?.getTime() ?? 0),
+      )
+      .at(0);
+  if (!asker) return;
+  const ending = replyEnding(input.replyText);
+  await database
+    .update(workItems)
+    .set({
+      payload: patchPayload(
+        input.stoppedOn
+          ? { waiting: input.stoppedOn }
+          : { reply: ending.tail, asks: ending.asks, repliedAt: new Date() },
+        own || input.stoppedOn ? ["waiting"] : [],
+      ),
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(workItems.kind, PROACTIVE_TASK_KIND),
+        eq(workItems.key, asker.key),
+      ),
+    );
+}
+
+/**
+ * A decision was carried out and its conversation replied, or stopped on another request: the
+ * started task waiting on that approval takes the reply as where it now stands, or waits on the
+ * new request. Failing that, the task the person last answered in that conversation before the
+ * approval was asked for takes it: their answer is what the approval came from. Called by the
+ * approval resume sweep.
+ */
+export async function recordTaskContinuation(
+  database: Database,
+  input: {
+    ownerUserId: string;
+    approvalId: string;
+    channelId: string | null;
+    askedAt: Date;
+    replyText: string | null | undefined;
+    /** The request the conversation stopped on next, when it did: the task now waits on that. */
+    stoppedOn?: { kind: string; id: string };
+  },
+) {
+  const ending = replyEnding(input.replyText);
+  const fields: Parameters<typeof patchPayload>[0] = input.stoppedOn
+    ? { waiting: input.stoppedOn }
+    : { reply: ending.tail, asks: ending.asks, repliedAt: new Date() };
+  const [own] = await database
+    .update(workItems)
+    .set({ payload: patchPayload(fields, ["waiting"]), updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workItems.kind, PROACTIVE_TASK_KIND),
+        sql`${workItems.payload}->>'ownerUserId' = ${input.ownerUserId}`,
+        sql`${workItems.payload}->'waiting'->>'id' = ${input.approvalId}`,
+      ),
+    )
+    .returning({ key: workItems.key });
+  if (own || !input.channelId) return;
+  const answered = await database
+    .select({ key: workItems.key, payload: workItems.payload })
+    .from(workItems)
+    .innerJoin(proactiveSuggestions, eq(proactiveSuggestions.id, workItems.key))
+    .innerJoin(
+      proactiveSettings,
+      eq(proactiveSettings.id, proactiveSuggestions.settingId),
+    )
+    .where(
+      and(
+        eq(workItems.kind, PROACTIVE_TASK_KIND),
+        eq(proactiveSuggestions.ownerUserId, input.ownerUserId),
+        eq(proactiveSettings.channelId, input.channelId),
+        sql`${workItems.payload}->>'answeredAt' is not null`,
+      ),
+    );
+  const asker = answered
+    .map((row) => ({ key: row.key, payload: row.payload as TaskPayload }))
+    .filter((row) => timeOf(row.payload.answeredAt) <= input.askedAt.getTime())
+    .sort((a, b) => timeOf(b.payload.answeredAt) - timeOf(a.payload.answeredAt))
+    .at(0);
+  if (!asker) return;
+  await database
+    .update(workItems)
+    .set({
+      payload: patchPayload(fields, input.stoppedOn ? ["waiting"] : []),
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(workItems.kind, PROACTIVE_TASK_KIND),
+        eq(workItems.key, asker.key),
+      ),
+    );
+}
 
 /**
  * Why a turn failed, in the words a person reads after "Couldn't finish:". The queue keeps the
@@ -64,6 +293,8 @@ export function plainReason(error: string | null): string {
     return "this Bot or its conversation is no longer available";
   if (/without saying anything/i.test(error)) return "it ended without a reply";
   if (/paused/i.test(error)) return "the Bot is paused";
+  if (/waiting for (?:permission|your approval|another decision)/i.test(error))
+    return "it needed another approval to carry on";
   return "something went wrong while it worked";
 }
 
@@ -348,24 +579,39 @@ export function createProactiveStore(database: Database) {
       ]);
       const rows = [...open, ...checked];
 
-      // What the person still has to answer: the approvals turns stopped on, and open questions.
+      /*
+       * What the person still has to answer, or has just answered: the approvals the turns stopped
+       * on, any approval still live in these conversations, and the open questions.
+       */
       const approvalIds = rows.flatMap((row) => {
         const waiting = (row.payload as TaskPayload | null)?.waiting;
         return waiting?.kind === "approval" && waiting.id ? [waiting.id] : [];
       });
-      const [approvals, questions] = await Promise.all([
-        approvalIds.length
+      const channelIds = [...new Set(rows.map((row) => row.channelId))];
+      const earliest = rows.reduce(
+        (first, row) =>
+          row.startedAt && row.startedAt < first ? row.startedAt : first,
+        new Date(),
+      );
+      const [approvals, questions, threads, responses] = await Promise.all([
+        rows.length
           ? database
               .select({
                 id: approvalRequests.id,
                 status: approvalRequests.status,
-                decision: approvalRequests.decision,
+                createdAt: approvalRequests.createdAt,
+                threadId: sql<string>`${approvalRequests.action}->>'threadId'`,
               })
               .from(approvalRequests)
               .where(
                 and(
                   eq(approvalRequests.ownerUserId, owner),
-                  inArray(approvalRequests.id, approvalIds),
+                  or(
+                    approvalIds.length
+                      ? inArray(approvalRequests.id, approvalIds)
+                      : undefined,
+                    inArray(approvalRequests.status, [...LIVE_APPROVAL]),
+                  ),
                 ),
               )
           : [],
@@ -375,24 +621,94 @@ export function createProactiveStore(database: Database) {
                 key: workItems.key,
                 payload: workItems.payload,
                 createdAt: workItems.createdAt,
+                finishedAt: workItems.finishedAt,
               })
               .from(workItems)
               .where(
                 and(
                   eq(workItems.kind, "person.question"),
-                  isNull(workItems.finishedAt),
                   sql`${workItems.payload}->>'actorId' = ${owner}`,
+                  or(
+                    isNull(workItems.finishedAt),
+                    gte(workItems.createdAt, earliest),
+                  ),
                 ),
               )
-              .limit(100)
+              .limit(200)
           : [],
+        channelIds.length
+          ? database
+              .select({
+                threadId: intelligenceChannelMappings.threadId,
+                channelId: intelligenceChannelMappings.channelId,
+              })
+              .from(intelligenceChannelMappings)
+              .where(
+                and(
+                  eq(intelligenceChannelMappings.userId, owner),
+                  inArray(intelligenceChannelMappings.channelId, channelIds),
+                ),
+              )
+          : [],
+        // Answers to questions, still being carried on, or given up on.
+        database
+          .select({
+            key: workItems.key,
+            response: sql<string>`${workItems.payload}->>'response'`,
+            leased: sql<boolean>`coalesce(${workItems.leaseUntil} > now(), false)`,
+            attempts: workItems.attempts,
+            lastError: workItems.lastError,
+          })
+          .from(workItems)
+          .where(
+            and(
+              eq(workItems.kind, "person.response"),
+              isNull(workItems.finishedAt),
+              sql`${workItems.payload}->>'ownerUserId' = ${owner}`,
+            ),
+          )
+          .limit(100),
       ]);
+      // One attempt each (person-response-sweep.ts): tried, not held and with a reason is given up.
+      const answerGaveUp = new Map(
+        responses
+          .filter((row) => row.attempts > 0 && !row.leased && row.lastError)
+          .map((row) => [row.key, row.lastError]),
+      );
+      const answering = new Map(
+        responses
+          .filter((row) => !answerGaveUp.has(row.key))
+          .map((row) => [row.key, row.response]),
+      );
       const approvalById = new Map(approvals.map((row) => [row.id, row]));
+      // A decision is carried out by its own work item. One that gave up never completes.
+      const decided = approvals
+        .filter((row) => row.status !== "pending" && row.status !== "completed")
+        .map((row) => row.id);
+      const resumes = decided.length
+        ? await database
+            .select({
+              key: workItems.key,
+              attempts: workItems.attempts,
+              lastError: workItems.lastError,
+            })
+            .from(workItems)
+            .where(
+              and(
+                eq(workItems.kind, "approval.resume"),
+                inArray(workItems.key, decided),
+                isNull(workItems.finishedAt),
+                gte(workItems.attempts, DEFAULT_MAX_ATTEMPTS),
+              ),
+            )
+        : [];
+      const gaveUp = new Map(resumes.map((row) => [row.key, row.lastError]));
       const openQuestions = questions.map((row) => ({
         key: row.key,
         channelId: String(row.payload.channelId ?? ""),
         question: String(row.payload.question ?? ""),
         createdAt: row.createdAt,
+        open: !row.finishedAt,
       }));
       /*
        * Which task asked each question it did not stop on. Task turns run one at a time, so the
@@ -400,7 +716,15 @@ export function createProactiveStore(database: Database) {
        * already started. Each question goes to one task only.
        */
       const askedBy = new Map<string, string>();
+      // A question a task stopped on is that task's already.
+      const waitedOn = new Set(
+        rows.flatMap((row) => {
+          const id = (row.payload as TaskPayload | null)?.waiting?.id;
+          return id ? [id] : [];
+        }),
+      );
       for (const question of openQuestions) {
+        if (waitedOn.has(question.key)) continue;
         let asker: (typeof rows)[number] | undefined;
         for (const row of rows) {
           if (
@@ -416,17 +740,58 @@ export function createProactiveStore(database: Database) {
         }
         if (asker) askedBy.set(question.key, asker.id);
       }
+      /*
+       * Which task an approval the person's answer led to belongs to. The turn their answer started
+       * asked for it, so it goes to the task answered last before it was asked for, while that
+       * answer's turn was still running or had just replied. Approvals a task stopped on are its
+       * own already. Each goes to one task only.
+       */
+      const channelOfThread = new Map(
+        threads.map((row) => [row.threadId, row.channelId]),
+      );
+      const claimed = new Set(approvalIds);
+      const ledTo = new Map<string, (typeof approvals)[number]>();
+      // In the order they were asked for, so a task's first open request is the one it shows.
+      const byAsked = [...approvals].sort(
+        (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+      );
+      for (const approval of byAsked) {
+        if (claimed.has(approval.id)) continue;
+        const channelId = channelOfThread.get(approval.threadId);
+        const asked = approval.createdAt.getTime();
+        const answerer = rows
+          .map((row) => ({ row, payload: (row.payload ?? {}) as TaskPayload }))
+          .filter(
+            ({ row, payload }) =>
+              row.channelId === channelId &&
+              payload.answeredAt &&
+              timeOf(payload.answeredAt) <= asked &&
+              (awaitingReply(payload) ||
+                asked <= timeOf(payload.repliedAt) + ASKED_SLACK_MS),
+          )
+          .sort(
+            (a, b) =>
+              timeOf(b.payload.answeredAt) - timeOf(a.payload.answeredAt),
+          )
+          .at(0);
+        if (answerer && !ledTo.has(answerer.row.id))
+          ledTo.set(answerer.row.id, approval);
+      }
 
       const stand = (
         row: (typeof rows)[number],
-      ): Pick<StartedSuggestion, "state" | "next" | "waitingOn" | "at"> => {
+      ): Pick<
+        StartedSuggestion,
+        "state" | "next" | "waitingOn" | "at" | "canRetry"
+      > => {
         const startedAt = row.startedAt ?? new Date(0);
         const payload = (row.payload ?? {}) as TaskPayload;
-        const working = (next: string) => ({
+        const working = (next: string | null, at = startedAt) => ({
           state: "working" as StartedState,
           next,
           waitingOn: null,
-          at: startedAt,
+          at,
+          canRetry: false,
         });
         if (!row.offered)
           return Date.now() - startedAt.getTime() < QUEUEING_GRACE_MS
@@ -436,60 +801,106 @@ export function createProactiveStore(database: Database) {
                 next: plainReason(NEVER_QUEUED),
                 waitingOn: null,
                 at: startedAt,
+                canRetry: true,
               };
         if (row.finishedAt) {
-          const at = row.finishedAt;
+          const finishedAt = row.finishedAt;
+          const lastAt = new Date(
+            Math.max(
+              finishedAt.getTime(),
+              timeOf(payload.answeredAt),
+              timeOf(payload.repliedAt),
+            ),
+          );
           const waiting = payload.waiting;
-          if (waiting?.kind === "approval" && waiting.id) {
-            const approval = approvalById.get(waiting.id);
-            if (approval?.status === "pending")
-              return {
-                state: "needs_input",
-                next: null,
-                waitingOn: { kind: "approval", id: waiting.id },
-                at,
-              };
+          const approval =
+            (waiting?.kind === "approval" && waiting.id
+              ? approvalById.get(waiting.id)
+              : undefined) ?? ledTo.get(row.id);
+          if (approval?.status === "pending")
             return {
-              state: "ready_for_review",
+              state: "needs_input",
+              // What the Bot said since it asked, when it has: its newest words lead.
               next:
-                approval?.decision === "deny"
-                  ? "You refused what it asked to do."
-                  : "You allowed what it asked to do.",
-              waitingOn: null,
-              at,
+                payload.reply &&
+                timeOf(payload.repliedAt) > approval.createdAt.getTime()
+                  ? payload.reply
+                  : null,
+              waitingOn: { kind: "approval", id: approval.id },
+              at: approval.createdAt,
+              canRetry: false,
             };
-          }
+          if (approval && approval.status !== "completed")
+            // Carrying the decision out gave up: the conversation won't go on by itself, and running
+            // the task again wouldn't carry the decision out either.
+            return gaveUp.has(approval.id)
+              ? {
+                  state: "failed",
+                  next: plainReason(gaveUp.get(approval.id) ?? null),
+                  waitingOn: null,
+                  at: lastAt,
+                  canRetry: false,
+                }
+              : // Decided, and the conversation is carrying it on: working until its reply arrives.
+                working(null, lastAt);
+          // Answered in its conversation, and the turn their answer started has not replied yet.
+          if (awaitingReply(payload))
+            return working(
+              payload.answer ? `“${payload.answer}”` : null,
+              lastAt,
+            );
           // A question it stopped on, or one it asked in its conversation while it ran.
-          const asked = openQuestions.find((question) =>
+          const itsOwn = openQuestions.filter((question) =>
             waiting?.id
               ? question.key === waiting.id
               : askedBy.get(question.key) === row.id,
           );
+          // Answered on its card, and carrying the answer on gave up: it won't go on by itself.
+          const stalled = itsOwn.find((question) =>
+            answerGaveUp.has(question.key),
+          );
+          if (stalled)
+            return {
+              state: "failed",
+              next: plainReason(answerGaveUp.get(stalled.key) ?? null),
+              waitingOn: null,
+              at: lastAt,
+              canRetry: false,
+            };
+          // Answered on its card, and the answer is being carried on: working, on their words.
+          const answered = itsOwn.find((question) =>
+            answering.has(question.key),
+          );
+          if (answered)
+            return working(`“${answering.get(answered.key) ?? ""}”`, lastAt);
+          const asked = itsOwn.find((question) => question.open);
           if (asked)
             return {
               state: "needs_input",
               next: asked.question,
               waitingOn: { kind: "question", id: asked.key },
-              at,
+              at: lastAt,
+              canRetry: false,
             };
-          const reply = payload.reply ?? null;
           return {
-            state: reply?.endsWith("?") ? "needs_input" : "ready_for_review",
-            next: reply,
+            state: asksPerson(payload) ? "needs_input" : "ready_for_review",
+            next: payload.reply ?? null,
             waitingOn: null,
-            at,
+            at: lastAt,
+            canRetry: false,
           };
         }
         if (row.leased) return working("Just started");
         if (!row.attempts) return working("Just started");
         // Its replica died mid-run, and it gets one more go.
         if (row.attempts < TASK_ATTEMPTS && !row.lastError)
-          return working("Starting again");
+          return working("Just started");
         return {
           state: "failed",
           next: plainReason(row.lastError),
           waitingOn: null,
           at: row.updatedAt ?? startedAt,
+          canRetry: true,
         };
       };
 
@@ -519,30 +930,115 @@ export function createProactiveStore(database: Database) {
     },
     /** Keep what a started suggestion's turn ended on, on its work queue row. */
     async recordTaskOutcome(suggestionId: string, outcome: TaskOutcome) {
-      // Built in SQL rather than serialised here: a JSON string parameter is stored as a string.
-      const parts = [
-        ...("reply" in outcome
-          ? [sql`jsonb_build_object('reply', ${outcome.reply ?? null}::text)`]
-          : []),
-        ...(outcome.waiting
-          ? [
-              sql`jsonb_build_object('waiting', jsonb_build_object('kind', ${outcome.waiting.kind}::text, 'id', ${outcome.waiting.id}::text))`,
-            ]
-          : []),
-      ];
-      if (parts.length === 0) return;
       await database
         .update(workItems)
-        .set({
-          payload: sql`${workItems.payload} || ${sql.join(parts, sql` || `)}`,
-          updatedAt: sql`now()`,
-        })
+        .set({ payload: patchPayload(outcome), updatedAt: sql`now()` })
         .where(
           and(
             eq(workItems.kind, PROACTIVE_TASK_KIND),
             eq(workItems.key, suggestionId),
           ),
         );
+    },
+    /**
+     * Something said in a conversation started tasks run in, by the person or by a turn their own
+     * browser ran: never by a turn this server ran, which carries its own outcome.
+     *
+     * The person's message answers the task that last spoke there, when that task ended asking them
+     * something in words: it goes back to Working, on their answer. Task turns run one at a time,
+     * so the task that last spoke is the one they are answering. The reply that follows is then
+     * that task's, and where it stands comes from it. Nothing changes for a task waiting on an
+     * approval or a question card: those are answered there.
+     */
+    async noteConversation(
+      owner: string,
+      channelId: string,
+      said: { text: string; agentId: string | null; at: Date },
+    ) {
+      const rows = (
+        await database
+          .select({
+            key: workItems.key,
+            finishedAt: workItems.finishedAt,
+            payload: workItems.payload,
+          })
+          .from(workItems)
+          .innerJoin(
+            proactiveSuggestions,
+            eq(proactiveSuggestions.id, workItems.key),
+          )
+          .innerJoin(
+            proactiveSettings,
+            eq(proactiveSettings.id, proactiveSuggestions.settingId),
+          )
+          .where(
+            and(
+              eq(workItems.kind, PROACTIVE_TASK_KIND),
+              eq(proactiveSuggestions.ownerUserId, owner),
+              eq(proactiveSettings.channelId, channelId),
+              isNotNull(workItems.finishedAt),
+              sql`${workItems.payload}->>'resolvedAt' is null`,
+            ),
+          )
+      ).map((row) => ({
+        key: row.key,
+        finishedAt: row.finishedAt?.getTime() ?? 0,
+        payload: row.payload as TaskPayload,
+      }));
+      const at = said.at.getTime();
+      const write = (key: string, payload: ReturnType<typeof patchPayload>) =>
+        database
+          .update(workItems)
+          .set({ payload, updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(workItems.kind, PROACTIVE_TASK_KIND),
+              eq(workItems.key, key),
+            ),
+          );
+      if (said.agentId === null) {
+        const lastHeard = (row: (typeof rows)[number]) =>
+          Math.max(
+            row.finishedAt,
+            timeOf(row.payload.answeredAt),
+            timeOf(row.payload.repliedAt),
+          );
+        const latest = rows
+          .filter((row) => lastHeard(row) < at)
+          .sort((a, b) => lastHeard(b) - lastHeard(a))
+          .at(0);
+        if (
+          !latest ||
+          awaitingReply(latest.payload) ||
+          latest.payload.waiting ||
+          !asksPerson(latest.payload)
+        )
+          return;
+        await write(
+          latest.key,
+          patchPayload({ answer: { at: said.at, text: said.text } }),
+        );
+        return;
+      }
+      const answered = rows
+        .filter(
+          (row) =>
+            awaitingReply(row.payload) && timeOf(row.payload.answeredAt) <= at,
+        )
+        .sort(
+          (a, b) => timeOf(b.payload.answeredAt) - timeOf(a.payload.answeredAt),
+        )
+        .at(0);
+      if (!answered) return;
+      const ending = replyEnding(said.text);
+      await write(
+        answered.key,
+        patchPayload({
+          reply: ending.tail,
+          asks: ending.asks,
+          repliedAt: said.at,
+        }),
+      );
     },
     /**
      * End a started suggestion's turn that errored, on its first try: at the attempt cap, so it is

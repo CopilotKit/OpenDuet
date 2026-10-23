@@ -11,6 +11,7 @@ import type { ApprovalRecord } from "../src/approvals/types";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import {
   createProactiveEngine,
+  endedOnReplies,
   startedTaskTestFailure,
 } from "../src/proactive/engine";
 import { createPrivateShareCheck } from "../src/proactive/private-share";
@@ -585,7 +586,9 @@ describe("private information sharing check", () => {
 describe("a started suggestion's turn", () => {
   /** An engine with one started suggestion queued, whose turn does what `startTask` does. */
   function withTask(
-    startTask: () => Promise<{ replyText?: string } | undefined>,
+    startTask: () => Promise<
+      { replyText?: string; offeredReplies?: boolean } | undefined
+    >,
   ) {
     const calls: { name: string; args: unknown[] }[] = [];
     const record =
@@ -673,9 +676,20 @@ describe("a started suggestion's turn", () => {
     await engine.sweep();
     expect(named(calls, "claim")).toContainEqual(["proactive.task", 2]);
     expect(named(calls, "recordTaskOutcome")).toEqual([
-      ["s1", { reply: "Should I send it to Rosa now?" }],
+      ["s1", { reply: "Should I send it to Rosa now?", asks: true }],
     ]);
     expect(named(calls, "finish")).toHaveLength(1);
+  });
+
+  test("a reply that ends on reply chips asks the person, whatever its last sentence says", async () => {
+    const { engine, calls } = withTask(async () => ({
+      replyText: "Tell me which of the three answers fits.",
+      offeredReplies: true,
+    }));
+    await engine.sweep();
+    expect(named(calls, "recordTaskOutcome")).toEqual([
+      ["s1", { reply: "Tell me which of the three answers fits.", asks: true }],
+    ]);
   });
 
   test("stopped on an approval, it ends waiting on that request rather than failing", async () => {
@@ -718,6 +732,25 @@ describe("a started suggestion's turn", () => {
         },
       ],
     ]);
+  });
+});
+
+describe("whether a turn ended on reply chips", () => {
+  test("it is read from the thread after the task's own message", () => {
+    const thread = [
+      {
+        id: "earlier",
+        role: "assistant",
+        toolCalls: [{ name: "suggest_replies" }],
+      },
+      { id: "suggestion-s1", role: "user" },
+      { id: "a", role: "assistant", toolCalls: [{ name: "gmail_read" }] },
+      { id: "b", role: "assistant", toolCalls: [{ name: "suggest_replies" }] },
+    ];
+    expect(endedOnReplies(thread, "suggestion-s1")).toBe(true);
+    // Chips offered before the task's message are another turn's.
+    expect(endedOnReplies(thread.slice(0, 3), "suggestion-s1")).toBe(false);
+    expect(endedOnReplies(thread, "missing")).toBe(false);
   });
 });
 

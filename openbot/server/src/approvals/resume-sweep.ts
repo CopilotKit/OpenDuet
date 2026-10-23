@@ -1,3 +1,4 @@
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -13,6 +14,7 @@ import {
   routineRuns,
 } from "../db/schema";
 import type { DeliveryScope } from "../delivery/types";
+import { recordTaskContinuation } from "../proactive/store";
 import type { ResponsibilityStore } from "../responsibilities/types";
 import { DEFAULT_MAX_ATTEMPTS, type WorkQueue } from "../work/queue";
 import type { ApprovalResumeDependencies, ApprovalService } from "./service";
@@ -111,20 +113,6 @@ export function createApprovalResumeTick(deps: {
               input.ownerUserId,
               approvalId,
             );
-            // A group turn's approval also writes the resumed reply into the shared transcript.
-            const outcome = await groupConversations.continueWaiting(
-              approvalId,
-              () =>
-                approvalContinuationRunner({
-                  ownerUserId: input.ownerUserId,
-                  routineId: "approval",
-                  agentId: request.action.botId,
-                  threadId: snapshot.threadId,
-                  instruction: "",
-                  initiator: snapshot.initiator ?? PERSON_INITIATOR,
-                  continuation: { snapshot, result, messageId },
-                }),
-            );
             const [source] = await database
               .select({ channelId: intelligenceChannelMappings.channelId })
               .from(intelligenceChannelMappings)
@@ -135,6 +123,79 @@ export function createApprovalResumeTick(deps: {
                 ),
               )
               .limit(1);
+            // A group turn's approval also writes the resumed reply into the shared transcript.
+            let outcome: { replyText: string };
+            try {
+              outcome = await groupConversations.continueWaiting(
+                approvalId,
+                () =>
+                  approvalContinuationRunner({
+                    ownerUserId: input.ownerUserId,
+                    routineId: "approval",
+                    agentId: request.action.botId,
+                    threadId: snapshot.threadId,
+                    instruction: "",
+                    initiator: snapshot.initiator ?? PERSON_INITIATOR,
+                    continuation: { snapshot, result, messageId },
+                  }),
+              );
+            } catch (error) {
+              /*
+               * Carried on, then stopped on another decision only the person can make: the
+               * conversation now waits on that one, as a routine's does. This decision is done.
+               * Thrown, it was retried, and every retry carried the turn on again from here,
+               * repeating what it had already done before it stopped.
+               */
+              if (!(error instanceof HeadlessToolSuspension)) throw error;
+              // A routine run waiting on this decision now waits on the next one.
+              await database
+                .update(routineRuns)
+                .set({ waiting: error.waiting })
+                .where(
+                  and(
+                    eq(routineRuns.status, "waiting"),
+                    sql`${routineRuns.waiting}->>'approvalId' = ${approvalId}`,
+                  ),
+                );
+              await recordTaskContinuation(database, {
+                ownerUserId: input.ownerUserId,
+                approvalId,
+                channelId: source?.channelId ?? null,
+                askedAt: request.createdAt,
+                replyText: null,
+                stoppedOn: error.waiting.requestId
+                  ? { kind: error.waiting.kind, id: error.waiting.requestId }
+                  : undefined,
+              }).catch((failure: unknown) =>
+                console.error(
+                  JSON.stringify({
+                    type: "started-task-continuation-error",
+                    error:
+                      failure instanceof Error ? failure.name : "UnknownError",
+                    timestamp: new Date().toISOString(),
+                  }),
+                ),
+              );
+              return;
+            }
+            // A started task waiting on this decision, or on the answer that led to it, takes the
+            // reply as where it now stands. Never thrown: the conversation has already continued,
+            // and a retry here would carry the decision out twice.
+            await recordTaskContinuation(database, {
+              ownerUserId: input.ownerUserId,
+              approvalId,
+              channelId: source?.channelId ?? null,
+              askedAt: request.createdAt,
+              replyText: outcome.replyText,
+            }).catch((error: unknown) =>
+              console.error(
+                JSON.stringify({
+                  type: "started-task-continuation-error",
+                  error: error instanceof Error ? error.name : "UnknownError",
+                  timestamp: new Date().toISOString(),
+                }),
+              ),
+            );
             if (source && outcome.replyText)
               await channelStore.recordActivity(
                 await actorFor(input.ownerUserId),

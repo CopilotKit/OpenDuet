@@ -126,6 +126,11 @@ export type StartedSuggestion = Pick<
   waitingOn: { kind: "approval" | "question"; id: string } | null;
   /** When the person checked it off. Null while it is still theirs to deal with. */
   resolvedAt: Date | null;
+  /**
+   * Whether Try again can run it: a failed turn of its own, yes; a decision that couldn't be carried
+   * out after it, no, since running the task again wouldn't carry the decision out.
+   */
+  canRetry: boolean;
   /** When it last changed: started, finished, gave up, or was checked off. */
   at: Date;
   /** The conversation the turn runs in: its research setting's. */
@@ -143,8 +148,10 @@ export type StartedList = {
 
 /** What a started suggestion's turn ended on, kept on its work queue row for Tasks. */
 export type TaskOutcome = {
-  /** The last sentence of its reply. */
+  /** The sentence of its reply to show as the next step. */
   reply?: string | null;
+  /** Whether that reply asked the person something: a question, or reply chips. */
+  asks?: boolean;
   /** The request it stopped on, when it was suspended for one. */
   waiting?: { kind: string; id: string | null };
 };
