@@ -1,6 +1,7 @@
 import { IconChevronLeft } from "@tabler/icons-react";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type * as React from "react";
+import { useInPageChrome, usePageChrome } from "@/components/shell/page-chrome";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { SidebarToggle, useSidebarToggleVisible } from "./sidebar-toggle";
@@ -23,7 +24,7 @@ import { SidebarToggle, useSidebarToggleVisible } from "./sidebar-toggle";
 
 /**
  * `prose` is the default because configuration is mostly reading, and every screen uses it so none is
- * wider than another. It is `max-w-3xl`, 720px against this app's 15px root: room for a row's label
+ * wider than another. It is `max-w-3xl`, 768px against the browser's 16px root: room for a row's label
  * and its control side by side. Sentences are held to `max-w-prose` (around 65 characters) inside it,
  * which is where reading stays comfortable, so the column widening does not stretch them.
  *
@@ -74,7 +75,17 @@ export function PageShell({
    * provider at all, so there is nothing for a toggle to act on there.
    */
   const showToggle = useSidebarToggleVisible();
-  const bar = showToggle || !!backButton;
+  /*
+   * UNDER THE APP'S PAGE CHROME the shell draws the back disc and the title (parity-spec 2.9), so
+   * this draws neither: no bar, and the heading kept for screen readers only. The Back link this page
+   * was given becomes where the disc goes when there is no history to go back through.
+   */
+  const inChrome = useInPageChrome();
+  usePageChrome({
+    title,
+    ...(backButton ? { backTo: backButton.linkProps } : {}),
+  });
+  const bar = !inChrome && (showToggle || !!backButton);
 
   return (
     <>
@@ -109,25 +120,38 @@ export function PageShell({
        * eighteen screens are unaffected.
        *
        * Separate from the centred column below so the scrollbar rides the pane's edge instead of
-       * appearing inside a 630px measure with content either side of it.
+       * appearing inside a 768px measure with content either side of it.
        */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div
           className={cn(
             "mx-auto flex w-full flex-col px-4 pb-12",
-            // Without a bar above it the heading keeps the full original space.
-            bar ? "pt-8" : "pt-12",
+            // Under the chrome the page starts below its floating header. Without a bar above it
+            // the heading keeps the full original space.
+            inChrome ? "pt-[92px]" : bar ? "pt-8" : "pt-12",
             WIDTHS[width],
             className,
           )}
         >
           <header className="flex flex-col gap-2">
-            <div className="flex flex-row items-center justify-between gap-4">
-              <h1 className="font-bold text-2xl">{title}</h1>
+            <div
+              className={cn(
+                "flex flex-row items-center justify-between gap-4",
+                inChrome && !action && "sr-only",
+              )}
+            >
+              <h1
+                className={cn(
+                  "type-display font-semibold",
+                  inChrome && "sr-only",
+                )}
+              >
+                {title}
+              </h1>
               {action}
             </div>
             {description ? (
-              <p className="max-w-prose text-pretty text-muted-foreground text-sm leading-relaxed">
+              <p className="type-sub max-w-prose text-pretty text-muted-foreground">
                 {description}
               </p>
             ) : null}
@@ -163,12 +187,12 @@ export function PageSection({
     <section className={cn("mt-12", className)}>
       {title ? (
         <div className="flex min-h-8 flex-row items-center justify-between gap-4">
-          <h2 className="font-bold text-lg">{title}</h2>
+          <h2 className="type-nav font-semibold">{title}</h2>
           {action}
         </div>
       ) : null}
       {description ? (
-        <p className="mt-1 max-w-prose text-pretty text-muted-foreground text-sm leading-relaxed">
+        <p className="type-sub mt-1 max-w-prose text-pretty text-muted-foreground">
           {description}
         </p>
       ) : null}
@@ -216,5 +240,5 @@ export function PageRows({
  * "nothing here yet" is a fact, not an event, and the page already told you what the section is for.
  */
 export function PageEmpty({ children }: { children: React.ReactNode }) {
-  return <p className="mt-4 text-muted-foreground text-sm">{children}</p>;
+  return <p className="type-sub mt-4 text-muted-foreground">{children}</p>;
 }

@@ -18,15 +18,13 @@ const TABS: {
 ];
 
 /**
- * Which tab a path belongs to, or null for a screen opened from the menu. A page open over the
- * Pages list (`/pages/<id>`) is still the Pages tab, and any other conversation with a Bot
- * (`/channel/<id>`) is drawn as Chat is. Starting one (`/channel/new`, where Bots are picked) keeps
- * its own page.
+ * Which tab a path belongs to, or null for a page pushed over the app. A page open over the Pages
+ * list (`/pages/<id>`) is still the Pages tab. A conversation opened from the menu (`/channel/<id>`)
+ * is not Chat: it is a page, with a back disc and no tab bar (parity-spec 2.9).
  */
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
-  if (/^\/channel\/[^/]+$/.test(path) && path !== "/channel/new") return "chat";
   if (path === "/tasks") return "tasks";
   if (path === "/pages" || /^\/pages\/[^/]+$/.test(path)) return "pages";
   return null;
@@ -50,8 +48,13 @@ export function TabBar({ current }: { current: ShellTab }) {
         const badge = tab.id === "tasks" && waiting > 0 ? waiting : 0;
         return (
           <Link
-            // The router marks the current tab with aria-current; exact, or "/" would match all three.
-            activeOptions={{ exact: true }}
+            /*
+             * What is announced is what is drawn: the tab `current` names carries aria-current. The
+             * router sets it on its own active link too, so its matching is made to agree: exact for
+             * Chat and Tasks ("/" would match all three), and Pages also over a page open on it.
+             */
+            activeOptions={{ exact: tab.id !== "pages" }}
+            aria-current={on ? "page" : undefined}
             aria-label={badge ? `${tab.label}, ${badge} waiting` : tab.label}
             className={cn(
               "relative flex flex-1 flex-col items-center justify-center gap-px rounded-[27px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
@@ -72,7 +75,8 @@ export function TabBar({ current }: { current: ShellTab }) {
               <span
                 aria-hidden
                 className={cn(
-                  "absolute top-1 left-1/2 ml-[7px] grid h-5 min-w-5 place-items-center rounded-full bg-duet-violet px-1 font-bold text-[13px] text-white tabular-nums",
+                  // The one badge style (parity-spec 2.2): the accent, with what sits on it.
+                  "type-caption absolute top-1 left-1/2 ml-[7px] grid h-5 min-w-5 place-items-center rounded-full bg-duet-accent px-1 font-semibold text-duet-on-accent tabular-nums",
                   on
                     ? "shadow-[0_0_0_2px_var(--duet-tile)]"
                     : "shadow-[0_0_0_2px_var(--duet-card)]",

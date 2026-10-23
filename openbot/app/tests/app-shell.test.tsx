@@ -100,12 +100,10 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/pages/page-1/more")).toBeNull();
   expect(tabForPath("/activity")).toBeNull();
   expect(tabForPath("/bots")).toBeNull();
-  // Any other conversation with a Bot is drawn as Chat is, in the column with the tab bar.
-  expect(tabForPath("/channel/abc")).toBe("chat");
-  expect(tabForPath("/channel/abc/")).toBe("chat");
-  // Starting a new one, and a group's shared transcript, keep their own pages.
+  // A conversation opened from the menu is a page over the app, not Chat.
+  expect(tabForPath("/channel/abc")).toBeNull();
+  expect(tabForPath("/channel/abc/")).toBeNull();
   expect(tabForPath("/channel/new")).toBeNull();
-  expect(tabForPath("/channel/abc/more")).toBeNull();
   expect(tabForPath("/group/abc")).toBeNull();
 });
 
@@ -160,6 +158,15 @@ test("on a page open over the list, the Pages tab is the one drawn current", asy
   expect(within(nav).getByRole("link", { current: "page" }).textContent).toBe(
     "Pages",
   );
+});
+
+test("the tab drawn current is the one announced current, over a page open on Pages too", async () => {
+  inbox = { requests: [], questions: [] };
+  serving();
+  const view = draw(<TabBar current="pages" />, undefined, "/pages/page-1");
+  const nav = await view.findByRole("navigation", { name: "Main" });
+  const current = within(nav).getAllByRole("link", { current: "page" });
+  expect(current.map((link) => link.textContent)).toEqual(["Pages"]);
 });
 
 test("the Tasks badge counts what Needs you lists: pending actions and open questions", async () => {
@@ -264,7 +271,8 @@ test("the menu opens on Chat, a new conversation and the conversations, with Man
   expect(rows[1]).toBe("New conversation");
   expect(rows[2]).toBe("Search conversations");
   expect(rows[3]).toContain("Ship date with Ana");
-  expect(rows.slice(4, 8)).toEqual(["Manage", "Settings", "Sign out", "Close"]);
+  // No close button: the drawer closes on the strip beside it, on Escape and on a choice.
+  expect(rows.slice(4)).toEqual(["Manage", "Settings", "Sign out"]);
   expect(
     within(dialog).getByRole("link", { name: "Chat" }).getAttribute("href"),
   ).toBe("/");

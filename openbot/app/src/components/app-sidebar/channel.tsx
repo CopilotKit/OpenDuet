@@ -23,6 +23,10 @@ import {
 } from "@/lib/channels/mutations";
 import type { MessageListEmphasis } from "@/lib/settings/message-list";
 import { useTypedReveal } from "@/lib/typed-reveal";
+import {
+  conversationTitle,
+  plainText,
+} from "@/lib/channels/conversation-title";
 import { ChannelItemContent } from "./channel-item-content";
 
 /**
@@ -68,7 +72,9 @@ export const Channel = memo(function Channel({
   });
   /* Types in only on arrival; an already-named row draws it outright. */
   const revealed = useTypedReveal(summary);
-  const threadTitle = revealed.text || lastMessage || "New conversation";
+  // The same title the conversation's own page shows, as plain text (`conversationTitle`).
+  const title = conversationTitle({ summary, lastMessage });
+  const threadTitle = revealed.text ? plainText(revealed.text) : title;
   const setPinned = useMutation(setChannelPinnedMutationOptions(queryClient));
   const deleteChannel = useMutation(deleteChannelMutationOptions(queryClient));
   const [confirming, setConfirming] = useState(false);
@@ -125,7 +131,7 @@ export const Channel = memo(function Channel({
             <ChannelItemContent
               participantIds={participantIds}
               name={name}
-              title={summary || lastMessage || "New conversation"}
+              title={title}
               displayedTitle={threadTitle}
               lastMessageAt={lastMessageAt}
               emphasis={emphasis}
