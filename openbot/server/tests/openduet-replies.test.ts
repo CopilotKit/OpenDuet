@@ -63,7 +63,7 @@ describe("the suggest_replies tool", () => {
       undefined,
     ]) {
       expect(await tool().execute(args)).toBe(
-        "Refused. suggest_replies takes two or three different replies, each at most 40 characters.",
+        "Refused. suggest_replies takes two or three different replies, each at most 24 characters.",
       );
     }
   });

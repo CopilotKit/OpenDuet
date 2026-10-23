@@ -11,7 +11,8 @@ function ApprovalsSettingsPage() {
   return (
     <PageShell
       description="Choose when your Bots ask before they change things. Rules here apply to all of them."
-      title="Approvals"
+      // Named as the Settings row that opens it.
+      title="Approval rules"
     >
       <ApprovalSettings />
       <TeamBotConsents />

@@ -1,18 +1,19 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
-import { SidebarShell } from "@/components/layout/sidebar-shell";
-import { SettingsSidebar } from "@/components/settings/settings-sidebar";
+import { AppShell } from "@/components/shell/app-shell";
 
 export const Route = createFileRoute("/_authed/settings")({
   component: RouteComponent,
 });
 
+/**
+ * Settings is a page in the app's own shell (parity-spec 2.9): the back disc and the title pill over
+ * it, the same chrome as every other page the menu or the avatar opens. It used to be OpenBot's
+ * settings shell, a second sidebar whose only way out was "Back to app".
+ */
 function RouteComponent() {
   return (
-    <SidebarShell width="300px">
-      <SettingsSidebar />
-      <main className="flex-1">
-        <Outlet />
-      </main>
-    </SidebarShell>
+    <AppShell>
+      <Outlet />
+    </AppShell>
   );
 }

@@ -1,11 +1,17 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import {
+  createFileRoute,
+  Link,
+  type LinkOptions,
+} from "@tanstack/react-router";
 import React from "react";
+import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
+import { Row, Segmented } from "@/components/duet/kit";
 import {
   PageRows,
   PageSection,
   PageShell,
 } from "@/components/layout/page-shell";
-import { MessageListPreference } from "@/components/settings/message-list-preference";
 import { StandingInstructions } from "@/components/settings/standing-instructions";
 import { useTheme } from "@/components/theme-provider";
 import {
@@ -16,60 +22,90 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
+import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { appConfig } from "@/lib/generated/application-config";
 import { formatHotkey, HOTKEYS } from "@/lib/hotkeys/hotkeys";
+import type { ThemePreference } from "@/lib/theme";
 
 export const Route = createFileRoute("/_authed/settings/")({
   component: RouteComponent,
 });
 
-function RouteComponent() {
-  const { dark, setDark } = useTheme();
+const APPEARANCE: readonly { value: ThemePreference; label: string }[] = [
+  { value: "system", label: "Match phone" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
 
-  /*
-   * The measurements that used to be written out here now live in `PageShell`, which Skills, Admin
-   * and this screen all render through. The reason they match is no longer that somebody remembered
-   * to copy them.
-   *
-   * Connected accounts used to be a section below. It is its own screen now: a connector can need
-   * more from a person than one switch, and a section cannot grow a page's worth of that.
-   */
+/** Every place a person sets something up, one row each, in the order they reach for them. */
+const PLACES: readonly {
+  label: string;
+  icon: DuetIconName;
+  to: LinkOptions["to"];
+  adminOnly?: boolean;
+}[] = [
+  { label: "Bots", icon: "bolt", to: "/bots" },
+  { label: "Connections", icon: "plug", to: "/connections" },
+  { label: "Capabilities", icon: "box", to: "/capabilities" },
+  { label: "Routines", icon: "repeat", to: "/routines" },
+  { label: "Approval rules", icon: "shieldCheck", to: "/settings/approvals" },
+  { label: "Notifications", icon: "bell", to: "/settings/notifications" },
+  { label: "Passwords", icon: "key", to: "/settings/passwords" },
+  { label: "Admin", icon: "shieldLock", to: "/admin", adminOnly: true },
+];
+
+/**
+ * Settings, as one page of rows (parity-spec 1.2 and 2.9): how the app looks, then every place a
+ * person sets something up, then the instructions every Bot follows. It opens from the avatar disc,
+ * under the app's page chrome.
+ *
+ * What a person never needed is gone: the components gallery and the message list's emphasis in the
+ * old sidebar were developer surfaces, and keyboard shortcuts only show where there is a keyboard.
+ */
+function RouteComponent() {
+  const { preference, setPreference } = useTheme();
+  const { data: user } = useQuery(currentUserQueryOptions());
+  const product = appConfig.brand.productName;
+
   return (
     <PageShell
-      description="How OpenBot looks and works for you. Message list settings follow your account. The theme stays in this browser."
-      title="Preferences"
+      description={`How ${product} looks and works for you.`}
+      title="Settings"
     >
-      <PageSection title="General">
-        <PageRows>
-          <Item size="sm">
-            <ItemContent>
-              <ItemTitle>Dark theme</ItemTitle>
-              <ItemDescription>
-                Use the dark appearance across OpenBot.
-              </ItemDescription>
-            </ItemContent>
-            <ItemActions>
-              <Switch
-                aria-label="Dark theme"
-                checked={dark}
-                onCheckedChange={setDark}
-              />
-            </ItemActions>
-          </Item>
-        </PageRows>
-        <MessageListPreference />
+      <PageSection title="Appearance">
+        <div className="mt-3">
+          <Segmented
+            label="Appearance"
+            onChange={setPreference}
+            options={APPEARANCE}
+            value={preference}
+          />
+        </div>
       </PageSection>
-      {/*
-       * Above the shortcuts and below the appearance preferences, because it is the only thing on this
-       * screen that changes what a coworker says rather than what this browser looks like.
-       */}
+      <nav aria-label="Settings" className="mt-8 flex flex-col gap-0.5">
+        {PLACES.filter(
+          (place) => !place.adminOnly || user?.role === "admin",
+        ).map((place) => (
+          <Row
+            chevron
+            key={place.label}
+            leading={<DuetIcon name={place.icon} size={22} />}
+            link={({ className, children }) => (
+              <Link className={className} to={place.to}>
+                {children}
+              </Link>
+            )}
+            size="nav"
+            title={place.label}
+          />
+        ))}
+      </nav>
       <StandingInstructions />
       {/*
-       * Drawn from the same registry the listeners match against, so this list is what the keys
-       * actually do rather than what somebody remembered they did. Read-only on purpose: these
-       * are not rebindable, and a row with nothing to click says so by having nothing to click.
+       * Only where there is a keyboard. Drawn from the same registry the listeners match against, so
+       * this list is what the keys actually do. Read-only: they are not rebindable.
        */}
-      <PageSection title="Keyboard shortcuts">
+      <PageSection className="hidden md:block" title="Keyboard shortcuts">
         <PageRows>
           {HOTKEYS.map((hotkey, index) => (
             <React.Fragment key={hotkey.id}>

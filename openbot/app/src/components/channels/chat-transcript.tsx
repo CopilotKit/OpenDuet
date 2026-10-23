@@ -4,14 +4,6 @@ import {
   useRenderActivityMessage,
   useRenderToolCall,
 } from "@copilotkit/react-core/v2";
-import {
-  IconAlertTriangle,
-  IconBox,
-  IconChevronDown,
-  IconClock,
-  IconFile,
-  IconX,
-} from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import {
@@ -48,12 +40,14 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TypingDots } from "@/components/duet/kit";
+import { DuetIcon } from "@/components/duet/icons";
+import { Seen, ThreadFooter, TypingDots } from "@/components/duet/kit";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
 import { readFirstDay } from "@/lib/channels/first-day";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { appConfig } from "@/lib/generated/application-config";
 import { queryClient } from "@/query-client";
 import { splitChatOrigin } from "./chat-origin";
 import {
@@ -65,11 +59,13 @@ import {
 import { ReplyChips } from "@/lib/copilot/reply-chips-tool";
 import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
-import { readToolName } from "@/lib/plugins/tool-name";
+import { approvalInboxOptions } from "@/lib/approvals";
+import { personToolLabel, readToolName } from "@/lib/plugins/tool-name";
 import {
   asText,
   forDisplay,
   REFUSAL_MARKER,
+  toolResultDeclined,
   toolResultFailed,
 } from "@/lib/plugins/tool-result";
 import { readTeamBotConsent } from "@/lib/team-bots";
@@ -95,6 +91,7 @@ import type { QueuedMessage } from "./composer";
 import { AppAccessCard } from "./app-access-card";
 import { TeamBotConsentCard } from "./team-bot-consent";
 import { ToolRenderBoundary } from "./tool-boundary";
+import { splitBubbles } from "./split-bubbles";
 import { ToolLine } from "./tool-line";
 import { VoiceChatCard } from "./voice-chat-card";
 
@@ -126,16 +123,18 @@ type ChatTranscriptProps = {
   contentClassName?: string;
 };
 
-/** The film's message bubbles (launch-film/film/src/duet/app.tsx `Bubble`). */
+/**
+ * The film's message bubbles (launch-film/film/src/duet/app.tsx `Bubble`), on the visual system's
+ * scale: body text, and one radius on every corner with no tail (parity-spec 2.3, 2.4).
+ */
 const BUBBLE_CONTENT =
-  "duet-face rounded-[21px] px-4 py-3 text-[18px] leading-6 tracking-[-0.011em] text-duet-ink [&>*:first-child]:mt-0 [&>*:last-child]:mb-0";
+  "duet-face type-body rounded-[var(--duet-radius-bubble)] px-4 py-3 text-duet-ink [&>*:first-child]:mt-0 [&>*:last-child]:mb-0";
 /** Streamdown's prose, tightened to a bubble: closer paragraphs, bullets hung outside the text. */
 const AGENT_PROSE =
   "[&>div]:space-y-2.5 [&_ol]:list-outside [&_ol]:pl-5 [&_ul]:list-outside [&_ul]:pl-5 [&_li]:py-0.5";
 const AGENT_BUBBLE =
-  "max-w-[92%] *:data-[slot=bubble-content]:rounded-bl-[7px] *:data-[slot=bubble-content]:bg-duet-bubble *:data-[slot=bubble-content]:text-duet-ink";
-const USER_BUBBLE =
-  "max-w-[85%] *:data-[slot=bubble-content]:rounded-br-[7px] *:data-[slot=bubble-content]:bg-duet-user";
+  "max-w-[82%] *:data-[slot=bubble-content]:bg-duet-bubble *:data-[slot=bubble-content]:text-duet-ink";
+const USER_BUBBLE = "max-w-[85%] *:data-[slot=bubble-content]:bg-duet-user";
 
 /** One shared empty array, so a screen without a queue does not hand down a new one per render. */
 const EMPTY_QUEUE: readonly QueuedMessage[] = [];
@@ -580,7 +579,7 @@ function RoutineFiring({ instruction }: { instruction: string }) {
   }
   return (
     <div className="flex min-w-0 items-baseline gap-2 text-muted-foreground text-sm">
-      <IconClock aria-hidden className="size-4 shrink-0 translate-y-0.5" />
+      <DuetIcon className="shrink-0 translate-y-0.5" name="clock" size={16} />
       <span className="min-w-0">
         <span className="font-medium">Routine ran.</span>{" "}
         <span className="whitespace-pre-wrap">{instruction}</span>
@@ -771,7 +770,7 @@ function ResponsibilityFiring({
 }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2 text-muted-foreground text-sm">
-      <IconClock aria-hidden className="size-4 shrink-0 translate-y-0.5" />
+      <DuetIcon className="shrink-0 translate-y-0.5" name="clock" size={16} />
       <div className="min-w-0">
         <p>
           <span className="font-medium">Responsibility ran.</span> Trigger:{" "}
@@ -781,9 +780,10 @@ function ResponsibilityFiring({
         <details className="group mt-1">
           <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
             Details
-            <IconChevronDown
-              aria-hidden
-              className="size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none"
+            <DuetIcon
+              className="rotate-90 transition-transform group-open:-rotate-90 motion-reduce:transition-none"
+              name="chevronRight"
+              size={12}
             />
           </summary>
           <p className="mt-1 whitespace-pre-wrap break-words text-xs">{raw}</p>
@@ -812,6 +812,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   firstDayAnswer = false,
   role,
   text,
+  seen = false,
 }: {
   commandNames?: string;
   delay: number;
@@ -819,6 +820,8 @@ const TranscriptMessage = memo(function TranscriptMessage({
   firstDayAnswer?: boolean;
   role: "user" | "assistant";
   text: string;
+  /** The person's newest message, which the Bot has picked up and not yet answered in words. */
+  seen?: boolean;
 }) {
   const isUser = role === "user";
   if (!isUser && firstDayAnswer) {
@@ -857,24 +860,20 @@ const TranscriptMessage = memo(function TranscriptMessage({
       <MessageContent>
         <Arriving delay={delay}>
           {/*
-            The film's bubbles: the Bot's in light grey with its tail corner bottom left, the
-            person's in the violet tint, right-aligned, tail bottom right. A Bot's bubble may grow
-            to nearly the whole column, so a code block or a table still has room.
+            The film's bubbles: the Bot's in light grey and the person's in the accent tint,
+            right-aligned, both rounded on every corner. A Bot's reply is drawn as separate bubbles,
+            one per thought and 8px apart (`splitBubbles`), the way a chat sends them.
           */}
-          <Bubble
-            align={align}
-            className={isUser ? USER_BUBBLE : AGENT_BUBBLE}
-            variant={isUser ? "muted" : "secondary"}
-          >
-            <BubbleContent
-              className={cn(BUBBLE_CONTENT, isUser ? undefined : AGENT_PROSE)}
-            >
-              {isUser ? (
-                // A person's own message is shown exactly as they typed it. Rendering it as markdown
-                // would silently reformat what they said, and an asterisk in a sentence is not
-                // emphasis. The chip is the one exception, and it is not reformatting: it is drawing
-                // the thing that was already a chip in the composer as a chip here too, so the
-                // transcript shows a skill was used rather than a slash that was typed.
+          {isUser ? (
+            <Bubble align={align} className={USER_BUBBLE} variant="muted">
+              <BubbleContent className={BUBBLE_CONTENT}>
+                {/*
+                 * A person's own message is shown exactly as they typed it. Rendering it as
+                 * markdown would silently reformat what they said, and an asterisk in a sentence
+                 * is not emphasis. The chip is the one exception, and it is not reformatting: it is
+                 * drawing the thing that was already a chip in the composer as a chip here too, so
+                 * the transcript shows a skill was used rather than a slash that was typed.
+                 */}
                 <span className="whitespace-pre-wrap">
                   {origin && (
                     <span className="mr-1.5 inline-flex items-center rounded bg-foreground/10 px-1.5 py-0.5 align-middle text-foreground/70 text-xs">
@@ -890,7 +889,8 @@ const TranscriptMessage = memo(function TranscriptMessage({
                        * breaks the line it is in reads as a separate message.
                        */}
                       <span className="mr-1 inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 align-middle font-mono text-foreground/80 text-xs">
-                        <IconBox className="size-3 shrink-0" />/{invoked.chip}
+                        <DuetIcon className="shrink-0" name="box" size={12} />/
+                        {invoked.chip}
                       </span>
                       {invoked.rest}
                     </>
@@ -898,25 +898,75 @@ const TranscriptMessage = memo(function TranscriptMessage({
                     said
                   )}
                 </span>
-              ) : (
-                /*
-                 * A Bot's prose is markdown, and it arrives in pieces.
-                 *
-                 * Rendered with a streaming-aware renderer rather than an ordinary one: half a fenced
-                 * code block or an unclosed bold marker is the NORMAL state for most of a run, and a
-                 * plain markdown parser draws that as literal asterisks and backticks until the
-                 * closing token arrives, so the answer visibly rewrites itself as it lands. This
-                 * closes them for the duration.
-                 */
-                <Streamdown components={markdownComponents}>{text}</Streamdown>
-              )}
-            </BubbleContent>
-          </Bubble>
+              </BubbleContent>
+            </Bubble>
+          ) : (
+            <div className="flex flex-col items-start gap-2">
+              {splitBubbles(text).map((part, index) => (
+                <Bubble
+                  align={align}
+                  className={AGENT_BUBBLE}
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a reply's thoughts keep their order as it streams.
+                  key={index}
+                  variant="secondary"
+                >
+                  <BubbleContent className={cn(BUBBLE_CONTENT, AGENT_PROSE)}>
+                    {/*
+                     * A Bot's prose is markdown, and it arrives in pieces.
+                     *
+                     * Rendered with a streaming-aware renderer rather than an ordinary one: half a
+                     * fenced code block or an unclosed bold marker is the NORMAL state for most of
+                     * a run, and a plain markdown parser draws that as literal asterisks and
+                     * backticks until the closing token arrives, so the answer visibly rewrites
+                     * itself as it lands. This closes them for the duration.
+                     */}
+                    <Streamdown components={markdownComponents}>
+                      {part}
+                    </Streamdown>
+                  </BubbleContent>
+                </Bubble>
+              ))}
+            </div>
+          )}
+          {seen ? <Seen /> : null}
         </Arriving>
       </MessageContent>
     </MessageRow>
   );
 });
+
+/**
+ * Which of the person's messages reads "Seen" (parity-spec 2.13), or null for none.
+ *
+ * Only their newest, and only while the Bot has not answered it in words: a message in the thread
+ * has reached the Bot, so it is seen from then until a reply sits under it. Read off the thread
+ * alone, so a reload mid-turn draws it again. The transcript waits for it to settle before drawing
+ * it (`useSettled`), so history replaying in does not flash it under older messages.
+ */
+export function seenMessageId(items: readonly TranscriptItem[]): string | null {
+  const newest = items.findLastIndex(
+    (item) => item.kind === "text" && isPersonSentMessage(item.role, item.text),
+  );
+  if (newest === -1) return null;
+  const answered = items
+    .slice(newest + 1)
+    .some((item) => item.kind === "text" && item.role === "assistant");
+  return answered ? null : (items[newest]?.id ?? null);
+}
+
+/** How long "Seen" waits for the thread to hold still before it is drawn. */
+const SEEN_SETTLE_MS = 400;
+
+/** The value once it has held for `ms`; null at once when it becomes null. */
+function useSettled(value: string | null, ms: number): string | null {
+  const [settled, setSettled] = useState<string | null>(null);
+  useEffect(() => {
+    if (value === null) return;
+    const timer = window.setTimeout(() => setSettled(value), ms);
+    return () => window.clearTimeout(timer);
+  }, [value, ms]);
+  return value !== null && settled === value ? value : null;
+}
 
 /**
  * The one shape an attachment url is allowed to have, taken from the helper that builds it rather
@@ -1231,7 +1281,7 @@ function SentAttachmentTile({ attachment }: { attachment: SentAttachment }) {
         className="flex h-32 w-44 flex-col justify-center gap-2 rounded-xl border border-destructive border-dashed p-3 text-destructive"
         role="note"
       >
-        <IconAlertTriangle className="size-6" />
+        <DuetIcon name="alert" size={24} />
         <p className="text-sm">{unavailableSentence(filename)}</p>
       </div>
     );
@@ -1240,7 +1290,7 @@ function SentAttachmentTile({ attachment }: { attachment: SentAttachment }) {
   if (modality === "document") {
     return (
       <div className="flex h-32 w-44 flex-col justify-between rounded-xl border border-border bg-muted/40 p-3">
-        <IconFile className="size-6 text-muted-foreground" />
+        <DuetIcon className="text-muted-foreground" name="file" size={24} />
         <div className="min-w-0">
           {/* `title` because the tile is fixed-width and a long name is cut, not wrapped. */}
           <p className="truncate font-medium text-sm" title={filename}>
@@ -1329,7 +1379,7 @@ export function LightboxPicture({
         className="flex flex-col items-center gap-3 p-8 text-center text-white"
         role="note"
       >
-        <IconAlertTriangle className="size-8" />
+        <DuetIcon name="alert" size={32} />
         <p className="text-sm">{unavailableSentence(filename)}</p>
       </div>
     );
@@ -1422,7 +1472,7 @@ function AttachmentLightbox({
             />
           }
         >
-          <IconX className="size-5" />
+          <DuetIcon name="x" size={20} />
         </DialogClose>
       </DialogContent>
     </Dialog>
@@ -1504,6 +1554,12 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
   result?: string;
 }) {
   const renderToolCall = useRenderToolCall();
+  // Held on its approval card: the same inbox the card under it reads.
+  const inbox = useQuery(approvalInboxOptions());
+  const waitingOnPerson = (inbox.data?.requests ?? []).some(
+    (request) =>
+      request.status === "pending" && request.action.toolCallId === toolCallId,
+  );
   const toolCall = useMemo(
     () => ({
       id: toolCallId,
@@ -1546,7 +1602,11 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
          */}
         {drawn ?? (
           <>
-            <ServerToolLine name={name} result={result} />
+            <ServerToolLine
+              name={name}
+              result={result}
+              waiting={waitingOnPerson}
+            />
             <PendingApprovals toolCallIds={[toolCallId]} />
           </>
         )}
@@ -1566,12 +1626,16 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
 export function ServerToolLine({
   name,
   result,
+  waiting = false,
 }: {
   name: string;
   result?: string;
+  /** Held on its approval card for the person's answer, so it is not running yet. */
+  waiting?: boolean;
 }) {
-  const running = result === undefined;
-  const { label, detail } = readToolName(name, running);
+  const running = result === undefined && !waiting;
+  // Said no on its card: nothing was done, and the line says so rather than naming it as done.
+  const declined = toolResultDeclined(result);
   /*
    * A refusal is not a result, and must not read like one.
    *
@@ -1581,7 +1645,18 @@ export function ServerToolLine({
    */
   const answer = result === undefined ? undefined : asText(result);
   const refused = answer?.startsWith(REFUSAL_MARKER) ?? false;
-  const failed = !refused && toolResultFailed(result);
+  const failed = !refused && !declined && toolResultFailed(result);
+  // A refused, declined or failed call is named plainly ("Send your email"), never as done; one
+  // waiting on its card says that it waits ("Waiting for your OK to send your email").
+  const named = readToolName(
+    name,
+    refused || failed || declined ? "plain" : running,
+  );
+  const label =
+    waiting && result === undefined
+      ? (personToolLabel(name, "waiting") ?? named.label)
+      : named.label;
+  const detail = named.detail;
   /*
    * The marker is for this component, not for the reader. Left in, a refusal reads "Blocked" in the
    * label and then "Refused." again in the first two words of the body, which is the same fact three
@@ -1617,6 +1692,7 @@ export function ServerToolLine({
       label={label}
       refused={refused}
       failed={failed}
+      declined={declined}
       running={running}
     >
       {shown ? (
@@ -1823,6 +1899,18 @@ export function ChatTranscript({
 
   /* One rule for both kinds of row — see `anchorRowIds`, which is where it is written down. */
   const anchorRows = anchorRowIds(items);
+  const seenId = useSettled(seenMessageId(items), SEEN_SETTLE_MS);
+  /*
+   * The footer goes under the last thing in the thread. That is the last row unless something is
+   * drawn after the rows (the Bot thinking, a stop, a queued message), and it is drawn inside that
+   * last row rather than as a row of its own: the scroller counts rows by position (see below), so
+   * an extra one after them would break how a new turn is found.
+   */
+  const furnitureLast = !stopped && !waitingOnFirstToken && queued.length === 0;
+  const footer = (index: number) =>
+    furnitureLast && index === items.length - 1 ? (
+      <ThreadFooter product={appConfig.brand.productName} />
+    ) : null;
 
   /*
    * One decider per mounted transcript, so opening a different channel starts the cascade over and
@@ -1926,6 +2014,14 @@ export function ChatTranscript({
                   text={message.text}
                 />
               ))}
+              {/*
+               * Once, under the last thing in the thread, scrolling with it (parity-spec 2.13). In
+               * this block for the reason the block exists: it is drawn last without being a row the
+               * scroller counts.
+               */}
+              {items.length > 0 && !furnitureLast ? (
+                <ThreadFooter after product={appConfig.brand.productName} />
+              ) : null}
             </div>
             {/*
              * Always in the DOM, empty or not, and before the rows: the scroller counts rows by
@@ -1949,6 +2045,7 @@ export function ChatTranscript({
                       active={busy && index === items.length - 1}
                     />
                   </Arriving>
+                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "tool" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
@@ -1959,6 +2056,7 @@ export function ChatTranscript({
                     result={item.result}
                     toolCallId={item.toolCall.id}
                   />
+                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "activity" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
@@ -1966,6 +2064,7 @@ export function ChatTranscript({
                     delay={delays.delayFor(item.id, index, items.length)}
                     message={item.message}
                   />
+                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "text" ? (
                 <MessageScrollerItem
@@ -1978,8 +2077,10 @@ export function ChatTranscript({
                     delay={delays.delayFor(item.id, index, items.length)}
                     firstDayAnswer={firstDay?.answer.has(item.id) === true}
                     role={item.role}
+                    seen={item.id === seenId}
                     text={item.text}
                   />
+                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "attachments" ? (
                 <MessageScrollerItem
@@ -1991,6 +2092,7 @@ export function ChatTranscript({
                     attachments={item.attachments}
                     delay={delays.delayFor(item.id, index, items.length)}
                   />
+                  {footer(index)}
                 </MessageScrollerItem>
               ) : (
                 // Every member of the union is handled above. `assertNever` types `item` as
@@ -2007,7 +2109,7 @@ export function ChatTranscript({
           </MessageScrollerContent>
         </MessageScrollerViewport>
         {/* A floating disc, like the shell's own controls. */}
-        <MessageScrollerButton className="size-9 rounded-full border-0 bg-duet-card text-duet-ink shadow-duet-float hover:bg-duet-card hover:text-duet-ink data-[direction=end]:bottom-[calc(var(--duet-dock,0px)+16px)]" />
+        <MessageScrollerButton className="size-11 rounded-full border-0 bg-duet-card text-duet-ink shadow-duet-float hover:bg-duet-card hover:text-duet-ink data-[direction=end]:bottom-[calc(var(--duet-dock,0px)+16px)]" />
         <ScrollNewestQueuedIntoView newest={queued.at(-1)?.id ?? null} />
       </MessageScroller>
     </MessageScrollerProvider>

@@ -1,7 +1,7 @@
-import { IconPin, IconPinnedOff, IconTrash } from "@tabler/icons-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { memo, useState } from "react";
+import { memo, type RefObject, useEffect, useRef, useState } from "react";
+import { DuetIcon } from "@/components/duet/icons";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -23,6 +23,11 @@ import {
 } from "@/lib/channels/mutations";
 import type { MessageListEmphasis } from "@/lib/settings/message-list";
 import { useTypedReveal } from "@/lib/typed-reveal";
+import {
+  conversationTitle,
+  firstMessageQueryOptions,
+  plainText,
+} from "@/lib/channels/conversation-title";
 import { ChannelItemContent } from "./channel-item-content";
 
 /**
@@ -38,7 +43,8 @@ export const Channel = memo(function Channel({
   name,
   summary,
   lastMessage,
-  lastMessageAt,
+  threadId,
+  said = false,
   pinned,
   unread,
   busy,
@@ -51,6 +57,11 @@ export const Channel = memo(function Channel({
   summary?: string;
   /** Used as the thread title until the conversation has been named. */
   lastMessage?: string;
+  /** The conversation's thread, to read the person's first message from for the title. */
+  threadId?: string;
+  /** Whether anything has been said in it yet. */
+  said?: boolean;
+  /** Not drawn: the menu shows no times (parity-spec 2.13). Kept so callers need not change. */
   lastMessageAt?: string;
   pinned: boolean;
   unread: boolean;
@@ -68,7 +79,25 @@ export const Channel = memo(function Channel({
   });
   /* Types in only on arrival; an already-named row draws it outright. */
   const revealed = useTypedReveal(summary);
-  const threadTitle = revealed.text || lastMessage || "New conversation";
+  /*
+   * The same title the conversation's own page shows (`conversationTitle`): its summary, else what
+   * the person first asked. The first message is read only for a row on screen without a summary,
+   * so opening the menu does not read every thread in the roster.
+   */
+  const row = useRef<HTMLSpanElement>(null);
+  const agentId = participantIds.length === 1 ? participantIds[0] : undefined;
+  const wanted = Boolean(!summary && threadId && agentId && said);
+  const onScreen = useOnScreen(row, wanted);
+  const first = useQuery({
+    ...firstMessageQueryOptions(threadId ?? "", agentId ?? "", said),
+    enabled: wanted && onScreen,
+  });
+  const title = conversationTitle({
+    summary,
+    firstMessage: first.data,
+    lastMessage,
+  });
+  const threadTitle = revealed.text ? plainText(revealed.text) : title;
   const setPinned = useMutation(setChannelPinnedMutationOptions(queryClient));
   const deleteChannel = useMutation(deleteChannelMutationOptions(queryClient));
   const [confirming, setConfirming] = useState(false);
@@ -122,18 +151,20 @@ export const Channel = memo(function Channel({
               className: "bg-foreground/5",
             }}
           >
-            <ChannelItemContent
-              participantIds={participantIds}
-              name={name}
-              title={summary || lastMessage || "New conversation"}
-              displayedTitle={threadTitle}
-              lastMessageAt={lastMessageAt}
-              emphasis={emphasis}
-              busy={busy}
-              unread={unread}
-              pinned={pinned}
-              revealing={revealed.typing}
-            />
+            <span className="flex min-w-0 flex-1" ref={row}>
+              <ChannelItemContent
+                participantIds={participantIds}
+                name={name}
+                title={title}
+                displayedTitle={threadTitle}
+                // No time on a menu row (parity-spec 2.13): times live on Tasks and the task page.
+                emphasis={emphasis}
+                busy={busy}
+                unread={unread}
+                pinned={pinned}
+                revealing={revealed.typing}
+              />
+            </span>
           </Link>
         </ContextMenuTrigger>
         <ContextMenuContent>
@@ -146,7 +177,7 @@ export const Channel = memo(function Channel({
               );
             }}
           >
-            {pinned ? <IconPinnedOff /> : <IconPin />}
+            <DuetIcon name={pinned ? "pinOff" : "pin"} size={16} />
             {pinned ? "Unpin conversation" : "Pin conversation"}
           </ContextMenuItem>
           <ContextMenuItem
@@ -157,7 +188,7 @@ export const Channel = memo(function Channel({
               setConfirming(true);
             }}
           >
-            <IconTrash />
+            <DuetIcon name="trash" size={16} />
             Delete conversation…
           </ContextMenuItem>
         </ContextMenuContent>
@@ -209,3 +240,29 @@ export const Channel = memo(function Channel({
     </>
   );
 });
+
+/**
+ * Whether an element is on screen. False where nothing can tell (no IntersectionObserver), so a row
+ * never reads its thread unless it is known to be seen.
+ */
+function useOnScreen(
+  element: RefObject<HTMLElement | null>,
+  /** Whether to watch at all: a row with a summary has its title already. */
+  watch: boolean,
+): boolean {
+  const [onScreen, setOnScreen] = useState(false);
+  useEffect(() => {
+    const target = element.current;
+    if (!watch || !target || typeof IntersectionObserver === "undefined")
+      return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) {
+        setOnScreen(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [element, watch]);
+  return onScreen;
+}

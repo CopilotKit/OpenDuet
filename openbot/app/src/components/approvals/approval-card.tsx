@@ -148,7 +148,7 @@ export function ApprovalCard({
           </div>
           {handOff ? null : (
             <button
-              className="type-label mx-auto mt-1 flex h-10 items-center rounded-full px-3 font-semibold text-duet-ink-2 hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+              className="type-sub mx-auto mt-1 flex h-11 items-center rounded-full px-3 font-medium text-duet-ink-2 hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 disabled:opacity-50"
               disabled={busy}
               onClick={() => onDecide("allow_always")}
               type="button"

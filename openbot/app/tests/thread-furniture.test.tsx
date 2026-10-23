@@ -1,0 +1,187 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import type { Message } from "@ag-ui/core";
+import { CopilotKitContext } from "@copilotkit/react-core/v2/context";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render } from "@testing-library/react";
+import {
+  ChatTranscript,
+  seenMessageId,
+} from "@/components/channels/chat-transcript";
+import { toVisibleChatItems } from "@/components/channels/chat-messages";
+import { appConfig } from "@/lib/generated/application-config";
+import { settleReactWork } from "./settle-react-work";
+
+/**
+ * The thread's furniture (parity-spec 2.13): "OpenDuet is AI and can make mistakes." once under the
+ * last thing in every thread, and "Seen" under the person's newest message once the Bot has it,
+ * until the Bot answers in words.
+ */
+
+let realFetch: typeof fetch;
+beforeAll(() => {
+  GlobalRegistrator.register({ url: "http://localhost/" });
+  realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    Response.json({ enabled: true, requests: [], questions: [] })) as never;
+});
+afterEach(cleanup);
+afterAll(async () => {
+  await settleReactWork();
+  globalThis.fetch = realFetch;
+  GlobalRegistrator.unregister();
+});
+
+const noRenderers = {
+  copilotkit: { renderToolCalls: [], subscribe: () => ({ unsubscribe() {} }) },
+  executingToolCallIds: new Set<string>(),
+} as never;
+
+function draw(messages: Message[], busy = false) {
+  return render(
+    <CopilotKitContext.Provider value={noRenderers}>
+      <QueryClientProvider client={new QueryClient()}>
+        <ChatTranscript busy={busy} messages={messages} />
+      </QueryClientProvider>
+    </CopilotKitContext.Provider>,
+  );
+}
+
+const asked: Message = {
+  id: "u1",
+  role: "user",
+  content: "Anything from Priya?",
+};
+const searching: Message = {
+  id: "a1",
+  role: "assistant",
+  content: "",
+  toolCalls: [
+    {
+      id: "t1",
+      type: "function",
+      function: {
+        name: "mcp__google-workspace__gmail_search_messages",
+        arguments: "{}",
+      },
+    },
+  ],
+};
+const answer: Message = {
+  id: "a2",
+  role: "assistant",
+  content: "Yes. She needs your VAT sign-off by Thursday.",
+};
+
+const FOOTER = `${appConfig.brand.productName} is AI and can make mistakes.`;
+
+describe("the footer", () => {
+  test("sits once under the last thing in the thread", async () => {
+    const view = draw([asked, answer]);
+    await view.findByText(FOOTER);
+    expect(view.getAllByText(FOOTER)).toHaveLength(1);
+  });
+
+  test("is not drawn over an empty thread", () => {
+    const view = draw([]);
+    expect(view.queryByText(FOOTER)).toBeNull();
+  });
+});
+
+describe("Seen", () => {
+  const seen = (messages: Message[]) =>
+    seenMessageId(toVisibleChatItems(messages));
+
+  test("sits under the person's newest message until the Bot answers it in words", () => {
+    expect(seen([asked])).toBe("u1");
+    // A tool step is not an answer.
+    expect(seen([asked, searching])).toBe("u1");
+    expect(seen([asked, searching, answer])).toBeNull();
+    expect(seen([asked, answer])).toBeNull();
+  });
+
+  test("only on the newest of the person's messages", () => {
+    const again: Message = { id: "u2", role: "user", content: "And Sam?" };
+    expect(seen([asked, answer, again])).toBe("u2");
+  });
+
+  test("is drawn once the thread holds still, and survives a reload mid-turn", async () => {
+    // A reload mid-turn restores the thread with the question unanswered and nothing running.
+    const view = draw([asked, searching], false);
+    expect(view.queryByText("Seen")).toBeNull();
+    expect(await view.findByText("Seen")).toBeTruthy();
+    cleanup();
+    const answered = draw([asked, answer]);
+    await answered.findByText(FOOTER);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(answered.queryByText("Seen")).toBeNull();
+  });
+
+  test("history replaying in does not flash it under older messages", async () => {
+    const older: Message[] = [
+      { id: "u0", role: "user", content: "Who is Priya?" },
+      { id: "a0", role: "assistant", content: "Your accountant." },
+      asked,
+      answer,
+    ];
+    const view = draw(older.slice(0, 1));
+    // The rest arrives a moment later, as a replay does.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    view.rerender(
+      <CopilotKitContext.Provider value={noRenderers}>
+        <QueryClientProvider client={new QueryClient()}>
+          <ChatTranscript messages={older} />
+        </QueryClientProvider>
+      </CopilotKitContext.Provider>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(view.queryByText("Seen")).toBeNull();
+  });
+});
+
+describe("the Bot's words", () => {
+  test("a bubble draws at the body size, not the primitive's small text", async () => {
+    const view = draw([asked, answer]);
+    const bubble = (
+      await view.findByText(/She needs your VAT sign-off/)
+    ).closest('[data-slot="bubble-content"]') as HTMLElement;
+    expect(bubble.className).toContain("type-body");
+    expect(bubble.className).not.toMatch(/\btext-sm\b|\bleading-relaxed\b/);
+  });
+
+  test("separate thoughts are separate bubbles, 8px apart", async () => {
+    const view = draw([
+      asked,
+      {
+        id: "a3",
+        role: "assistant",
+        content:
+          "Yes, Priya wrote twice.\n\nShe needs your sign-off by Thursday. Want me to draft it?",
+      },
+    ]);
+    await view.findByText("Yes, Priya wrote twice.");
+    const bubbles = view.container.querySelectorAll(
+      '[data-slot="bubble-content"]',
+    );
+    // The person's question, then the Bot's two thoughts.
+    expect(bubbles).toHaveLength(3);
+    const column = bubbles[1]?.closest(".gap-2");
+    expect(column?.contains(bubbles[2] as Node)).toBe(true);
+  });
+
+  test("the footer comes after the rows, for a screen reader too", async () => {
+    const view = draw([asked, answer]);
+    const footer = await view.findByText(FOOTER);
+    const reply = view.getByText(/She needs your VAT sign-off/);
+    expect(
+      reply.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

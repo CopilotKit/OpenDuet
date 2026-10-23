@@ -24,7 +24,7 @@ export function ScreenTitle({
 }) {
   return (
     <header className="mb-4 px-1">
-      <h1 className="type-title font-semibold text-duet-ink">{title}</h1>
+      <h1 className="type-display font-semibold text-duet-ink">{title}</h1>
       {children ? (
         <p className="type-sub mt-0.5 text-duet-ink-2">{children}</p>
       ) : null}

@@ -71,6 +71,7 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 | Gets to know you             | On your first day it speaks first: it greets you, reads your recent mail and this week's calendar, then answers in three short bubbles (who you are, three ways it can help, and an invitation to correct it), with **Sounds right** and **Something's off** to tap. With Gmail and Calendar not connected, it promises no mail: it says what it can do now and shows the card to connect them. | Available today |
 | Pages                        | Ask for prep notes, a plan, a deck or a dashboard, and OpenDuet makes it. A card in Chat opens it, and the Pages tab keeps everything it made. Every slide of a deck reads in full on a phone. What it finished is under **Resolved** on Tasks. | Available today |
 | Answers in a tap             | When it asks you to choose, the likely answers appear as replies you can tap.         | Available today |
+| Light or dark                | Follows your phone's setting, changing with it, or pick Light or Dark in Settings.    | Available today |
 | Say it instead               | Tap the voice button in Chat and say everything you need to do. It is written down and sent as your message. Needs a speech-to-text provider on the server (`TRANSCRIPTION_*`). | Available today |
 | Sensitive-info check         | A check on every outgoing message. OpenBot today classifies each tool as a read or a write and redacts secrets from its audit trail. | In progress |
 

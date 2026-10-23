@@ -1,21 +1,9 @@
-import {
-  IconBolt,
-  IconBox,
-  IconCalendarRepeat,
-  IconChevronRight,
-  IconLogout,
-  IconPlug,
-  IconPlus,
-  IconSettings,
-  IconShieldCheck,
-  IconShieldLock,
-} from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, type LinkOptions, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { ConversationRoster } from "@/components/app-sidebar/conversation-roster";
 import { BotsNavBadge } from "@/components/bot-profile/attention";
-import { DuetIcon } from "@/components/duet/icons";
+import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import {
   Sheet,
   SheetContent,
@@ -32,7 +20,7 @@ import { cn } from "@/lib/utils";
 type Page = {
   label: string;
   to: LinkOptions["to"];
-  icon: ReactNode;
+  icon: DuetIconName;
   badge?: ReactNode;
 };
 
@@ -41,15 +29,11 @@ type Page = {
  * and comes back rarely, so these wait under Manage, closed until somebody opens it.
  */
 const MANAGE_PAGES: Page[] = [
-  { label: "Bots", to: "/bots", icon: <IconBolt />, badge: <BotsNavBadge /> },
-  { label: "Connections", to: "/connections", icon: <IconPlug /> },
-  { label: "Capabilities", to: "/capabilities", icon: <IconBox /> },
-  { label: "Routines", to: "/routines", icon: <IconCalendarRepeat /> },
-  {
-    label: "Approval rules",
-    to: "/settings/approvals",
-    icon: <IconShieldCheck />,
-  },
+  { label: "Bots", to: "/bots", icon: "bolt", badge: <BotsNavBadge /> },
+  { label: "Connections", to: "/connections", icon: "plug" },
+  { label: "Capabilities", to: "/capabilities", icon: "box" },
+  { label: "Routines", to: "/routines", icon: "repeat" },
+  { label: "Approval rules", to: "/settings/approvals", icon: "shieldCheck" },
 ];
 
 /** Whether Manage was left open, kept in this browser between visits. */
@@ -75,8 +59,17 @@ function rememberManageOpen(open: boolean): void {
   }
 }
 
+/**
+ * A row in the menu: a line glyph and the place's name at the drawer's size (parity-spec 1.1, 2.3),
+ * at least 48px tall, on the filled capsule when it is where you are.
+ */
 const ROW =
-  "flex h-11 w-full items-center gap-3 rounded-xl px-3 text-[15px] font-medium text-duet-ink hover:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 [&_svg]:size-5 [&_svg]:shrink-0 [&_svg]:text-duet-ink-2";
+  "type-nav flex min-h-12 w-full items-center gap-3 rounded-[22px] px-3 font-medium text-duet-ink transition-colors duration-[var(--duet-dur-tap)] hover:bg-duet-tile active:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 [&_svg]:shrink-0 [&_svg]:text-duet-ink-2";
+
+/** The glyph at the head of a menu row. */
+function RowIcon({ name }: { name: DuetIconName }) {
+  return <DuetIcon name={name} size={22} />;
+}
 
 /**
  * The menu behind the header's left disc, in the order a person reaches for it: Chat, a new
@@ -110,15 +103,20 @@ export function MenuSheet({
 
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
+      {/*
+       * No close button (parity-spec 1.1): the drawer closes on the strip of screen beside it, on
+       * Escape, and on choosing a row. The X it had was a 26px target.
+       */}
       <SheetContent
         className="duet-face w-[340px] gap-0 bg-duet-surface p-0 sm:max-w-[340px]"
+        showCloseButton={false}
         side="left"
       >
         <SheetHeader className="px-5 pt-5 pb-3">
-          <SheetTitle className="type-title font-semibold text-duet-ink">
+          <SheetTitle className="type-display font-semibold text-duet-ink">
             {appConfig.brand.productName}
           </SheetTitle>
-          <SheetDescription className="truncate text-duet-ink-3 text-sm">
+          <SheetDescription className="type-sub truncate text-duet-ink-2">
             {user?.name || user?.email}
           </SheetDescription>
         </SheetHeader>
@@ -138,7 +136,7 @@ export function MenuSheet({
             onClick={close}
             to="/"
           >
-            <DuetIcon name="chat" />
+            <RowIcon name="chat" />
             Chat
           </Link>
           <Link
@@ -147,10 +145,10 @@ export function MenuSheet({
             onClick={close}
             to="/start"
           >
-            <IconPlus />
+            <RowIcon name="plus" />
             New conversation
           </Link>
-          <h2 className="type-label mt-5 mb-2 px-3 font-semibold text-duet-ink-2">
+          <h2 className="type-sub mt-5 mb-2 px-3 text-duet-ink-2">
             Conversations
           </h2>
           <div
@@ -169,11 +167,13 @@ export function MenuSheet({
                 onClick={toggleManage}
                 type="button"
               >
-                <IconChevronRight
+                <DuetIcon
                   className={cn(
                     "transition-transform motion-reduce:transition-none",
                     manageOpen && "rotate-90",
                   )}
+                  name="chevronRight"
+                  size={22}
                 />
                 Manage
                 {/* Closed, the group would hide the Bots badge, so the badge rides on Manage instead. */}
@@ -189,7 +189,7 @@ export function MenuSheet({
                   onClick={close}
                   to={page.to}
                 >
-                  {page.icon}
+                  <RowIcon name={page.icon} />
                   {page.label}
                   {page.badge}
                 </Link>
@@ -201,7 +201,7 @@ export function MenuSheet({
                   onClick={close}
                   to="/admin"
                 >
-                  <IconShieldLock />
+                  <RowIcon name="shieldLock" />
                   Admin
                 </Link>
               ) : null}
@@ -212,7 +212,7 @@ export function MenuSheet({
               onClick={close}
               to="/settings"
             >
-              <IconSettings />
+              <RowIcon name="settings" />
               Settings
             </Link>
             {capabilities?.localEvaluation === false ? (
@@ -226,7 +226,7 @@ export function MenuSheet({
                 }}
                 type="button"
               >
-                <IconLogout />
+                <RowIcon name="logout" />
                 Sign out
               </button>
             ) : null}

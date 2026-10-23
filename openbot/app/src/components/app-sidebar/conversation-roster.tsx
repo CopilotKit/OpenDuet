@@ -17,7 +17,7 @@ import {
   type MessageListEmphasis,
   useMessageListEmphasis,
 } from "@/lib/settings/message-list";
-import { IconSearch } from "@tabler/icons-react";
+import { DuetIcon } from "@/components/duet/icons";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Channel } from "./channel";
 import { ChannelPagination } from "./channel-pagination";
@@ -137,6 +137,8 @@ function ChannelRow({
         name={channel.name}
         summary={channel.summary ?? undefined}
         lastMessage={channel.lastMessage ?? undefined}
+        threadId={channel.threadId}
+        said={channel.lastMessageAt !== null}
         lastMessageAt={
           channel.lastMessageAt
             ? relativeTime(channel.lastMessageAt)
@@ -179,15 +181,16 @@ export function ConversationRoster({
     <div className="flex flex-col gap-px">
       {/* The menu scrolls the roster by itself, and the search stays above the rows it filters. */}
       <div className="sticky top-0 z-10 bg-duet-surface pb-2">
-        <InputGroup className="h-9 rounded-lg bg-background text-sm">
+        <InputGroup className="h-11 rounded-full bg-background type-sub">
           <InputGroupInput
             aria-label="Search conversations"
+            className="h-11"
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search…"
             value={search}
           />
           <InputGroupAddon>
-            <IconSearch />
+            <DuetIcon name="search" size={18} />
           </InputGroupAddon>
         </InputGroup>
       </div>

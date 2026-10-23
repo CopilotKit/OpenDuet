@@ -1,41 +1,105 @@
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useState,
 } from "react";
 import {
-  applyDarkTheme,
-  parseStoredDarkTheme,
+  applyTheme,
+  isSandboxThemeAsk,
+  LEGACY_THEME_STORAGE_KEY,
+  parseThemePreference,
+  type ResolvedTheme,
+  resolveTheme,
+  SYSTEM_DARK_QUERY,
+  sandboxThemeMessage,
   THEME_STORAGE_KEY,
+  type ThemePreference,
 } from "@/lib/theme";
 
 type ThemeContextValue = {
-  dark: boolean;
-  setDark: (dark: boolean) => void;
+  /** What the person chose: follow the phone, or always light or dark. */
+  preference: ThemePreference;
+  /** What is drawn right now. */
+  resolved: ResolvedTheme;
+  setPreference: (preference: ThemePreference) => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [dark, setDark] = useState(() =>
-    parseStoredDarkTheme(window.localStorage.getItem(THEME_STORAGE_KEY)),
-  );
+/** Storage throws in some privacy modes; a theme is not worth taking the app down for. */
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 
+function systemDarkNow(): boolean {
+  return window.matchMedia?.(SYSTEM_DARK_QUERY).matches ?? false;
+}
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [preference, setPreferenceState] = useState<ThemePreference>(() =>
+    parseThemePreference(
+      readStored(THEME_STORAGE_KEY),
+      readStored(LEGACY_THEME_STORAGE_KEY),
+    ),
+  );
+  const [systemDark, setSystemDark] = useState(systemDarkNow);
+
+  // The phone's setting, live: it changes at sunset without anybody reloading.
   useEffect(() => {
-    applyDarkTheme(dark, {
-      setStoredValue: (key, value) => window.localStorage.setItem(key, value),
+    const query = window.matchMedia?.(SYSTEM_DARK_QUERY);
+    if (!query) return;
+    const follow = () => setSystemDark(query.matches);
+    follow();
+    query.addEventListener("change", follow);
+    return () => query.removeEventListener("change", follow);
+  }, []);
+
+  const resolved = resolveTheme(preference, systemDark);
+  useEffect(() => {
+    applyTheme(resolved, {
       toggleRootClass: (name, force) =>
         document.documentElement.classList.toggle(name, force),
       setRootColorScheme: (scheme) => {
         document.documentElement.style.colorScheme = scheme;
       },
     });
-  }, [dark]);
+  }, [resolved]);
+
+  /*
+   * A generated interface draws in a sandboxed frame that cannot see this theme. It asks, and is
+   * answered; and every frame is told again when the theme changes. See `SANDBOX_THEME_ASK`.
+   */
+  useEffect(() => {
+    const answer = (event: MessageEvent) => {
+      if (!isSandboxThemeAsk(event.data) || !event.source) return;
+      (event.source as Window).postMessage(sandboxThemeMessage(resolved), "*");
+    };
+    window.addEventListener("message", answer);
+    for (const frame of document.querySelectorAll("iframe")) {
+      frame.contentWindow?.postMessage(sandboxThemeMessage(resolved), "*");
+    }
+    return () => window.removeEventListener("message", answer);
+  }, [resolved]);
+
+  // Written only when the person chooses, so following the phone stays the default until they do.
+  const setPreference = useCallback((next: ThemePreference) => {
+    setPreferenceState(next);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      // The choice holds for this visit; it just isn't remembered.
+    }
+  }, []);
 
   return (
-    <ThemeContext.Provider value={{ dark, setDark }}>
+    <ThemeContext.Provider value={{ preference, resolved, setPreference }}>
       {children}
     </ThemeContext.Provider>
   );

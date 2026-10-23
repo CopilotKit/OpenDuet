@@ -22,15 +22,41 @@ export type ToolName = {
   detail?: string;
 };
 
-export function readToolName(name: string, running = false): ToolName {
-  const own = ownToolLabel(name, running);
-  if (own) return { label: own };
+/**
+ * How a step stands, for the words it is named in: still running ("Searching your email"), done
+ * ("Searched your email"), or neither (`"plain"`: "Search your email"), for a step that was refused
+ * or failed, so the line never says something happened that did not.
+ */
+export type ToolState = boolean | "plain";
+
+export function readToolName(
+  name: string,
+  running: ToolState = false,
+): ToolName {
+  const own = ownToolLabel(name, running === true);
+  if (own) return { label: running === "plain" ? humanise(name) : own };
   const parts = name.split("__");
-  if (parts.length < 3 || parts[0] !== "mcp") return { label: name };
+  // Not an MCP name and not one of this deployment's: still never the bare identifier.
+  if (parts.length < 3 || parts[0] !== "mcp") return { label: humanise(name) };
 
   const [, rawServer, ...rest] = parts;
   const server = rawServer ?? "";
   const tool = rest.join("__");
+  /*
+   * The person's own mail and calendar, named for what happened to them. The server key
+   * (`google-workspace`) is how this deployment reaches Google and means nothing to the reader, so
+   * these lines carry no detail beside them.
+   */
+  const personal = PERSONAL_TOOLS[tool];
+  if (personal)
+    return {
+      label:
+        running === "plain"
+          ? personal.plain
+          : running
+            ? personal.running
+            : personal.done,
+    };
   const broker = brokeredApp(server);
   /*
    * Research is named for what it did, not for who did it. `web_search_exa` would read "Web search
@@ -38,7 +64,15 @@ export function readToolName(name: string, running = false): ToolName {
    * their answer. Which provider is granted is an administrator's fact, on the Bot's access page.
    */
   const role = researchRoleOfTool(server, tool);
-  if (role) return { label: RESEARCH_ROLE_LABELS[role] };
+  if (role)
+    return {
+      label:
+        running === true
+          ? role === "search"
+            ? STEP_PHRASES.searchWeb
+            : STEP_PHRASES.readWeb
+          : RESEARCH_ROLE_LABELS[role],
+    };
   const label = humanise(tool);
 
   /*
@@ -90,8 +124,8 @@ export function readToolName(name: string, running = false): ToolName {
  */
 const OWN_TOOLS: Record<string, { running: string; done: string }> = {
   [SHOW_APP_ACCESS_TOOL]: {
-    running: "Checking app access",
-    done: "Checked app access",
+    running: "Checking your apps",
+    done: "Checked your apps",
   },
   morning_brief: {
     running: "Reading your mail and calendar",
@@ -106,7 +140,134 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Putting it together",
     done: "Put it together",
   },
+  // server/src/memory. Drawn as plain lines, so without these they read "recall_personal_memory".
+  recall_personal_memory: {
+    running: "Checking memory",
+    done: "Checked memory",
+  },
+  remember_personal_fact: {
+    running: "Saving to memory",
+    done: "Saved to memory",
+  },
 };
+
+/**
+ * The person's own mail and calendar (server/src/plugins/google-workspace-rest.ts), in words about
+ * them. Same shape as `OWN_TOOLS`: the running form is a phrase from the pill's vocabulary below, so
+ * a line and the pill say the same thing at the same moment.
+ */
+const PERSONAL_TOOLS: Record<
+  string,
+  { running: string; done: string; plain: string; waiting?: string }
+> = {
+  gmail_search_messages: {
+    running: "Searching your email",
+    done: "Searched your email",
+    plain: "Search your email",
+  },
+  gmail_read_message: {
+    running: "Reading your email",
+    done: "Read your email",
+    plain: "Read your email",
+  },
+  calendar_list_events: {
+    running: "Checking your calendar",
+    done: "Checked your calendar",
+    plain: "Check your calendar",
+  },
+  // A send waits on the person's answer before it runs, and says so rather than "sent".
+  gmail_send_reply: {
+    running: "Sending your email",
+    done: "Sent your email",
+    plain: "Send your email",
+    waiting: "Waiting for your OK to send your email",
+  },
+};
+
+/**
+ * What the pill under the header's orb may say (parity-spec, Chat 1): a plain phrase about the
+ * person and their things, in the present, with no ellipsis. Never a tool's identifier, never a
+ * server key, never a past tense while the step is still going.
+ *
+ * These are the spec's phrases. The deployment's own tools add theirs (`OWN_TOOLS`, running forms:
+ * "Reading your mail and calendar", "Adding to your Tasks"), so the pill and the tool's own line say
+ * the same thing at the same moment.
+ */
+export const STEP_PHRASES = {
+  thinking: "Thinking it through",
+  searchEmail: "Searching your email",
+  readEmail: "Reading your email",
+  calendar: "Checking your calendar",
+  searchWeb: "Searching the web",
+  readWeb: "Reading a web page",
+  browser: "Working in your browser",
+  sendEmail: "Sending your email",
+  startTask: "Starting a task",
+  memory: "Checking memory",
+  working: "Working on it",
+} as const;
+
+/**
+ * Tools the pill does not name, because they are not work the person is waiting on: the reply chips
+ * under an answer, and an interface drawn for the person to read or fill in (`askForm`,
+ * `showBarChart`). While one runs the pill says whatever the turn was doing before it.
+ */
+const UNNAMED_TOOLS = new Set(["suggest_replies", "ask_person"]);
+
+/**
+ * The pill's phrase for a running tool call, or null for one it does not name.
+ *
+ * Read from what the tool does to the person's things, not from its name: the mail and calendar the
+ * person connected, the web, their browser, their memory. Anything not recognised is "Working on it",
+ * never its identifier humanised, since "Calendar list events" is still an identifier.
+ */
+export function stepPhrase(name: string): string | null {
+  if (UNNAMED_TOOLS.has(name)) return null;
+  // A gallery interface: `askForm`, `askChoice`, `showBarChart`, `showTable`.
+  if (/^(ask|show)[A-Z]/.test(name)) return null;
+  const own = ownToolLabel(name, true);
+  if (own) return own;
+  if (name.startsWith("computer_")) return STEP_PHRASES.browser;
+
+  const parts = name.split("__");
+  const isMcp = parts.length >= 3 && parts[0] === "mcp";
+  const server = isMcp ? (parts[1] ?? "") : "";
+  const tool = isMcp ? parts.slice(2).join("__") : name;
+  const role = isMcp ? researchRoleOfTool(server, tool) : null;
+  if (role === "search") return STEP_PHRASES.searchWeb;
+  if (role === "fetch") return STEP_PHRASES.readWeb;
+
+  const words = new Set(wordsOf(`${server} ${tool}`));
+  const has = (...any: string[]) => any.some((word) => words.has(word));
+  if (has("memory", "memories", "remember", "recall"))
+    return STEP_PHRASES.memory;
+  if (has("calendar", "event", "events")) return STEP_PHRASES.calendar;
+  if (has("gmail", "mail", "email", "emails", "inbox")) {
+    if (has("send", "reply", "forward", "draft")) return STEP_PHRASES.sendEmail;
+    if (has("search", "list", "fetch", "find", "query"))
+      return STEP_PHRASES.searchEmail;
+    return STEP_PHRASES.readEmail;
+  }
+  if (has("search") && has("web")) return STEP_PHRASES.searchWeb;
+  return STEP_PHRASES.working;
+}
+
+/**
+ * A step named for what happened to the person's own things: their mail and calendar, or one of this
+ * deployment's tools. Null for anything else, which a summary counts rather than names.
+ */
+export function personToolLabel(
+  name: string,
+  state: "running" | "done" | "waiting" = "done",
+): string | null {
+  const own = OWN_TOOLS[name];
+  if (own) return state === "waiting" ? null : own[state];
+  const parts = name.split("__");
+  if (parts.length < 3 || parts[0] !== "mcp") return null;
+  const personal = PERSONAL_TOOLS[parts.slice(2).join("__")];
+  if (!personal) return null;
+  return state === "waiting" ? (personal.waiting ?? null) : personal[state];
+}
 
 /** One of this deployment's own tools in words, or null for any other name. */
 export function ownToolLabel(name: string, running = false): string | null {
