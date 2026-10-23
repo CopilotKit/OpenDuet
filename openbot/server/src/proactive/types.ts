@@ -95,6 +95,28 @@ export type ProactiveSuggestion = {
   createdAt: Date;
 };
 
+/**
+ * How the turn a started suggestion asked for stands: waiting for the next sweep, running, done, or
+ * given up on. A task gets one attempt, so one that errored, lost its replica mid-run or was never
+ * queued has failed and stays failed.
+ */
+export type StartedRun = "queued" | "running" | "finished" | "failed";
+
+/** A suggestion the person started, with how its turn stands and where its results land. */
+export type StartedSuggestion = Pick<
+  ProactiveSuggestion,
+  "id" | "agentId" | "title" | "detail" | "sourceApp" | "sourceLink"
+> & {
+  startedAt: Date;
+  run: StartedRun;
+  /** When the run last changed: started, finished, or gave up. */
+  at: Date;
+  /** Why it gave up, when it did and the queue kept a reason. */
+  error: string | null;
+  /** The conversation the turn runs in: its research setting's. */
+  channelId: string;
+};
+
 export class ProactiveRefusedError extends Error {
   constructor(message: string) {
     super(message);

@@ -8,6 +8,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -17,13 +18,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { TasksScreen } from "@/components/shell/tasks-screen";
 import { agentKeys } from "@/lib/agents/queries";
+import { proactiveKeys } from "@/lib/proactive";
 import { queryClient } from "@/query-client";
 import { settleReactWork } from "./settle-react-work";
 
 /**
- * The Tasks tab, top to bottom: what is waiting on the person, answered where it is shown; what
- * their Bots suggest, started or hidden from the row; what the product's own Bot is working on and
- * has lined up; and what it has done. Empty sections are left out, except Suggested.
+ * The Tasks tab, top to bottom: what the person started that is ready for them to read; what is
+ * waiting on the person, answered where it is shown; what the product's own Bot is working on and
+ * has lined up, including what the person started; what their Bots suggest, started or hidden from
+ * the row; and what it has done. Empty sections are left out, except Suggested.
  */
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3010" }));
@@ -43,6 +46,7 @@ afterEach(() => {
 
 let inbox: Record<string, unknown> = {};
 let suggestions: unknown[] = [];
+let started: unknown[] = [];
 let settings: unknown[] = [];
 let activity: Record<string, unknown> = {};
 let channels: unknown[] = [];
@@ -61,6 +65,7 @@ function serving() {
     if (url === "/api/approvals") return Response.json(inbox);
     if (url === "/api/proactive/suggestions")
       return Response.json({ suggestions });
+    if (url === "/api/proactive/started") return Response.json({ started });
     if (url === "/api/proactive/settings") return Response.json({ settings });
     if (url === "/api/bots/openduet/activity")
       return Response.json({ activity });
@@ -90,6 +95,7 @@ function draw() {
 function quiet() {
   inbox = { requests: [], questions: [] };
   suggestions = [];
+  started = [];
   settings = [research()];
   activity = { inProgress: [], scheduled: [], completed: [] };
   channels = [];
@@ -117,6 +123,22 @@ const suggestion = (overrides: Record<string, unknown>) => ({
   sourceApp: "Gmail",
   sourceLink: null,
   createdAt: "2026-10-22T03:00:00Z",
+  ...overrides,
+});
+
+/** A suggestion the person started, as `/api/proactive/started` reads it back. */
+const startedItem = (overrides: Record<string, unknown> = {}) => ({
+  id: "s-1",
+  agentId: "openduet",
+  title: "Reply to Rosa about the glaze",
+  detail: "Rosa asked whether the satin glaze can replace the gloss one.",
+  sourceApp: "Gmail",
+  sourceLink: null,
+  startedAt: "2026-10-22T05:00:00Z",
+  run: "queued",
+  at: "2026-10-22T05:00:00Z",
+  error: null,
+  channelId: "research-chat",
   ...overrides,
 });
 
@@ -315,6 +337,111 @@ test("suggestions are listed newest first, with where each was read and whose it
   // Another Bot's suggestion says whose it is; the product's own Bot goes without saying.
   expect(within(card).getByText("Scout")).toBeTruthy();
   expect(within(card).queryByText("OpenDuet")).toBeNull();
+});
+
+test("Start says Started above the tab bar, out of the list, and lists the work under Working on", async () => {
+  quiet();
+  suggestions = [suggestion({ id: "s-1" })];
+  serving();
+  const view = draw();
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: "Start Reply to Rosa about the glaze",
+    }),
+  );
+  // What the server holds once it is started: no longer suggested, queued for the Bot.
+  suggestions = [];
+  started = [startedItem({ id: "s-1", run: "queued" })];
+  const status = await view.findByRole("status");
+  expect(status.textContent).toBe("Started. OpenDuet is on it.");
+  // Not at the foot of Suggested, where the tab bar covers it: docked over the screen, above the bar.
+  const list = view.getByRole("heading", { name: "Tasks" }).parentElement
+    ?.parentElement as HTMLElement;
+  expect(list.contains(status)).toBe(false);
+  expect(status.closest("[data-dock]")?.className).toContain(
+    "--duet-tab-space",
+  );
+
+  const working = await view.findByRole("region", { name: "Working on" });
+  expect(working.textContent).toContain("Reply to Rosa about the glaze");
+  expect(working.textContent).toContain("Working · Just started");
+  expect(
+    within(working)
+      .getByRole("link", { name: /Reply to Rosa about the glaze/ })
+      .getAttribute("href"),
+  ).toBe("/channel/research-chat");
+  await waitFor(() =>
+    expect(
+      within(view.getByRole("region", { name: "Suggested" })).queryByText(
+        "Reply to Rosa about the glaze",
+      ),
+    ).toBeNull(),
+  );
+});
+
+test("started work moves from Working on to Ready for review when its run ends, linking to its reply", async () => {
+  quiet();
+  started = [startedItem({ run: "running" })];
+  serving();
+  const view = draw();
+  const working = await view.findByRole("region", { name: "Working on" });
+  expect(working.textContent).toContain("Working · On it");
+  expect(view.queryByRole("region", { name: "Ready for review" })).toBeNull();
+
+  started = [startedItem({ run: "finished", at: "2026-10-22T05:02:00Z" })];
+  await act(() =>
+    queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
+  );
+  const ready = await view.findByRole("region", { name: "Ready for review" });
+  expect(ready.textContent).toContain("Reply to Rosa about the glaze");
+  expect(ready.textContent).toContain("Ready for review · Read its reply");
+  // The conversation the turn ran in, where its reply landed.
+  expect(
+    within(ready)
+      .getByRole("link", { name: /Reply to Rosa about the glaze/ })
+      .getAttribute("href"),
+  ).toBe("/channel/research-chat");
+  expect(view.queryByRole("region", { name: "Working on" })).toBeNull();
+});
+
+test("a started run that didn't finish is never Ready for review: Done says so, and why", async () => {
+  quiet();
+  started = [
+    startedItem({
+      run: "failed",
+      error: "The model stopped answering.",
+      at: "2026-10-22T05:03:00Z",
+    }),
+  ];
+  serving();
+  const view = draw();
+  const done = await view.findByRole("region", { name: "Done" });
+  expect(done.textContent).toContain("Reply to Rosa about the glaze");
+  expect(done.textContent).toContain(
+    "Didn't finish · The model stopped answering.",
+  );
+  expect(view.queryByRole("region", { name: "Ready for review" })).toBeNull();
+  expect(view.queryByRole("region", { name: "Working on" })).toBeNull();
+});
+
+test("Ready for review leads, then Needs you and Working on, with Suggested after them", async () => {
+  quiet();
+  inbox = { requests: [email], questions: [] };
+  suggestions = [suggestion({ id: "s-2", title: "Pay the booth balance" })];
+  started = [
+    startedItem({ id: "s-1", run: "finished" }),
+    startedItem({ id: "s-3", title: "Sign the lease", run: "queued" }),
+  ];
+  serving();
+  const view = draw();
+  await view.findByRole("region", { name: "Ready for review" });
+  await view.findByText("Pay the booth balance");
+  const sections = ["Ready for review", "Needs you", "Working on", "Suggested"];
+  const regions = view
+    .getAllByRole("region")
+    .map((region) => region.getAttribute("aria-label") ?? "")
+    .filter((label) => sections.includes(label));
+  expect(regions).toEqual(sections);
 });
 
 test("Start starts a suggestion and Hide dismisses one", async () => {
@@ -526,7 +653,7 @@ test("Working on and Coming up list OpenDuet's work, with Stop and Cancel, and o
   });
 });
 
-test("Done lists finished work and answered actions at the foot, newest first, with nothing to press", async () => {
+test("Done lists finished work at the foot, newest first, with nothing to press and no approval receipts", async () => {
   quiet();
   activity = {
     inProgress: [
@@ -583,10 +710,12 @@ test("Done lists finished work and answered actions at the foot, newest first, w
   const text = done.textContent ?? "";
   expect(text).toContain("Follow-up · Done");
   expect(text).toContain("Didn't finish");
-  expect(text).toContain("Allowed once by you");
-  // Newest first: the failed routine, then the allowed send, then the review.
-  const order = ["Tidy inbox", "Send email", "Review the launch deck"].map(
-    (title) => text.indexOf(title),
+  // An answered action is a receipt, kept with its conversation, not a piece of finished work.
+  expect(text).not.toContain("Allowed once by you");
+  expect(text).not.toContain("Send email");
+  // Newest first: the failed routine, then the review.
+  const order = ["Tidy inbox", "Review the launch deck"].map((title) =>
+    text.indexOf(title),
   );
   expect(order.every((at) => at >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);

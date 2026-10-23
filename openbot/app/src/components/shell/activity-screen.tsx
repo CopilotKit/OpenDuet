@@ -2,21 +2,14 @@ import { Link } from "@tanstack/react-router";
 import { Fragment, type ReactNode } from "react";
 import type { DuetIconName } from "@/components/duet/icons";
 import { CardRow, DuetCard, Rule, type TileTone } from "@/components/duet/kit";
-import {
-  approvalPlace,
-  clockTime,
-  decisionReceipt,
-  describeApproval,
-  personWasAsked,
-} from "@/lib/approval-view";
-import type { ApprovalRequest } from "@/lib/approvals";
+import { clockTime } from "@/lib/approval-view";
 import type { ActivityItem, ActivityKind } from "@/lib/bot-lifecycle/queries";
 import { cn } from "@/lib/utils";
 
 /*
  * The rows Tasks draws for the product's own Bot's work: Working on, Coming up and Done, read from
  * the ledgers OpenBot already keeps. This was the Activity tab; its "Handled for you" list is Done
- * at the foot of Tasks now, and the tab is Pages.
+ * at the foot of Tasks now, without the approval receipts it had, and the tab is Pages.
  */
 
 /** One line of Working on, Coming up or Done on Tasks, from whichever ledger it came from. */
@@ -25,7 +18,8 @@ export type ActivityRow = {
   icon: DuetIconName;
   tone: TileTone;
   title: string;
-  detail: string;
+  /** The line under the title: plain words, or a status line Tasks draws for started work. */
+  detail: ReactNode;
   at: string;
   channelId: string | null;
   control?: ReactNode;
@@ -120,56 +114,17 @@ export function upcomingRow(item: ActivityItem): ActivityRow {
 }
 
 /**
- * What a Bot did that the person allowed or refused: the actions it paused for an answer, once
- * answered. Green when it went, red when they refused, amber when it was allowed and did not work.
- */
-export function answeredRows(
-  requests: readonly ApprovalRequest[],
-  botId: string,
-): ActivityRow[] {
-  return requests
-    .filter(
-      (request) =>
-        request.action.botId === botId &&
-        request.status !== "pending" &&
-        // A send to other people is always put to the person, by the share check rather than a
-        // policy verdict, so it counts as asked too.
-        personWasAsked(request) &&
-        request.decision,
-    )
-    .map((request) => {
-      const refused = request.decision === "deny";
-      const failed = Boolean(request.result?.error);
-      return {
-        id: `approval:${request.id}`,
-        icon: refused || failed ? "x" : "check",
-        tone: refused ? "red" : failed ? "amber" : "green",
-        title: describeApproval(request).title,
-        detail: [
-          decisionReceipt(request),
-          failed ? "Didn't work" : null,
-          approvalPlace(request),
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        at: request.completedAt ?? request.decidedAt ?? request.createdAt,
-        channelId: null,
-      } satisfies ActivityRow;
-    });
-}
-
-/**
- * What the product's own Bot finished for the person, newest first: its routines, follow-ups and
- * delegated work from the ledgers OpenBot keeps, and the actions the person answered. Tasks lists
- * them under Done.
+ * What is finished for the person, newest first: the product's own Bot's routines, follow-ups and
+ * delegated work from the ledgers OpenBot keeps, and any other finished rows Tasks adds. Tasks lists
+ * them under Done. The actions the person answered are not among them: a receipt is not finished
+ * work. The conversation still shows the action that ran.
  */
 export function handledRows(
   completed: readonly ActivityItem[],
-  requests: readonly ApprovalRequest[],
-  botId: string,
+  also: readonly ActivityRow[] = [],
   limit = 25,
 ): ActivityRow[] {
-  return [...completed.map(completedRow), ...answeredRows(requests, botId)]
+  return [...completed.map(completedRow), ...also]
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, limit);
 }

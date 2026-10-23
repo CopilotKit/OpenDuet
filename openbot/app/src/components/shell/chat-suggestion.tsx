@@ -15,8 +15,34 @@ import {
 import { cn } from "@/lib/utils";
 import { SwipeToAnswer } from "./swipe-to-answer";
 
-/** How long "Started" stays above the composer before the card makes room again. */
+/** How long "Started" stays above the composer, or Tasks' tab bar, before it goes. */
 export const STARTED_MS = 4000;
+
+/**
+ * "Started. <Bot> is on it.", said for a moment after a suggestion is started. A pill of the dock's
+ * glass, like the status under the header's orb, so it reads over whatever scrolls under it. Chat
+ * shows it above the composer and Tasks above the tab bar: where the eye already is, never at the
+ * foot of a list.
+ */
+export function StartedLine({
+  botName,
+  className,
+}: {
+  botName: string;
+  className?: string;
+}) {
+  return (
+    <p
+      className={cn(
+        "duet-glass flex min-h-7 w-fit max-w-full items-center rounded-full px-3 py-1 font-semibold text-[13px] text-duet-green leading-4 shadow-duet-glass",
+        className,
+      )}
+      role="status"
+    >
+      Started. {botName} is on it.
+    </p>
+  );
+}
 
 type ChatBot = { id: string; name: string };
 
@@ -63,16 +89,7 @@ function SuggestionFor({ bot }: { bot: ChatBot }) {
     return () => clearTimeout(timer);
   }, [started]);
 
-  // A pill of the dock's glass, like the status under the header's orb: Chat scrolls under it.
-  if (started)
-    return (
-      <p
-        className="duet-glass mb-2.5 flex min-h-7 w-fit max-w-full items-center rounded-full px-3 py-1 font-semibold text-[13px] text-duet-green leading-4 shadow-duet-glass"
-        role="status"
-      >
-        Started. {bot.name} is on it.
-      </p>
-    );
+  if (started) return <StartedLine botName={bot.name} className="mb-2.5" />;
   const suggestion = suggestions.data?.find((item) => item.agentId === bot.id);
   if (!suggestion) return null;
   const busy = act.isPending && act.variables?.id === suggestion.id;

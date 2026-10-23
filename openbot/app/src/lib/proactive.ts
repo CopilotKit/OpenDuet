@@ -27,10 +27,42 @@ export type ProactiveSuggestion = {
   createdAt: string;
 };
 
+/**
+ * How the turn a started suggestion asked for stands: waiting for the next sweep, running, done, or
+ * given up on. A started suggestion gets one attempt, so a failed one stays failed.
+ */
+export type StartedRun = "queued" | "running" | "finished" | "failed";
+
+/** A suggestion the person started, with how its turn stands and the conversation it runs in. */
+export type StartedSuggestion = Pick<
+  ProactiveSuggestion,
+  "id" | "agentId" | "title" | "detail" | "sourceApp" | "sourceLink"
+> & {
+  startedAt: string;
+  run: StartedRun;
+  /** When the run last changed: started, finished, or gave up. */
+  at: string;
+  /** Why it gave up, when it did. */
+  error: string | null;
+  /** Where the turn runs and its reply lands: the research setting's conversation. */
+  channelId: string;
+};
+
 export const proactiveKeys = {
   settings: ["proactive", "settings"] as const,
   suggestions: ["proactive", "suggestions"] as const,
+  started: ["proactive", "started"] as const,
 };
+
+/** Started and not yet ended: queued for the next sweep, or running. */
+export const stillWorking = (item: Pick<StartedSuggestion, "run">) =>
+  item.run === "queued" || item.run === "running";
+
+/**
+ * How often to read what was started: every few seconds while one is still working, so it reaches
+ * Ready for review when its turn ends, and otherwise as the suggestions read.
+ */
+const STARTED_WORKING_POLL_MS = 5_000;
 
 export const proactiveSettingsQueryOptions = () =>
   queryOptions({
@@ -50,6 +82,32 @@ export const proactiveSuggestionsQueryOptions = () =>
       }),
     refetchInterval: 30_000,
   });
+
+export const startedSuggestionsQueryOptions = () =>
+  queryOptions({
+    queryKey: proactiveKeys.started,
+    queryFn: (): Promise<StartedSuggestion[]> =>
+      client("/api/proactive/started", "started", {
+        fallback: "Could not load what you started",
+      }),
+    refetchInterval: (query) =>
+      query.state.data?.some(stillWorking) ? STARTED_WORKING_POLL_MS : 30_000,
+  });
+
+/**
+ * What the person started, by where Tasks lists it: Working on while its turn is queued or running,
+ * Ready for review once it finished, and Done, as not finished, when it gave up. A failed turn is
+ * never Ready for review. Each list is newest first by when it last changed.
+ */
+export function startedByState(started: readonly StartedSuggestion[]) {
+  const newest = (items: StartedSuggestion[]) =>
+    items.sort((a, b) => b.at.localeCompare(a.at));
+  return {
+    working: newest(started.filter(stillWorking)),
+    ready: newest(started.filter((item) => item.run === "finished")),
+    failed: newest(started.filter((item) => item.run === "failed")),
+  };
+}
 
 export const createProactiveSetting = (input: {
   agentId: string;
@@ -90,11 +148,15 @@ export const resolveSuggestion = (id: string, action: "start" | "dismiss") =>
         : "Could not dismiss this suggestion",
   });
 
-/** A setting's research produces suggestions, so a change to either refreshes both. */
+/**
+ * A setting's research produces suggestions, and starting one adds to what was started, so a
+ * change to any of them refreshes all three.
+ */
 const settleProactive = (queryClient: QueryClient) => () =>
   Promise.all([
     queryClient.invalidateQueries({ queryKey: proactiveKeys.settings }),
     queryClient.invalidateQueries({ queryKey: proactiveKeys.suggestions }),
+    queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
   ]);
 
 /** Start a suggested next step as a task, or dismiss it. */

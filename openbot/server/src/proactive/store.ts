@@ -6,7 +6,9 @@ import {
   proactiveSettings,
   proactiveSuggestions,
 } from "../db/schema/proactive";
+import { workItems } from "../db/schema/work";
 import { lockDefaults, recordOptOut } from "../memory/defaults";
+import { PROACTIVE_TASK_KIND } from "./engine";
 import { PROACTIVE_INITIATOR_PREFIX } from "./restriction";
 import {
   ProactiveNotFoundError,
@@ -17,7 +19,17 @@ import {
   parseWith,
   proactiveSettingInputSchema,
   proactiveSettingPatchSchema,
+  type StartedRun,
+  type StartedSuggestion,
 } from "./types";
+
+/** How far back Tasks looks for what the person started. */
+const STARTED_FOR = sql`interval '7 days'`;
+/**
+ * `start` marks the suggestion started, then queues its turn. A read between the two finds no
+ * queue row; only one still missing after this long was never queued.
+ */
+const QUEUEING_GRACE_MS = 60_000;
 
 /** What a proactive run read, as the audit trail recorded it. The source of truth for provenance. */
 export type ProactiveRead = { ref: string; at: Date };
@@ -223,6 +235,87 @@ export function createProactiveStore(database: Database) {
         )
         .orderBy(desc(proactiveSuggestions.createdAt))
         .limit(100);
+    },
+    /**
+     * What the person started in the last week, newest first, with how each one's turn stands.
+     *
+     * Read from what is already kept, with nothing new written: the suggestion's own `started`
+     * state, the work queue row `start` offered for it (keyed by the suggestion), and its research
+     * setting's conversation, which is where the turn runs and its reply lands. Whether a lease is
+     * live is asked of the database's clock, as the queue itself does.
+     */
+    async started(owner: string): Promise<StartedSuggestion[]> {
+      const rows = await database
+        .select({
+          id: proactiveSuggestions.id,
+          agentId: proactiveSuggestions.agentId,
+          title: proactiveSuggestions.title,
+          detail: proactiveSuggestions.detail,
+          sourceApp: proactiveSuggestions.sourceApp,
+          sourceLink: proactiveSuggestions.sourceLink,
+          startedAt: proactiveSuggestions.resolvedAt,
+          channelId: proactiveSettings.channelId,
+          offered: sql<boolean>`${workItems.key} is not null`,
+          attempts: workItems.attempts,
+          leased: sql<boolean>`coalesce(${workItems.leaseUntil} > now(), false)`,
+          finishedAt: workItems.finishedAt,
+          updatedAt: workItems.updatedAt,
+          lastError: workItems.lastError,
+        })
+        .from(proactiveSuggestions)
+        .innerJoin(
+          proactiveSettings,
+          eq(proactiveSettings.id, proactiveSuggestions.settingId),
+        )
+        .leftJoin(
+          workItems,
+          and(
+            eq(workItems.kind, PROACTIVE_TASK_KIND),
+            eq(workItems.key, proactiveSuggestions.id),
+          ),
+        )
+        .where(
+          and(
+            eq(proactiveSuggestions.ownerUserId, owner),
+            eq(proactiveSuggestions.status, "started"),
+            gte(proactiveSuggestions.resolvedAt, sql`now() - ${STARTED_FOR}`),
+          ),
+        )
+        .orderBy(desc(proactiveSuggestions.resolvedAt))
+        .limit(50);
+      return rows.map((row) => {
+        const startedAt = row.startedAt ?? new Date(0);
+        const run: StartedRun = !row.offered
+          ? Date.now() - startedAt.getTime() < QUEUEING_GRACE_MS
+            ? "queued"
+            : "failed"
+          : row.finishedAt
+            ? "finished"
+            : row.leased
+              ? "running"
+              : row.attempts === 0
+                ? "queued"
+                : "failed";
+        return {
+          id: row.id,
+          agentId: row.agentId,
+          title: row.title,
+          detail: row.detail,
+          sourceApp: row.sourceApp,
+          sourceLink: row.sourceLink,
+          startedAt,
+          run,
+          at:
+            run === "finished"
+              ? (row.finishedAt ?? startedAt)
+              : run === "failed"
+                ? (row.updatedAt ?? startedAt)
+                : startedAt,
+          error:
+            run === "failed" ? (row.lastError?.slice(0, 200) ?? null) : null,
+          channelId: row.channelId,
+        };
+      });
     },
     async suggestion(owner: string, id: string): Promise<ProactiveSuggestion> {
       const [row] = await database

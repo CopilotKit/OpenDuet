@@ -1,13 +1,18 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { createAuditStore } from "../src/audit";
 import { createCredentialStore } from "../src/credentials";
 import { createDatabase } from "../src/db/client";
 import { agents, users } from "../src/db/schema/core";
 import { agentProfiles } from "../src/db/schema/coworker";
 import { mcpServers, mcpTools } from "../src/db/schema/plugins";
-import { proactiveSettings } from "../src/db/schema/proactive";
+import {
+  proactiveSettings,
+  proactiveSuggestions,
+} from "../src/db/schema/proactive";
+import { workItems } from "../src/db/schema/work";
+import { PROACTIVE_TASK_KIND } from "../src/proactive/engine";
 import { createMemoryIngestion } from "../src/memory/ingestion";
 import { createMemoryStore } from "../src/memory/store";
 import { MemoryRefusedError } from "../src/memory/types";
@@ -264,6 +269,134 @@ test("suggestions are delivered once, listed to their owner, and resolved once",
       (row) => row.id === suggestion.id,
     ),
   ).toBe(false);
+});
+
+test("what the person started is listed with how its run stands and the conversation it lands in", async () => {
+  const [setting] = await proactive.list(owner);
+  if (!setting) throw new Error("setting missing");
+  const runId = randomUUID();
+  const make = (title: string) =>
+    proactive.addSuggestion({
+      ownerUserId: owner,
+      agentId: bot,
+      settingId: setting.id,
+      runId,
+      title,
+      detail: `${title}.`,
+      sourceApp: "Issue tracker",
+      sourceRef: ref,
+      sourceLink: null,
+    });
+  const [queued, running, finished, failed, lost, unoffered, open, hidden] =
+    await Promise.all(
+      [
+        "Queued",
+        "Running",
+        "Finished",
+        "Failed",
+        "Lost",
+        "Unoffered",
+        "Open",
+        "Hidden",
+      ].map(make),
+    );
+  if (
+    !queued ||
+    !running ||
+    !finished ||
+    !failed ||
+    !lost ||
+    !unoffered ||
+    !open ||
+    !hidden
+  )
+    throw new Error("suggestions missing");
+  const started = [queued, running, finished, failed, lost, unoffered];
+  for (const suggestion of started)
+    await proactive.resolveSuggestion(owner, suggestion.id, "started");
+  await proactive.resolveSuggestion(owner, hidden.id, "dismissed");
+  // Started a few minutes ago and never queued: past the moment between starting and queueing.
+  await database
+    .update(proactiveSuggestions)
+    .set({ resolvedAt: new Date(Date.now() - 5 * 60_000) })
+    .where(eq(proactiveSuggestions.id, unoffered.id));
+  const justStarted = await make("Just started");
+  await proactive.resolveSuggestion(owner, justStarted.id, "started");
+  // The rows `start` offers, in each state the queue can leave one in.
+  const later = new Date(Date.now() + 5 * 60_000);
+  const earlier = new Date(Date.now() - 5 * 60_000);
+  await database.insert(workItems).values([
+    { kind: PROACTIVE_TASK_KIND, key: queued.id },
+    {
+      kind: PROACTIVE_TASK_KIND,
+      key: running.id,
+      claimedBy: "replica-a",
+      leaseUntil: later,
+      attempts: 1,
+    },
+    {
+      kind: PROACTIVE_TASK_KIND,
+      key: finished.id,
+      attempts: 1,
+      finishedAt: new Date(),
+    },
+    // Released after an error: one attempt only, so it is never claimed again.
+    {
+      kind: PROACTIVE_TASK_KIND,
+      key: failed.id,
+      attempts: 1,
+      runAt: later,
+      lastError: "The model stopped answering.",
+    },
+    // Its replica died mid-run, and nothing claims it again.
+    {
+      kind: PROACTIVE_TASK_KIND,
+      key: lost.id,
+      claimedBy: "replica-b",
+      leaseUntil: earlier,
+      attempts: 1,
+    },
+  ]);
+  try {
+    const listed = await proactive.started(owner);
+    const runOf = (id: string) => listed.find((row) => row.id === id)?.run;
+    expect(runOf(queued.id)).toBe("queued");
+    expect(runOf(running.id)).toBe("running");
+    expect(runOf(finished.id)).toBe("finished");
+    expect(runOf(failed.id)).toBe("failed");
+    expect(runOf(lost.id)).toBe("failed");
+    expect(runOf(unoffered.id)).toBe("failed");
+    // Read between being marked started and being queued: still just started, not failed.
+    expect(runOf(justStarted.id)).toBe("queued");
+    // Only what was started: not what is still open, and not what was hidden.
+    expect(runOf(open.id)).toBeUndefined();
+    expect(runOf(hidden.id)).toBeUndefined();
+    const row = listed.find((entry) => entry.id === failed.id);
+    expect(row).toMatchObject({
+      agentId: bot,
+      title: "Failed",
+      channelId: setting.channelId,
+      error: "The model stopped answering.",
+    });
+    expect(row?.startedAt).toBeInstanceOf(Date);
+    expect(
+      listed.find((entry) => entry.id === finished.id)?.at.getTime(),
+    ).toBeGreaterThanOrEqual(
+      listed.find((entry) => entry.id === finished.id)?.startedAt.getTime() ??
+        0,
+    );
+    expect(await proactive.started(other)).toEqual([]);
+  } finally {
+    await database.delete(workItems).where(
+      and(
+        eq(workItems.kind, PROACTIVE_TASK_KIND),
+        inArray(
+          workItems.key,
+          started.map((suggestion) => suggestion.id),
+        ),
+      ),
+    );
+  }
 });
 
 test("Bot-formed memories carry provenance, await review, and never come back once forgotten", async () => {

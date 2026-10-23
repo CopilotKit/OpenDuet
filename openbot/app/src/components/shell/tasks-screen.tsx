@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
-import { Fragment, type ReactNode, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { ApprovalCard, PillButton } from "@/components/approvals/approval-card";
 import { DuetIcon } from "@/components/duet/icons";
 import { DuetCard, Rule, SectionLabel, Tile } from "@/components/duet/kit";
@@ -27,6 +27,9 @@ import {
   proactiveSettingsQueryOptions,
   proactiveSuggestionsQueryOptions,
   resolveSuggestionMutationOptions,
+  type StartedSuggestion,
+  startedByState,
+  startedSuggestionsQueryOptions,
   turnOnResearchMutationOptions,
 } from "@/lib/proactive";
 import { cn } from "@/lib/utils";
@@ -39,6 +42,7 @@ import {
   upcomingRow,
   workingRow,
 } from "./activity-screen";
+import { STARTED_MS, StartedLine } from "./chat-suggestion";
 import { ScreenScroll, ScreenTitle } from "./screen";
 
 /**
@@ -54,35 +58,162 @@ const SWIPE_TO_START = 96;
 
 /**
  * The Tasks tab: the person's to-do list, grouped by what each thing needs. Top to bottom, what
- * waits on the person, what their Bots suggest, what the product's own Bot is working on, what it
- * has lined up, and what it has done. A section with nothing in it is left out, except Suggested,
- * which is also where background research is turned on.
+ * they started that is ready to read, what waits on them, what the product's own Bot is working on
+ * (with what they started) and has lined up, what their Bots suggest, and what is done. A section
+ * with nothing in it is left out, except Suggested, which is also where background research is
+ * turned on.
+ *
+ * Starting a suggestion says so above the tab bar for a moment, where Chat says it above its
+ * composer, while the work itself moves up to Working on.
  */
 export function TasksScreen() {
   const agents = useQuery(agentListQueryOptions());
   const bot = primaryBot(agents.data);
+  // Who took the last suggestion started here. A new object each time, so a second start restarts it.
+  const [started, setStarted] = useState<{ botName: string } | null>(null);
+  useEffect(() => {
+    if (!started) return;
+    const timer = setTimeout(() => setStarted(null), STARTED_MS);
+    return () => clearTimeout(timer);
+  }, [started]);
   // Nothing while the Bots load: every section names one, and a placeholder here is a flicker.
   if (agents.isPending) return null;
   return (
-    <ScreenScroll>
-      <ScreenTitle title="Tasks">
-        {bot
-          ? `What needs you, what ${bot.name} suggests, and what it's working on.`
-          : "What needs you, and what your Bots suggest."}
-      </ScreenTitle>
-      {agents.data ? null : (
-        <p className="type-sub mb-3 px-1 text-duet-red" role="alert">
-          Couldn't load your Bots. Reload the page.
-        </p>
-      )}
-      <div className="flex flex-col gap-5">
-        <NeedsYou agents={agents.data} />
-        <Suggested agents={agents.data} bot={bot} />
-        {bot ? <BotWork bot={bot} /> : null}
-        {bot ? <Done bot={bot} /> : null}
-      </div>
-    </ScreenScroll>
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <ScreenScroll>
+        <ScreenTitle title="Tasks">
+          {bot
+            ? `What needs you, what ${bot.name} suggests, and what it's working on.`
+            : "What needs you, and what your Bots suggest."}
+        </ScreenTitle>
+        {agents.data ? null : (
+          <p className="type-sub mb-3 px-1 text-duet-red" role="alert">
+            Couldn't load your Bots. Reload the page.
+          </p>
+        )}
+        <div className="flex flex-col gap-5">
+          <ReadyForReview />
+          <NeedsYou agents={agents.data} />
+          {bot ? <BotWork bot={bot} /> : null}
+          <Suggested
+            agents={agents.data}
+            bot={bot}
+            onStarted={(botName) => setStarted({ botName })}
+          />
+          {bot ? <Done bot={bot} /> : null}
+        </div>
+      </ScreenScroll>
+      {started ? (
+        // Docked over the list, just above the frosted tab bar, as Chat docks it above the composer.
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-[calc(var(--duet-tab-space,0px)+10px)] px-4"
+          data-dock
+        >
+          <StartedLine botName={started.botName} />
+        </div>
+      ) : null}
+    </div>
   );
+}
+
+/**
+ * What the person started from a suggestion and whose turn has ended, newest first: Ready for
+ * review, at the top. Each opens the conversation the turn ran in, where its reply is. Left out
+ * while there is none; a failure to load is said here, once, for Working on and Done too.
+ */
+function ReadyForReview() {
+  const started = useQuery(startedSuggestionsQueryOptions());
+  if (started.isPending) return null;
+  if (!started.data)
+    return (
+      <p className="type-sub px-1 text-duet-red" role="alert">
+        Couldn't load what you started. Reload the page.
+      </p>
+    );
+  const rows = startedByState(started.data).ready.map(readyRow);
+  return rows.length ? (
+    <ActivityCard rows={rows} title="Ready for review" />
+  ) : null;
+}
+
+const STATUS_TONE = {
+  blue: "text-duet-blue",
+  green: "text-duet-green",
+  amber: "text-duet-amber",
+} as const;
+
+/**
+ * A started row's status line: the state in its colour, then what comes next, on one line that is
+ * cut short rather than wrapped.
+ */
+function StatusLine({
+  status,
+  tone,
+  next,
+}: {
+  status: string;
+  tone: keyof typeof STATUS_TONE;
+  next: string | null;
+}) {
+  return (
+    <span className="block truncate">
+      <span className={STATUS_TONE[tone]}>{status}</span>
+      {next ? ` · ${next}` : null}
+    </span>
+  );
+}
+
+/** Started work whose turn is queued or running: blue, and it opens the conversation it runs in. */
+function startedWorkingRow(item: StartedSuggestion): ActivityRow {
+  return {
+    id: `started:${item.id}`,
+    icon: "bulb",
+    tone: "blue",
+    title: item.title,
+    detail: (
+      <StatusLine
+        next={item.run === "queued" ? "Just started" : "On it"}
+        status="Working"
+        tone="blue"
+      />
+    ),
+    at: item.startedAt,
+    channelId: item.channelId,
+  };
+}
+
+/** Started work whose turn finished: there is a reply to read where it ran. */
+function readyRow(item: StartedSuggestion): ActivityRow {
+  return {
+    id: `started:${item.id}`,
+    icon: "checkCircle",
+    tone: "green",
+    title: item.title,
+    detail: (
+      <StatusLine
+        next="Read its reply"
+        status="Ready for review"
+        tone="green"
+      />
+    ),
+    at: item.at,
+    channelId: item.channelId,
+  };
+}
+
+/** Started work whose turn gave up: amber, like any other work that didn't finish, with why. */
+function didntFinishRow(item: StartedSuggestion): ActivityRow {
+  return {
+    id: `started:${item.id}`,
+    icon: "x",
+    tone: "amber",
+    title: item.title,
+    detail: (
+      <StatusLine next={item.error} status="Didn't finish" tone="amber" />
+    ),
+    at: item.at,
+    channelId: item.channelId,
+  };
 }
 
 /**
@@ -224,9 +355,12 @@ function QuestionCard({
 function Suggested({
   agents,
   bot,
+  onStarted,
 }: {
   agents: AgentProfile[] | undefined;
   bot: AgentProfile | undefined;
+  /** Told whose Bot took a suggestion once it is started, so the screen can say so. */
+  onStarted: (botName: string) => void;
 }) {
   const suggestions = useQuery(proactiveSuggestionsQueryOptions());
   const settings = useQuery(proactiveSettingsQueryOptions());
@@ -240,22 +374,18 @@ function Suggested({
   );
   const botName = (id: string) =>
     agents?.find((agent) => agent.id === id)?.name ?? "Your Bot";
-  // Who took the last started suggestion, said once it has gone from the list.
-  const [started, setStarted] = useState<string | null>(null);
   const resolve = (
     suggestion: ProactiveSuggestion,
     action: "start" | "dismiss",
-  ) => {
-    setStarted(null);
+  ) =>
     act.mutate(
       { id: suggestion.id, action },
       {
         onSuccess: () => {
-          if (action === "start") setStarted(botName(suggestion.agentId));
+          if (action === "start") onStarted(botName(suggestion.agentId));
         },
       },
     );
-  };
   return (
     <section aria-label="Suggested">
       <DuetCard>
@@ -311,10 +441,6 @@ function Suggested({
         {act.error ? (
           <p className="type-sub px-4 pb-4 text-duet-red" role="alert">
             {act.error.message}
-          </p>
-        ) : started ? (
-          <p className="type-sub px-4 pb-4 text-duet-ink-2" role="status">
-            Started. {started} is on it.
           </p>
         ) : null}
       </DuetCard>
@@ -542,15 +668,20 @@ function ResearchOptIn({
 }
 
 /**
- * What the product's own Bot is doing and has lined up, from the ledgers Activity reads, with the
+ * What is being worked on and lined up. First what the person started from a suggestion, until its
+ * turn ends, then what the product's own Bot is doing from the ledgers Activity reads, with the
  * same rows and controls Activity had. The approvals and questions among its open work are left out
  * of Working on: Needs you lists every one of them, and answers them in place.
  */
 function BotWork({ bot }: { bot: AgentProfile }) {
+  const started = useQuery(startedSuggestionsQueryOptions());
   const activity = useQuery(botActivityQueryOptions(bot.id));
   const stop = useMutation(stopHandoffMutationOptions(queryClient));
   const cancel = useMutation(cancelFollowUpMutationOptions(queryClient));
-  const working: ActivityRow[] = (activity.data?.inProgress ?? [])
+  const startedWork = startedByState(started.data ?? []).working.map(
+    startedWorkingRow,
+  );
+  const botWork: ActivityRow[] = (activity.data?.inProgress ?? [])
     .filter((item) => item.kind !== "approval" && item.kind !== "question")
     .map((item) => ({
       ...workingRow(item),
@@ -578,6 +709,7 @@ function BotWork({ bot }: { bot: AgentProfile }) {
       ) : undefined,
     }),
   );
+  const working = [...startedWork, ...botWork];
   const problem = activity.error ?? stop.error ?? cancel.error;
   return (
     <>
@@ -599,19 +731,19 @@ function BotWork({ bot }: { bot: AgentProfile }) {
 }
 
 /**
- * What the product's own Bot finished, at the foot of the list: its routines, follow-ups and
- * delegated work, and the actions the person allowed or refused, newest first. The rows Activity's
- * "Handled for you" had, read-only. Left out until there is something in it; a failure to load is
- * said once, by Working on.
+ * What is finished, at the foot of the list, newest first and read-only: the product's own Bot's
+ * routines, follow-ups and delegated work, and what the person started that didn't finish. An
+ * action the person allowed or refused is not finished work, so it has no row here; its
+ * conversation still shows the action that ran. Left out until there is something in it; a
+ * failure to load is said once, by Working on or Ready for review.
  */
 function Done({ bot }: { bot: AgentProfile }) {
+  const started = useQuery(startedSuggestionsQueryOptions());
   const activity = useQuery(botActivityQueryOptions(bot.id));
-  const inbox = useQuery(approvalInboxOptions());
-  if (activity.isPending || !activity.data) return null;
+  if (activity.isPending || started.isPending) return null;
   const rows = handledRows(
-    activity.data.completed,
-    inbox.data?.requests ?? [],
-    bot.id,
+    activity.data?.completed ?? [],
+    startedByState(started.data ?? []).failed.map(didntFinishRow),
   );
   return rows.length ? <ActivityCard rows={rows} title="Done" /> : null;
 }
