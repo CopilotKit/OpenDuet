@@ -34,6 +34,7 @@ import { PageSheetHost } from "@/components/duet/page-sheet";
 import { ChatSuggestionCard } from "@/components/shell/chat-suggestion";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { isThreadBusyError } from "@/lib/channels/run-lifecycle";
+import { useFocusMessage } from "@/lib/tasks/focus-message";
 import { newId } from "../../lib/new-id";
 
 export function ConversationView({
@@ -150,6 +151,8 @@ export function ConversationView({
    */
   const root = useRef<HTMLDivElement>(null);
   const dock = useRef<HTMLDivElement>(null);
+  // Opened from a task on Tasks: show that task's own message, not the conversation's end.
+  useFocusMessage(root);
   useEffect(() => {
     const frame = root.current;
     const docked = dock.current;

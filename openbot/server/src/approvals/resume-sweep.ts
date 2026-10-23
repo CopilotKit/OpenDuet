@@ -15,6 +15,7 @@ import {
 } from "../db/schema";
 import type { DeliveryScope } from "../delivery/types";
 import { PRIVATE_SHARE_TOOL_REF } from "../proactive/private-share";
+import { recordTaskContinuation } from "../proactive/store";
 import type { ResponsibilityStore } from "../responsibilities/types";
 import { DEFAULT_MAX_ATTEMPTS, type WorkQueue } from "../work/queue";
 import type { ApprovalResumeDependencies, ApprovalService } from "./service";
@@ -132,6 +133,40 @@ export function createApprovalResumeTick(deps: {
               )
               .limit(1);
             const routineWaitingOn = sql<string>`${routineRuns.waiting}->>'approvalId'`;
+            /*
+             * A started task waiting on a decision this continuation answers takes the reply as where
+             * it now stands (proactive/store.ts). A task waits on the first decision its step stopped
+             * on, which need not be the one decided last, so every decision answered is offered. The
+             * fallback by conversation (a task whose question led here) is used only for a step of one
+             * decision, where it cannot match the wrong task. Never thrown: the conversation has
+             * already continued, and a retry here would carry the decision out twice.
+             */
+            const recordTask = async (
+              replyText: string | null,
+              stoppedOn?: { kind: string; id: string },
+            ) => {
+              for (const id of decided)
+                await recordTaskContinuation(database, {
+                  ownerUserId: input.ownerUserId,
+                  approvalId: id,
+                  channelId:
+                    decided.length === 1 ? (source?.channelId ?? null) : null,
+                  askedAt: request.createdAt,
+                  replyText,
+                  ...(stoppedOn ? { stoppedOn } : {}),
+                }).catch((failure: unknown) =>
+                  console.error(
+                    JSON.stringify({
+                      type: "started-task-continuation-error",
+                      error:
+                        failure instanceof Error
+                          ? failure.name
+                          : "UnknownError",
+                      timestamp: new Date().toISOString(),
+                    }),
+                  ),
+                );
+            };
             // A group turn's approval also writes the resumed reply into the shared transcript.
             let outcome: { replyText: string };
             try {
@@ -167,8 +202,15 @@ export function createApprovalResumeTick(deps: {
                     inArray(routineWaitingOn, decided),
                   ),
                 );
+              await recordTask(
+                null,
+                error.waiting.requestId
+                  ? { kind: error.waiting.kind, id: error.waiting.requestId }
+                  : undefined,
+              );
               return;
             }
+            await recordTask(outcome.replyText);
             if (source && outcome.replyText)
               await channelStore.recordActivity(
                 await actorFor(input.ownerUserId),

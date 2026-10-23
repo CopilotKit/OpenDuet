@@ -8,9 +8,6 @@ import { routineRuns } from "../src/db/schema";
  * A decision carried out, whose conversation then stops on another decision the person has to
  * make. That is the conversation waiting, not the decision failing: retried, every retry carried
  * the turn on again from here and repeated what it had already done (the same email sent again).
- *
- * Builder C's test from #37, carried with the fix it covers; the started-task recording #37 adds is
- * not on main, so it is left to #37.
  */
 describe("carrying a decision out, when the conversation stops on another", () => {
   test("finishes the decision once, never retries it, and moves a waiting routine on", async () => {
@@ -120,6 +117,14 @@ describe("carrying a decision out, when the conversation stops on another", () =
 describe("carrying a person's answer on, when the conversation stops on a decision", () => {
   test("finishes the answer once, and the conversation waits on that decision", async () => {
     const calls: string[] = [];
+    const builder = (): unknown =>
+      new Proxy(() => undefined, {
+        get: (_target, property) =>
+          property === "then"
+            ? (resolve: (rows: unknown[]) => void) => resolve([])
+            : () => builder(),
+        apply: () => builder(),
+      });
     let runs = 0;
     const tick = createPersonResponseTick({
       approvalQueue: {
@@ -152,6 +157,7 @@ describe("carrying a person's answer on, when the conversation stops on a decisi
           return true;
         },
       } as never,
+      database: { select: () => builder(), update: () => builder() } as never,
       personResponseOwner: "replica",
       authoriseQuestion: async () => undefined,
       approvalContinuationRunner: (async () => {
