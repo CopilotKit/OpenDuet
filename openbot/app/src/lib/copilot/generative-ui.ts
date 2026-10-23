@@ -1,50 +1,80 @@
+import { SANDBOX_THEME_ASK, SANDBOX_THEME_MESSAGE } from "@/lib/theme";
+import {
+  DARK_TOKENS,
+  LIGHT_TOKENS,
+  RADII,
+  TYPE_SCALE,
+  tokenDeclarations,
+} from "@/lib/theme-tokens";
+import { appConfig } from "@/lib/generated/application-config";
+
 /**
  * What a Bot is told about drawing an interface it wrote itself.
  *
- * The SDK ships a default set of guidelines, and they describe shadcn/ui: rounded cards, a violet
- * accent, its own spacing scale. OpenBot does not look like that. The app's palette is deliberately
- * without colour — every token in styles.css sits at chroma zero except the destructive red and the
- * success teal — so the default guidance produces something that reads as a foreign widget dropped
- * into the transcript rather than part of it.
+ * The SDK ships a default set of guidelines, and they describe shadcn/ui: its own accent, its own
+ * spacing scale. OpenDuet does not look like that, and the version of this prompt before it did not
+ * look like OpenDuet either: it asked for 14px text and small radii beside a transcript set at 17px
+ * on 20px bubbles, and called a violet accent wrong next to an app whose one accent is violet
+ * (parity finding 11). So it is built from OpenDuet's own tokens (`lib/theme-tokens.ts`, held to
+ * `styles.css` by a test) and names its own components.
  *
- * This is a prompt, so it is written for a model rather than for a person: concrete values it can
- * copy, and the few rules that are actually load-bearing.
+ * This is a prompt, so it is written for a model rather than for a person: a block of CSS it can
+ * paste, the components it should reach for, and the few rules that are load-bearing.
  *
- * WHY THE COLOURS ARE LITERAL. The generated interface renders inside a sandboxed iframe with no
- * same-origin access to this app. It cannot reach the stylesheet, the theme class, or the CSS custom
- * properties the rest of the UI is built from, so anything it should match has to be written out
- * here in full. Referring it to `--muted-foreground` would produce an unstyled document.
+ * WHY THE TOKENS ARE WRITTEN OUT. The interface renders inside a sandboxed iframe with no access to
+ * this app's stylesheet, so anything it should match has to be handed to it in full.
  *
- * WHY prefers-color-scheme AND NOT THIS APP'S THEME. For the same reason: the iframe is a separate
- * document and cannot see which theme the person picked. `prefers-color-scheme` is the only signal
- * that crosses, so a generated interface follows the browser rather than the app's own switch. A
- * person who has overridden their OS theme in OpenBot will see a generated interface that disagrees
- * with the surface around it. That is a known limitation of the sandbox rather than something this
- * text can fix.
+ * WHY THE THEME IS ASKED FOR. The frame is a separate document, and `prefers-color-scheme` inside it
+ * follows the phone, not the person's choice in Settings, so the two disagreed whenever somebody
+ * picked Light or Dark. The frame asks the app with a message and the app answers, and answers again
+ * whenever the theme changes (`theme-provider.tsx`). The media query is only the fallback for a frame
+ * that never hears back.
  */
-export const GENERATIVE_UI_DESIGN_SKILL = `You are generating a self-contained interface that renders inside a sandboxed iframe in OpenBot's chat transcript. It must look like it belongs to OpenBot, not like a widget from somewhere else.
+const product = appConfig.brand.productName;
+const type = TYPE_SCALE;
 
-PALETTE. OpenBot is neutral by design. Use greys for structure and reserve colour for meaning.
-- Light: background #fafafa, surface #ffffff, text #0a0a0a, muted text #636363, border #e5e5e5.
-- Dark: background #0a0a0a, surface #171717, text #fafafa, muted text #a1a1a1, border rgba(255,255,255,0.10).
-- Only two accents, and only when they carry meaning: #e7000b destructive and #009689 success in light, #ff6467 and #00bba7 in dark.
-- Never introduce a brand hue, gradient, or coloured header. A purple or blue accent is wrong here.
+export const GENERATIVE_UI_DESIGN_SKILL = `You are generating a self-contained interface that renders inside a sandboxed iframe in ${product}'s chat, on a phone. It must look like part of ${product}, not like a widget from somewhere else.
 
-CHARTS. Series colours are steps of grey, not a rainbow: #d4d4d4, #737373, #525252, #404040, #262626. Distinguish series by ordering, direct labels, and shape rather than by hue. If a series means "bad", the destructive red is allowed for that one series.
+TOKENS. Paste this block at the top of your <style> exactly, then use only these variables for colour. Never introduce another hue, a gradient, or a coloured header.
+:root { color-scheme: light; ${tokenDeclarations(LIGHT_TOKENS)} }
+:root[data-theme="dark"] { color-scheme: dark; ${tokenDeclarations(DARK_TOKENS)} }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) { color-scheme: dark; ${tokenDeclarations(DARK_TOKENS)} } }
+body { margin: 0; background: var(--duet-surface); color: var(--duet-ink); }
 
-TYPE. font-family: Inter, ui-sans-serif, system-ui, sans-serif. Body 14px/1.5. Headings 15-16px, weight 600, no letter-spacing tricks. Numerals in tables and metrics: font-variant-numeric: tabular-nums.
+THEME. ${product} tells the frame which theme the person chose. Include this script unchanged, so the interface switches with the app:
+<script>(function(){function set(t){if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}addEventListener("message",function(e){if(e.data&&e.data.type==="${SANDBOX_THEME_MESSAGE}")set(e.data.theme);});try{parent.postMessage({type:"${SANDBOX_THEME_ASK}"},"*");}catch(e){}})();</script>
 
-SHAPE AND SPACING. border-radius: 0.55rem on cards and controls, 0.375rem on small chips. 1px solid borders, never a drop shadow for elevation. Pad containers 12-16px. Space stacked blocks 8-12px.
+COLOUR ROLES. Everything is grey (--duet-ink, --duet-ink-2 for secondary text, --duet-ink-3 for captions and placeholders, --duet-hair for lines, --duet-card and --duet-tile for fills). --duet-accent is the one brand colour, used in a few places only: a selected control, a link, a focus ring, the one chart series that matters. It is never a heading colour. Status has four colours and they are only for status words: --duet-status-done "Ready for review", --duet-status-needs "Needs input", --duet-status-working "Working", --duet-status-problem "Couldn't finish".
 
-DARK MODE IS REQUIRED. Define the light palette first, then override inside @media (prefers-color-scheme: dark). Set an explicit background and colour on body — the iframe paints on nothing, so a transparent body shows through wrongly.
+TYPE. font-family: Inter, ui-sans-serif, system-ui, sans-serif. Five sizes, no others:
+- title ${type.display.size}px/${type.display.line}px weight 600, for the interface's one heading;
+- nav ${type.nav.size}px/${type.nav.line}px weight 500, for a section title;
+- body ${type.body.size}px/${type.body.line}px weight 400, for content and row titles (500);
+- sub ${type.sub.size}px/${type.sub.line}px weight 400, for secondary lines, labels and buttons (500);
+- caption ${type.caption.size}px/${type.caption.line}px weight 400, for captions, units and timestamps.
+Numbers in tables and metrics use font-variant-numeric: tabular-nums.
 
-LAYOUT. Assume a narrow column: roughly 320-680px wide, inside a chat message. Design for the narrow case first and let it grow. Never set a fixed pixel width on the outermost element; use max-width: 100%, flexbox or grid, and box-sizing: border-box everywhere. Anything wide — a table, a chart, a code block — scrolls inside its own container with overflow-x: auto. The page itself must never scroll sideways.
+COMPONENTS. Build from ${product}'s own pieces:
+- Row: a list item straight on the background, no card around a list. A 24px line icon or a small tile on the left, the title (body, 500), one secondary line (sub, --duet-ink-2), and a status word or a chevron on the right. Rows are told apart by spacing (8-12px), not by borders or white boxes.
+- Card: only for one standalone thing, such as a single metric or a single offer. Background --duet-card, border-radius ${RADII.card}px, a 1px solid var(--duet-hair) border, no shadow.
+- Metric: the number at title size, weight 600, its label under it at caption size in --duet-ink-2.
+- Status line: the status word in its status colour, then " · " and the next step in --duet-ink-2, on one line.
+- Primary button: a pill (border-radius: 999px), 44px tall, background --duet-black, text --duet-on-black, sub size weight 500. Secondary button: the same pill with a 1px solid var(--duet-hair) border on --duet-card.
+- Chip: a pill, 44px tall, a 1px solid var(--duet-hair) border on --duet-card, sub size weight 400.
+- Field: background --duet-tile, border-radius ${RADII.field}px, 16px padding, body size.
+- Icon tile: a ${RADII.tile}px rounded square on --duet-tile.
 
-HONESTY ABOUT DATA. You have no access to this deployment's data. Every number you render is one you were given or one you made up, so never present an invented figure as a reading from OpenBot. If you are illustrating rather than reporting, label it as an example on the interface itself.
+CHARTS. Series in greys (--duet-ink-3, --duet-ink-2, --duet-ink), with --duet-accent for the one series the person should look at. Label series directly rather than with a legend where you can. Gridlines in --duet-hair. If a value means something went wrong, --duet-status-problem is allowed for that one mark.
+
+SPACING AND SHAPE. A 16px gutter on both sides. 12-16px inside a card, 24px between sections. Radii are ${RADII.card}px for cards, ${RADII.tile}px for tiles, full for pills and buttons. No drop shadows.
+
+LAYOUT. Assume a phone: 320-430px wide. Design for that first. Never set a fixed pixel width on the outermost element; use max-width: 100%, flexbox or grid, and box-sizing: border-box everywhere. A wide table or chart scrolls inside its own container with overflow-x: auto. The page itself never scrolls sideways.
+
+HONESTY ABOUT DATA. You have no access to this deployment's data. Every number you render is one you were given or one you made up, so never present an invented figure as a reading. If you are illustrating rather than reporting, say it is an example on the interface itself.
 
 MECHANICS.
 - Keep it self-contained: inline the CSS and the JS. CDN <script> and <link> tags do load, so Chart.js, D3 and similar are available when a chart genuinely needs them; prefer plain SVG or CSS for anything simple.
 - No network calls to this deployment. The iframe has no session and no same-origin access; a fetch to /api will fail.
 - Guard every read of browser storage in try/catch. It throws outright in some contexts.
-- Interactive controls need a visible focus ring, real button elements, and hit targets of at least 32px.
-- Prefer one clear interface over a dashboard of panels. A single legible chart beats four cramped ones.`;
+- Every control is a real button or input, at least 44px tall and wide, with a visible focus ring in --duet-accent.
+- One clear interface beats a dashboard of panels. A single legible chart beats four cramped ones.`;

@@ -112,9 +112,9 @@ export function ComponentPreview({
  * column: previewing at the tile's own width would be a different component.
  *
  * Only an upper bound, and deliberately not read as the component's width. `GalleryFrame` caps
- * itself at `max-w-2xl`, which is 42rem — 630px against this app's 15px root, not the 672px a 16px
- * root would give. Assuming that number left every preview sitting half the difference off centre,
- * so the drawn width is measured instead.
+ * itself at `max-w-2xl`, which is 42rem: 672px at the browser's default text size, and more or
+ * less for a person who changed it. When the app's root was 15px it was 630px, and assuming the
+ * number left every preview sitting half the difference off centre, so the drawn width is measured.
  */
 const PREVIEW_LAYOUT_WIDTH = 672;
 

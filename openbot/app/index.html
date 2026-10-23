@@ -7,13 +7,21 @@
     <!-- What scripts/start.sh looks for to tell this app from anything else on the port; the title is the product's name and changes with it. -->
     <meta name="openbot" content="app" />
     <!-- Sets the theme before the first paint. Must stay inline and classic: `defer` or `type="module"` runs too late. -->
+    <!-- The rule in src/lib/theme.ts (parseThemePreference, then resolveTheme): the person's choice, else the phone's setting. -->
     <script>
-      // localStorage throws in some privacy modes; a theme is not worth taking the app down for.
-      try {
-        const dark = window.localStorage.getItem("openbot-theme") === "dark";
+      (() => {
+        let choice = null;
+        // localStorage throws in some privacy modes; the phone's setting still applies.
+        try {
+          choice = window.localStorage.getItem("openduet-theme");
+          if (choice === null && window.localStorage.getItem("openbot-theme") === "dark") choice = "dark";
+        } catch {}
+        const dark =
+          choice === "dark" ||
+          (choice !== "light" && !!window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.classList.toggle("dark", dark);
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
-      } catch {}
+      })();
     </script>
   </head>
   <body>

@@ -2,6 +2,7 @@ import { useRenderTool } from "@copilotkit/react-core/v2";
 import { useState } from "react";
 import { z } from "zod";
 import { useConversationSend } from "@/components/channels/conversation-send";
+import { DuetIcon } from "@/components/duet/icons";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import { cn } from "@/lib/utils";
 
@@ -64,7 +65,8 @@ export function ReplyChips({
         return (
           <button
             className={cn(
-              "type-row inline-flex h-11 max-w-full items-center rounded-full px-[18px] font-semibold outline-none transition-[transform,background-color] duration-150 focus-visible:ring-2 focus-visible:ring-duet-violet focus-visible:ring-offset-2 focus-visible:ring-offset-duet-surface",
+              // parity-spec 2.14: a reply glyph, the sub size at regular weight, a hairline, 44px tall.
+              "type-sub inline-flex h-11 max-w-full items-center gap-1.5 rounded-full pr-[18px] pl-3.5 font-normal outline-none transition-[transform,background-color] duration-[var(--duet-dur-tap)] focus-visible:ring-2 focus-visible:ring-duet-accent focus-visible:ring-offset-2 focus-visible:ring-offset-duet-surface",
               chosen
                 ? "bg-duet-violet-soft text-duet-violet shadow-[0_0_0_1px_color-mix(in_oklab,var(--duet-violet)_28%,transparent)]"
                 : "bg-duet-card shadow-[0_0_0_1px_var(--duet-hair)]",
@@ -81,6 +83,11 @@ export function ReplyChips({
             }}
             type="button"
           >
+            <DuetIcon
+              className="shrink-0 text-duet-ink-3"
+              name="reply"
+              size={16}
+            />
             <span className="truncate">{reply}</span>
           </button>
         );
