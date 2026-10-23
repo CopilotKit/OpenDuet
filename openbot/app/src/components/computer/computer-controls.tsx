@@ -16,6 +16,8 @@ export function ComputerControlButton({
   return (
     <div className="flex flex-col items-start gap-1">
       <Button
+        // 44px to tap (parity-spec 2.11).
+        className="min-h-11"
         size="sm"
         variant={human ? "default" : "outline"}
         disabled={busy || !control || control.transitioning}

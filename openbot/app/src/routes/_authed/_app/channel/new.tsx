@@ -11,7 +11,7 @@ import {
 } from "@/components/channels/compose-state";
 import { ConversationView } from "@/components/channels/conversation-view";
 import { seedMessage } from "@/components/channels/transcript-messages";
-import { SidebarToggle } from "@/components/layout/sidebar-toggle";
+import { usePageChrome } from "@/components/shell/page-chrome";
 import {
   Combobox,
   ComboboxChip,
@@ -115,141 +115,149 @@ function RouteComponent() {
     group ? "" : (recipients[0]?.id ?? ""),
   );
 
+  /*
+   * A page pushed over the app, in Chat's column (parity-spec 2.9): the back disc, "New conversation"
+   * in the title pill, the To field at the head of the thread and Chat's own docked glass reply box.
+   */
+  usePageChrome({ title: "New conversation", column: "phone" });
+
   if (profiles === undefined && !rosterError) return null;
 
-  return (
-    <div className="flex h-full flex-col">
-      <div className="h-12 border-b border-border sticky top-0 flex flex-row px-2 items-center">
-        <SidebarToggle className="mr-1" />
-        <span className="text-sm text-muted-foreground">To:</span>
-        <Combobox
-          // Do not auto-open when the recipient came from the URL; the field is already answered.
-          defaultOpen={!chosen && !loadError && !waitingForUrlAgent}
-          autoHighlight
-          multiple
-          items={profiles ?? []}
-          isItemEqualToValue={(item: AgentProfile, value: AgentProfile) =>
-            item.id === value.id
-          }
-          itemToStringLabel={(item: AgentProfile) => item.name}
-          itemToStringValue={(item: AgentProfile) => item.id}
-          onValueChange={(next: AgentProfile[], details) => {
-            const kept = toFieldChange(selected, next, details.reason);
-            setPicked(kept);
-            // The first Bot stays in the URL so a reload keeps the conversation's recipient; the
-            // rest of a group lives in the page. Not a separate navigation history entry.
-            void navigate({
-              replace: true,
-              search: kept[0] ? { agent: kept[0].id } : {},
-            });
-          }}
-          value={selected}
+  const toField = (
+    <div className="duet-face mb-2 flex min-h-12 flex-row items-center rounded-[var(--duet-radius-field)] bg-duet-tile px-4">
+      <span className="type-sub text-duet-ink-2">To:</span>
+      <Combobox
+        // Do not auto-open when the recipient came from the URL; the field is already answered.
+        defaultOpen={!chosen && !loadError && !waitingForUrlAgent}
+        autoHighlight
+        multiple
+        items={profiles ?? []}
+        isItemEqualToValue={(item: AgentProfile, value: AgentProfile) =>
+          item.id === value.id
+        }
+        itemToStringLabel={(item: AgentProfile) => item.name}
+        itemToStringValue={(item: AgentProfile) => item.id}
+        onValueChange={(next: AgentProfile[], details) => {
+          const kept = toFieldChange(selected, next, details.reason);
+          setPicked(kept);
+          // The first Bot stays in the URL so a reload keeps the conversation's recipient; the
+          // rest of a group lives in the page. Not a separate navigation history entry.
+          void navigate({
+            replace: true,
+            search: kept[0] ? { agent: kept[0].id } : {},
+          });
+        }}
+        value={selected}
+      >
+        <ComboboxChips
+          ref={anchor}
+          className="flex-1 border-none bg-transparent! focus-within:ring-0 dark:bg-transparent!"
         >
-          <ComboboxChips
-            ref={anchor}
-            className="flex-1 border-none bg-transparent! focus-within:ring-0 dark:bg-transparent!"
-          >
-            {selected.map((profile) => (
-              <ComboboxChip
-                className="gap-1.5 pl-1"
-                key={profile.id}
-                removeLabel={`Remove ${profile.name}`}
-              >
-                <ChannelAvatar participantIds={[profile.id]} size={16} />
-                {profile.name}
-              </ComboboxChip>
-            ))}
-            <ComboboxChipsInput
-              // The popup opening is not enough on its own: typing filters through this input, so
-              // the caret starts here whenever the recipient question is still open. A recipient
-              // from the URL means the composer takes focus instead.
-              autoFocus={!chosen}
-              placeholder={
-                selected.length
-                  ? "Add another Bot for a group…"
-                  : "Choose a Bot…"
-              }
-            />
-          </ComboboxChips>
-          {/* Allow max-w to constrain the popup even though its anchor is full-width. */}
-          <ComboboxContent
-            anchor={anchor}
-            className="min-w-0 max-w-lg"
-            sideOffset={12}
-          >
-            <ComboboxEmpty>No Bots found.</ComboboxEmpty>
-            <ComboboxList>
-              {(item: AgentProfile) => (
-                <ComboboxItem key={item.id} value={item} className="h-10">
-                  <ChannelAvatar participantIds={[item.id]} size={24} />
-                  {item.name}
-                  <span className="truncate text-muted-foreground ml-1">
-                    {item.title}
-                  </span>
-                </ComboboxItem>
-              )}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
-      </div>
-      <ConversationView
-        // Choosing a coworker answers the "To:" field, so the message is what remains: the caret
-        // lands in the composer the moment a recipient exists, whether picked here or in the URL.
-        autoFocus
-        // Commands must be loaded before the first channel message is sent.
-        commands={skillCommands}
-        disabled={
-          Boolean(loadError) || waitingForUrlAgent || recipients.length === 0
-        }
-        messages={sent ? [sent] : []}
-        notice={
-          loadError || error ? (
-            <p className="pb-2 text-sm text-destructive" role="alert">
-              {loadError ?? error}
-            </p>
-          ) : null
-        }
-        onSubmit={async (draft) => {
-          const recipient = recipients[0];
-          if (!recipient || !canSend(recipients, draft.text)) return;
-          if (group) {
-            setError(null);
-            try {
-              await startGroup(
-                recipients.map((entry) => entry.id),
-                draft.text,
-              );
-            } catch (caught) {
-              setError(
-                caught instanceof Error
-                  ? caught.message
-                  : "Couldn't start the group. Try again.",
-              );
-              throw caught;
+          {selected.map((profile) => (
+            <ComboboxChip
+              // Its remove button is a 44px target, as every control is (parity-spec 2.11).
+              className="gap-1.5 pl-1 [&_button]:min-h-11 [&_button]:min-w-11"
+              key={profile.id}
+              removeLabel={`Remove ${profile.name}`}
+            >
+              <ChannelAvatar participantIds={[profile.id]} size={16} />
+              {profile.name}
+            </ComboboxChip>
+          ))}
+          <ComboboxChipsInput
+            className="min-h-11"
+            // The popup opening is not enough on its own: typing filters through this input, so
+            // the caret starts here whenever the recipient question is still open. A recipient
+            // from the URL means the composer takes focus instead.
+            autoFocus={!chosen}
+            placeholder={
+              selected.length ? "Add another Bot for a group…" : "Choose a Bot…"
             }
-            return;
-          }
+          />
+        </ComboboxChips>
+        {/* Allow max-w to constrain the popup even though its anchor is full-width. */}
+        <ComboboxContent
+          anchor={anchor}
+          className="min-w-0 max-w-lg"
+          sideOffset={12}
+        >
+          <ComboboxEmpty>No Bots found.</ComboboxEmpty>
+          <ComboboxList>
+            {(item: AgentProfile) => (
+              <ComboboxItem key={item.id} value={item} className="h-10">
+                <ChannelAvatar participantIds={[item.id]} size={24} />
+                {item.name}
+                <span className="truncate text-muted-foreground ml-1">
+                  {item.title}
+                </span>
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </div>
+  );
 
+  return (
+    <ConversationView
+      inShell
+      lead={toField}
+      // Choosing a coworker answers the "To:" field, so the message is what remains: the caret
+      // lands in the composer the moment a recipient exists, whether picked here or in the URL.
+      autoFocus
+      // Commands must be loaded before the first channel message is sent.
+      commands={skillCommands}
+      disabled={
+        Boolean(loadError) || waitingForUrlAgent || recipients.length === 0
+      }
+      messages={sent ? [sent] : []}
+      notice={
+        loadError || error ? (
+          <p className="type-sub pb-2 text-duet-red" role="alert">
+            {loadError ?? error}
+          </p>
+        ) : null
+      }
+      onSubmit={async (draft) => {
+        const recipient = recipients[0];
+        if (!recipient || !canSend(recipients, draft.text)) return;
+        if (group) {
           setError(null);
-          setSent(seedMessage(draft.text, newId()));
-
           try {
-            // Recorded, then started: a coworker picked here is as much a choice as an `@` on the
-            // home screen, and the trail has to say so for both.
-            await startChosen(recipient.id, draft.text);
+            await startGroup(
+              recipients.map((entry) => entry.id),
+              draft.text,
+            );
           } catch (caught) {
-            // Preserve the unsent draft when channel creation fails.
-            setSent(null);
             setError(
               caught instanceof Error
                 ? caught.message
-                : "Couldn't start the conversation. Try again.",
+                : "Couldn't start the group. Try again.",
             );
             throw caught;
           }
-        }}
-        pending={pending}
-      />
-    </div>
+          return;
+        }
+
+        setError(null);
+        setSent(seedMessage(draft.text, newId()));
+
+        try {
+          // Recorded, then started: a coworker picked here is as much a choice as an `@` on the
+          // home screen, and the trail has to say so for both.
+          await startChosen(recipient.id, draft.text);
+        } catch (caught) {
+          // Preserve the unsent draft when channel creation fails.
+          setSent(null);
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Couldn't start the conversation. Try again.",
+          );
+          throw caught;
+        }
+      }}
+      pending={pending}
+    />
   );
 }

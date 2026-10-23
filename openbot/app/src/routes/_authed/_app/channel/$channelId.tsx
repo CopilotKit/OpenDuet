@@ -16,14 +16,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DuetIcon } from "@/components/duet/icons";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
 import { tryClient } from "@/lib/client";
-import { conversationTitle } from "@/lib/channels/conversation-title";
+import {
+  conversationTitle,
+  firstMessageQueryOptions,
+  NEW_CONVERSATION,
+} from "@/lib/channels/conversation-title";
+import { useServerWork } from "@/components/shell/chat-presence";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import {
   channelListQueryOptions,
@@ -80,17 +87,39 @@ function RouteComponent() {
   useMarkOpenChannelRead(channelId);
 
   const listed = roster.data?.find((row) => row.id === channelId);
-  // Not in the menu's first page: named plainly rather than paging the menu to find it.
-  const title = channel.data
-    ? listed
-      ? conversationTitle(listed)
-      : "Conversation"
-    : null;
+  const threadId = channel.data?.threadId;
+  const first = useQuery({
+    ...firstMessageQueryOptions(
+      threadId ?? "",
+      agentId ?? "",
+      Boolean(listed?.lastMessageAt ?? channel.data?.lastMessageAt),
+    ),
+    enabled: Boolean(threadId && agentId && !listed?.summary),
+  });
+  /*
+   * The summary, else what the person first asked: what the conversation is about, which stays put
+   * as it goes on. Held for the visit once known, so the pill does not re-title itself with every
+   * message. Not in the menu's first page: named plainly rather than paging the menu to find it.
+   */
+  const summary = listed?.summary;
+  const title = useHeldTitle(
+    !channel.data || roster.isPending || (!summary && !first.isFetched)
+      ? null
+      : !listed && !summary && !first.data
+        ? "Conversation"
+        : conversationTitle({
+            summary,
+            firstMessage: first.data,
+            lastMessage: listed?.lastMessage,
+          }),
+  );
+  // The server's own work in this conversation, such as the run after Allow once.
+  const serverWork = useServerWork(listed?.busy === true, threadId);
   const actions = useMemo(
     () => (agentId ? <ConversationMore agentId={agentId} /> : undefined),
     [agentId],
   );
-  usePageChrome({ title, column: "phone", status: true, actions });
+  usePageChrome({ title, column: "phone", status: true, serverWork, actions });
 
   // Nothing while the channel loads: a placeholder inside a local round trip is a flicker.
   if (channel.isPending) return null;
@@ -115,6 +144,17 @@ function RouteComponent() {
       />
     </>
   );
+}
+
+/**
+ * The first real title this visit found, kept for the rest of it. "New conversation" is not held:
+ * it gives way to the first message once there is one.
+ */
+function useHeldTitle(title: string | null): string | null {
+  const [held, setHeld] = useState<string | null>(null);
+  if (held === null && title !== null && title !== NEW_CONVERSATION)
+    setHeld(title);
+  return held ?? title;
 }
 
 /** A sentence where the conversation would be, under the page's chrome. */
@@ -158,10 +198,31 @@ function ConversationMore({ agentId }: { agentId: string }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/*
+       * A page-sheet (parity-spec 2.9): it rises over the conversation with a 38px top radius, and
+       * its close is a 44px disc in its own top bar.
+       */}
       <Sheet onOpenChange={setWatching} open={watching}>
-        <SheetContent className="max-h-[92svh] overflow-y-auto" side="bottom">
-          <SheetHeader>
-            <SheetTitle>Computer</SheetTitle>
+        <SheetContent
+          className="duet-face max-h-[92svh] gap-0 overflow-y-auto rounded-t-[38px] border-0 bg-duet-surface text-duet-ink"
+          showCloseButton={false}
+          side="bottom"
+        >
+          <SheetHeader className="flex-row items-center justify-between px-4 pt-4 pb-0">
+            <SheetTitle className="type-body font-semibold text-duet-ink">
+              Computer
+            </SheetTitle>
+            <SheetClose
+              render={
+                <button
+                  aria-label="Close"
+                  className="duet-glass grid size-11 place-items-center rounded-full text-duet-ink shadow-duet-glass"
+                  type="button"
+                />
+              }
+            >
+              <DuetIcon name="x" size={18} />
+            </SheetClose>
           </SheetHeader>
           {watching ? <ComputerViewPanel agentId={agentId} /> : null}
         </SheetContent>

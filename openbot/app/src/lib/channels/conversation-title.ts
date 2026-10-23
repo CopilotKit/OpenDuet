@@ -1,21 +1,68 @@
+import type { Message } from "@ag-ui/core";
+import { queryOptions } from "@tanstack/react-query";
+import { readThreadMessages } from "@/lib/copilot/thread-messages";
+import { readFirstDay } from "./first-day";
+import { readFiring } from "./routine-firing";
+
 /**
  * What a conversation is called wherever a person sees it: the menu's row and the title pill of the
- * conversation's own page. One rule, so the two never disagree.
+ * conversation's own page.
  *
- * Its summary first, then what was last said in it, as plain text either way: the Bot writes
- * markdown, and `**What I think you do:**` is not a title. Never the channel's `name`, which is the
- * Bot's name and so is the same for every conversation with it.
+ * Its summary first, as plain text: the Bot writes markdown, and `**What I think you do:**` is not a
+ * title. Without one, what the person first asked in it, which is what the conversation is about
+ * and does not change as it goes on; the menu, which has no first message to hand, falls back to
+ * what was last said. Never the channel's `name`, which is the Bot's name and so is the same for
+ * every conversation with it.
  */
 export function conversationTitle(
   conversation:
-    | { summary?: string | null; lastMessage?: string | null }
+    | {
+        summary?: string | null;
+        firstMessage?: string | null;
+        lastMessage?: string | null;
+      }
     | undefined,
 ): string {
   return (
     plainText(conversation?.summary ?? "") ||
+    plainText(conversation?.firstMessage ?? "") ||
     plainText(conversation?.lastMessage ?? "") ||
     NEW_CONVERSATION
   );
+}
+
+/** What the person first said in a thread: their own words, not a routine firing or Chat's greeting. */
+export function firstPersonMessage(
+  messages: readonly Message[],
+): string | null {
+  for (const message of messages) {
+    if (message.role !== "user" || typeof message.content !== "string")
+      continue;
+    if (readFiring(message.content) !== null) continue;
+    if (readFirstDay(message.content) !== null) continue;
+    if (message.content.trim()) return message.content;
+  }
+  return null;
+}
+
+/**
+ * The person's first message in a conversation's thread, for its title. `said` is whether anything
+ * has been said there yet, so a conversation that was empty is read again once it is not.
+ */
+export function firstMessageQueryOptions(
+  threadId: string,
+  agentId: string,
+  said: boolean,
+) {
+  return queryOptions({
+    queryKey: ["channels", "first-message", threadId, agentId, said] as const,
+    queryFn: async () =>
+      firstPersonMessage(
+        (await readThreadMessages(threadId, agentId)).messages,
+      ),
+    // What was asked first never changes.
+    staleTime: Number.POSITIVE_INFINITY,
+  });
 }
 
 /** What a conversation is called before anything has been said in it. */

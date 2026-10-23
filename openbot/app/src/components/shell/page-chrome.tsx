@@ -36,6 +36,8 @@ export type PageChrome = {
    * conversation, whose Bot reports its steps as Chat's does.
    */
   status?: boolean;
+  /** What the server is doing in this page's conversation, for that line when the page is not. */
+  serverWork?: string | null;
   /** What the "…" disc on the right opens, such as the conversation's Bot and its computer. */
   actions?: ReactNode;
 };
@@ -79,12 +81,14 @@ export function usePageChrome({
   backTo,
   column = "wide",
   status = false,
+  serverWork = null,
   actions,
 }: {
   title: string | null;
   backTo?: LinkProps;
   column?: PageChrome["column"];
   status?: boolean;
+  serverWork?: string | null;
   /** Keep it stable across renders (`useMemo`): a new element each render claims the chrome again. */
   actions?: ReactNode;
 }) {
@@ -100,10 +104,11 @@ export function usePageChrome({
       title,
       column,
       status,
+      serverWork,
       ...(backTo ? { backTo } : {}),
       ...(actions ? { actions } : {}),
     });
-  }, [claim, owner, title, column, status, actions, backKey]);
+  }, [claim, owner, title, column, status, serverWork, actions, backKey]);
   useEffect(() => {
     if (!claim) return;
     return () =>

@@ -11,7 +11,12 @@ import { MicOrb } from "@/components/duet/mic-orb";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { appConfig } from "@/lib/generated/application-config";
 import { cn } from "@/lib/utils";
-import { useChatOrb, useChatStep } from "./chat-presence";
+import {
+  useChatOrb,
+  useChatStep,
+  useChatWorking,
+  useUnownedServerWork,
+} from "./chat-presence";
 import { usePageChromeState } from "./page-chrome";
 
 const DISC =
@@ -145,7 +150,11 @@ export function PageHeader() {
       </Disc>
       <div className="flex min-w-0 flex-1 justify-center">
         {chrome?.title ? (
-          <TitlePill status={chrome.status === true} title={chrome.title} />
+          <TitlePill
+            serverWork={chrome.serverWork ?? null}
+            status={chrome.status === true}
+            title={chrome.title}
+          />
         ) : null}
       </div>
       {/* The "…" disc, or the space it would take, so the pill stays centred. */}
@@ -177,8 +186,18 @@ export function useBack(): () => void {
  * The page's name in a glass pill, as Duet's task page has it (card-01), and under it, while the
  * Bot works, what it is doing: the same words as Chat's pill under the orb.
  */
-function TitlePill({ title, status }: { title: string; status: boolean }) {
-  const step = useChatStep();
+function TitlePill({
+  title,
+  status,
+  serverWork,
+}: {
+  title: string;
+  status: boolean;
+  serverWork: string | null;
+}) {
+  const own = useChatStep();
+  const server = useUnownedServerWork(serverWork, useChatWorking());
+  const step = own ?? server;
   const working = status && step !== null;
   return (
     <div className="duet-glass flex h-[46px] min-w-0 max-w-full flex-col items-center justify-center rounded-full px-4 shadow-duet-glass">

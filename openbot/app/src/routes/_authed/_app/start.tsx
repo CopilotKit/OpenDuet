@@ -19,6 +19,7 @@ import {
   routeMessage,
 } from "@/lib/channels/route";
 import { useStartChannel } from "@/lib/channels/start";
+import { usePageChrome } from "@/components/shell/page-chrome";
 import { appConfig } from "@/lib/generated/application-config";
 
 /**
@@ -44,17 +45,13 @@ function RouteComponent() {
     agents,
     agents?.find((agent) => agent.visibility === "public"),
   );
+  // A page over the app, named in the shell's title pill (parity-spec 2.9).
+  usePageChrome({ title: "New conversation", column: "phone" });
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center-safe w-full overflow-y-auto p-4">
-      <div className="flex flex-col items-center">
-        <h2 className="text-sm uppercase text-muted-foreground font-medium tracking-tight text-center">
-          {appConfig.brand.productName}
-        </h2>
-        <h1 className="text-2xl font-bold tracking-tight mt-1.5 text-center">
-          Start a conversation
-        </h1>
-      </div>
+    // Starts under the page chrome's floating header; the pill already names the page.
+    <div className="flex w-full flex-1 flex-col items-center justify-center-safe overflow-y-auto px-4 pt-[88px] pb-4">
+      <h1 className="sr-only">Start a conversation</h1>
       <div className="mt-8 w-full flex flex-col items-center">
         <Composer
           agents={toAgentOptions(agents)}
@@ -168,8 +165,8 @@ function RouteComponent() {
                * heading's baseline, where the section's other decisions are.
                */}
               <div className="flex items-center gap-2">
-                <CarouselPrevious className="static translate-x-0 translate-y-0" />
-                <CarouselNext className="static translate-x-0 translate-y-0" />
+                <CarouselPrevious className="static size-11 translate-x-0 translate-y-0" />
+                <CarouselNext className="static size-11 translate-x-0 translate-y-0" />
               </div>
             </div>
             {/* `-ml-4`/`pl-4` is the primitive's own gap convention; `basis-auto` keeps each
