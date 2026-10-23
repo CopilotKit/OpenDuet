@@ -4,6 +4,7 @@ import {
   queryOptions,
 } from "@tanstack/react-query";
 import { client } from "@/lib/client";
+import { taskKeys } from "@/lib/tasks/queries";
 
 export type ProactiveSetting = {
   id: string;
@@ -98,27 +99,47 @@ export const removeProactiveSetting = (id: string) =>
     method: "DELETE",
     fallback: "Could not remove background research",
   });
-export const resolveSuggestion = (id: string, action: "start" | "dismiss") =>
+/**
+ * Start a suggestion, which opens it as a task in a conversation of its own, or hide it. A Start
+ * pressed on a check-in's card says so with `from`, so the task records where it began.
+ */
+export const resolveSuggestion = (
+  id: string,
+  action: "start" | "dismiss",
+  from?: "check_in",
+) =>
   client(`/api/proactive/suggestions/${encodeURIComponent(id)}/${action}`, {
     method: "POST",
+    ...(from ? { body: { from } } : {}),
     fallback:
       action === "start"
         ? "Could not start this suggestion"
         : "Could not dismiss this suggestion",
   });
 
-/** A setting's research produces suggestions, so a change to either refreshes both. */
+/**
+ * A setting's research produces suggestions, so a change to either refreshes both. Starting one
+ * opens a task, so the person's tasks are read again too.
+ */
 const settleProactive = (queryClient: QueryClient) => () =>
   Promise.all([
     queryClient.invalidateQueries({ queryKey: proactiveKeys.settings }),
     queryClient.invalidateQueries({ queryKey: proactiveKeys.suggestions }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.all }),
   ]);
 
 /** Start a suggested next step as a task, or dismiss it. */
 export const resolveSuggestionMutationOptions = (queryClient: QueryClient) =>
   mutationOptions({
-    mutationFn: ({ id, action }: { id: string; action: "start" | "dismiss" }) =>
-      resolveSuggestion(id, action),
+    mutationFn: ({
+      id,
+      action,
+      from,
+    }: {
+      id: string;
+      action: "start" | "dismiss";
+      from?: "check_in";
+    }) => resolveSuggestion(id, action, from),
     onSuccess: settleProactive(queryClient),
   });
 

@@ -111,6 +111,11 @@ const OWN_TOOLS: Record<string, { running: string; done: string }> = {
     running: "Adding a task",
     done: "Added a task",
   },
+  // server/src/openduet/tasks.ts. Drawn as the started task's card once done.
+  start_task: {
+    running: "Starting a task",
+    done: "Started a task",
+  },
 };
 
 /** One of this deployment's own tools in words, or null for any other name. */

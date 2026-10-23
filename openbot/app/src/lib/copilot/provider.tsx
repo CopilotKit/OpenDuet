@@ -15,6 +15,7 @@ import { HandoffTool } from "./handoff-tool";
 import { MorningBriefTool } from "./morning-brief-tool";
 import { OfferTaskTool } from "./offer-task-tool";
 import { PageCardTool } from "./page-card-tool";
+import { TaskCardTool } from "./task-card-tool";
 import { ReplyChipsTool } from "./reply-chips-tool";
 import { SandboxedTools } from "./sandboxed-tools";
 import { SkillTools } from "./skill-tools";
@@ -77,6 +78,8 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
         <PageCardTool />
         {/* A task a check-in offers, drawn as the card with Start and Hide. See offer-task-tool.tsx. */}
         <OfferTaskTool />
+        {/* A task started from Chat, drawn as a card that opens it. See task-card-tool.tsx. */}
+        <TaskCardTool />
         <EscalationTool />
         {/* Gallery tools are registered once; their handlers re-read the active Bot to avoid shadowing renderers. */}
         <GalleryTools />

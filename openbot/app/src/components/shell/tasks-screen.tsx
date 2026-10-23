@@ -1,8 +1,10 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Fragment, type ReactNode, useRef, useState } from "react";
 import { ApprovalCard, PillButton } from "@/components/approvals/approval-card";
 import { DuetIcon } from "@/components/duet/icons";
 import { DuetCard, Rule, SectionLabel, Tile } from "@/components/duet/kit";
+import { TaskRow } from "@/components/duet/task-card";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
 import { clockTime } from "@/lib/approval-view";
@@ -29,6 +31,12 @@ import {
   resolveSuggestionMutationOptions,
   turnOnResearchMutationOptions,
 } from "@/lib/proactive";
+import {
+  liveStatus,
+  type TaskRecord,
+  taskListQueryOptions,
+} from "@/lib/tasks/queries";
+import { useConversationBusy } from "@/lib/tasks/use-task";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 import {
@@ -54,9 +62,9 @@ const SWIPE_TO_START = 96;
 
 /**
  * The Tasks tab: the person's to-do list, grouped by what each thing needs. Top to bottom, what
- * waits on the person, what their Bots suggest, what the product's own Bot is working on, what it
- * has lined up, and what it has done. A section with nothing in it is left out, except Suggested,
- * which is also where background research is turned on.
+ * waits on the person, their tasks, what their Bots suggest, what the product's own Bot is working
+ * on, what it has lined up, and what it has done. A section with nothing in it is left out, except
+ * Suggested, which is also where background research is turned on.
  */
 export function TasksScreen() {
   const agents = useQuery(agentListQueryOptions());
@@ -77,6 +85,7 @@ export function TasksScreen() {
       )}
       <div className="flex flex-col gap-5">
         <NeedsYou agents={agents.data} />
+        <YourTasks />
         <Suggested agents={agents.data} bot={bot} />
         {bot ? <BotWork bot={bot} /> : null}
         {bot ? <Done bot={bot} /> : null}
@@ -151,6 +160,73 @@ function NeedsYou({ agents }: { agents: AgentProfile[] | undefined }) {
       </ul>
     </section>
   );
+}
+
+/**
+ * The person's tasks that are not done yet, newest first: work started from Chat or from a
+ * suggestion, each running in a conversation of its own. A row says where the task stands and opens
+ * it. Marked done, a task moves to Done at the foot.
+ *
+ * Kept to a list for now. A later pass groups the whole tab by where things stand.
+ */
+function YourTasks() {
+  const tasks = useQuery(taskListQueryOptions());
+  if (tasks.isPending) return null;
+  if (tasks.error)
+    return (
+      <p className="type-sub px-1 text-duet-red" role="alert">
+        Couldn't load your tasks. Reload the page.
+      </p>
+    );
+  const open = tasks.data.filter((task) => task.resolvedAt === null);
+  if (open.length === 0) return null;
+  return (
+    <section aria-label="Your tasks">
+      <DuetCard>
+        <div className="flex h-[54px] items-center gap-2 px-4">
+          <h2 className="type-row font-semibold">Your tasks</h2>
+        </div>
+        <ul>
+          {open.map((task, index) => (
+            <Fragment key={task.id}>
+              {index > 0 ? <Rule inset /> : null}
+              <li>
+                <TaskLine task={task} />
+              </li>
+            </Fragment>
+          ))}
+        </ul>
+      </DuetCard>
+    </section>
+  );
+}
+
+/** One task: a row that opens it, its pill kept live with its conversation's working dot. */
+function TaskLine({ task }: { task: TaskRecord }) {
+  const busy = useConversationBusy(task.channelId);
+  return (
+    <Link
+      className="block rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
+      params={{ taskId: task.id }}
+      to="/tasks/$taskId"
+    >
+      <TaskRow status={liveStatus(task.status, busy)} title={task.title} />
+    </Link>
+  );
+}
+
+/** A task the person marked done, as a row of Done. */
+function resolvedTaskRow(task: TaskRecord): ActivityRow {
+  return {
+    id: `task:${task.id}`,
+    icon: "check",
+    tone: "green",
+    title: task.title,
+    detail: "Task · Done",
+    at: task.resolvedAt ?? task.updatedAt,
+    channelId: null,
+    taskId: task.id,
+  };
 }
 
 /** A question a Bot asked mid-run. The run resumes with the answer. */
@@ -598,20 +674,27 @@ function BotWork({ bot }: { bot: AgentProfile }) {
   );
 }
 
+/** How many finished things Done shows, as Activity's "Handled for you" did. */
+const DONE_LIMIT = 25;
+
 /**
  * What the product's own Bot finished, at the foot of the list: its routines, follow-ups and
- * delegated work, and the actions the person allowed or refused, newest first. The rows Activity's
- * "Handled for you" had, read-only. Left out until there is something in it; a failure to load is
- * said once, by Working on.
+ * delegated work, the actions the person allowed or refused, and the tasks they marked done, newest
+ * first. The rows Activity's "Handled for you" had, read-only, and a done task's row opens it. Left
+ * out until there is something in it; a failure to load is said once, by Working on.
  */
 function Done({ bot }: { bot: AgentProfile }) {
   const activity = useQuery(botActivityQueryOptions(bot.id));
   const inbox = useQuery(approvalInboxOptions());
+  const tasks = useQuery(taskListQueryOptions());
   if (activity.isPending || !activity.data) return null;
-  const rows = handledRows(
-    activity.data.completed,
-    inbox.data?.requests ?? [],
-    bot.id,
-  );
+  const rows = [
+    ...handledRows(activity.data.completed, inbox.data?.requests ?? [], bot.id),
+    ...(tasks.data ?? [])
+      .filter((task) => task.resolvedAt !== null)
+      .map(resolvedTaskRow),
+  ]
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, DONE_LIMIT);
   return rows.length ? <ActivityCard rows={rows} title="Done" /> : null;
 }

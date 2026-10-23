@@ -24,7 +24,8 @@ const TABS: {
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
-  if (path === "/tasks") return "tasks";
+  // A task opens over the Tasks list, so the list's tab stays current under it.
+  if (path === "/tasks" || /^\/tasks\/[^/]+$/.test(path)) return "tasks";
   if (path === "/pages" || /^\/pages\/[^/]+$/.test(path)) return "pages";
   return null;
 }

@@ -566,17 +566,19 @@ export function toVisibleChatItems(
 
 /**
  * The server's reply chips (server/src/openduet/replies.ts), drawn by `reply-chips-tool.tsx`, the
- * pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`, and the tasks a
- * check-in offers (server/src/openduet/offers.ts), drawn by `offer-task-tool.tsx`. Named here as
+ * pages it makes (server/src/openduet/pages.ts), drawn by `page-card-tool.tsx`, the tasks a
+ * check-in offers (server/src/openduet/offers.ts), drawn by `offer-task-tool.tsx`, and the tasks it
+ * starts (server/src/openduet/tasks.ts), drawn by `task-card-tool.tsx`. Named here as
  * `GENERATE_SANDBOXED_UI` is: the projection only needs the strings.
  */
 const SUGGEST_REPLIES = "suggest_replies";
 const MAKE_PAGE = "make_page";
 const OFFER_TASK = "offer_task";
+const START_TASK = "start_task";
 
 /**
- * Page cards, offered tasks and reply chips moved to the end of their turn, under the Bot's last
- * words in it: the cards first, in the order they were made, then the chips.
+ * Page cards, offered and started tasks, and reply chips moved to the end of their turn, under the
+ * Bot's last words in it: the cards first, in the order they were made, then the chips.
  *
  * WHEREVER IN THE TURN THE BOT CALLED FOR THEM. A model that asks its question and then calls the
  * tool puts the chips under the question by itself, but one that calls first and asks after is just
@@ -595,7 +597,8 @@ export function repliesLast(
     if (
       item.kind === "tool" &&
       (item.toolCall.function.name === MAKE_PAGE ||
-        item.toolCall.function.name === OFFER_TASK)
+        item.toolCall.function.name === OFFER_TASK ||
+        item.toolCall.function.name === START_TASK)
     ) {
       pages.push(item);
       continue;

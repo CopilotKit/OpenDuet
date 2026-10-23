@@ -60,6 +60,7 @@ import { Route as AuthedAppConnectionsKeyRouteImport } from './routes/_authed/_a
 import { Route as AuthedAppGroupChannelIdRouteImport } from './routes/_authed/_app/group/$channelId'
 import { Route as AuthedAppGroupNewRouteImport } from './routes/_authed/_app/group/new'
 import { Route as AuthedAppPagesPageIdRouteImport } from './routes/_authed/_app/pages.$pageId'
+import { Route as AuthedAppTasksTaskIdRouteImport } from './routes/_authed/_app/tasks.$taskId'
 import { Route as AuthedAdminComponentsIndexRouteImport } from './routes/_authed/admin/components/index'
 import { Route as AuthedAdminComponentsNameRouteImport } from './routes/_authed/admin/components/$name'
 import { Route as AuthedAdminPluginsIndexRouteImport } from './routes/_authed/admin/plugins/index'
@@ -343,6 +344,11 @@ const AuthedAppPagesPageIdRoute = AuthedAppPagesPageIdRouteImport.update({
   path: '/$pageId',
   getParentRoute: () => AuthedAppPagesRoute,
 } as any)
+const AuthedAppTasksTaskIdRoute = AuthedAppTasksTaskIdRouteImport.update({
+  id: '/$taskId',
+  path: '/$taskId',
+  getParentRoute: () => AuthedAppTasksRoute,
+} as any)
 const AuthedAdminComponentsIndexRoute =
   AuthedAdminComponentsIndexRouteImport.update({
     id: '/components/',
@@ -486,7 +492,7 @@ export interface FileRoutesByFullPath {
   '/routines': typeof AuthedAppRoutinesRoute
   '/skills': typeof AuthedAppSkillsRoute
   '/start': typeof AuthedAppStartRoute
-  '/tasks': typeof AuthedAppTasksRoute
+  '/tasks': typeof AuthedAppTasksRouteWithChildren
   '/team-bots': typeof AuthedAppTeamBotsRoute
   '/admin/approvals': typeof AuthedAdminApprovalsRoute
   '/admin/audit': typeof AuthedAdminAuditRoute
@@ -514,6 +520,7 @@ export interface FileRoutesByFullPath {
   '/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/group/new': typeof AuthedAppGroupNewRoute
   '/pages/$pageId': typeof AuthedAppPagesPageIdRoute
+  '/tasks/$taskId': typeof AuthedAppTasksTaskIdRoute
   '/admin/components/$name': typeof AuthedAdminComponentsNameRoute
   '/admin/plugins/$key': typeof AuthedAdminPluginsKeyRoute
   '/admin/plugins/arcade': typeof AuthedAdminPluginsArcadeRoute
@@ -555,7 +562,7 @@ export interface FileRoutesByTo {
   '/routines': typeof AuthedAppRoutinesRoute
   '/skills': typeof AuthedAppSkillsRoute
   '/start': typeof AuthedAppStartRoute
-  '/tasks': typeof AuthedAppTasksRoute
+  '/tasks': typeof AuthedAppTasksRouteWithChildren
   '/team-bots': typeof AuthedAppTeamBotsRoute
   '/admin/approvals': typeof AuthedAdminApprovalsRoute
   '/admin/audit': typeof AuthedAdminAuditRoute
@@ -583,6 +590,7 @@ export interface FileRoutesByTo {
   '/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/group/new': typeof AuthedAppGroupNewRoute
   '/pages/$pageId': typeof AuthedAppPagesPageIdRoute
+  '/tasks/$taskId': typeof AuthedAppTasksTaskIdRoute
   '/admin/components/$name': typeof AuthedAdminComponentsNameRoute
   '/admin/plugins/$key': typeof AuthedAdminPluginsKeyRoute
   '/admin/plugins/arcade': typeof AuthedAdminPluginsArcadeRoute
@@ -629,7 +637,7 @@ export interface FileRoutesById {
   '/_authed/_app/routines': typeof AuthedAppRoutinesRoute
   '/_authed/_app/skills': typeof AuthedAppSkillsRoute
   '/_authed/_app/start': typeof AuthedAppStartRoute
-  '/_authed/_app/tasks': typeof AuthedAppTasksRoute
+  '/_authed/_app/tasks': typeof AuthedAppTasksRouteWithChildren
   '/_authed/_app/team-bots': typeof AuthedAppTeamBotsRoute
   '/_authed/admin/approvals': typeof AuthedAdminApprovalsRoute
   '/_authed/admin/audit': typeof AuthedAdminAuditRoute
@@ -658,6 +666,7 @@ export interface FileRoutesById {
   '/_authed/_app/group/$channelId': typeof AuthedAppGroupChannelIdRoute
   '/_authed/_app/group/new': typeof AuthedAppGroupNewRoute
   '/_authed/_app/pages/$pageId': typeof AuthedAppPagesPageIdRoute
+  '/_authed/_app/tasks/$taskId': typeof AuthedAppTasksTaskIdRoute
   '/_authed/admin/components/$name': typeof AuthedAdminComponentsNameRoute
   '/_authed/admin/plugins/$key': typeof AuthedAdminPluginsKeyRoute
   '/_authed/admin/plugins/arcade': typeof AuthedAdminPluginsArcadeRoute
@@ -732,6 +741,7 @@ export interface FileRouteTypes {
     | '/group/$channelId'
     | '/group/new'
     | '/pages/$pageId'
+    | '/tasks/$taskId'
     | '/admin/components/$name'
     | '/admin/plugins/$key'
     | '/admin/plugins/arcade'
@@ -801,6 +811,7 @@ export interface FileRouteTypes {
     | '/group/$channelId'
     | '/group/new'
     | '/pages/$pageId'
+    | '/tasks/$taskId'
     | '/admin/components/$name'
     | '/admin/plugins/$key'
     | '/admin/plugins/arcade'
@@ -875,6 +886,7 @@ export interface FileRouteTypes {
     | '/_authed/_app/group/$channelId'
     | '/_authed/_app/group/new'
     | '/_authed/_app/pages/$pageId'
+    | '/_authed/_app/tasks/$taskId'
     | '/_authed/admin/components/$name'
     | '/_authed/admin/plugins/$key'
     | '/_authed/admin/plugins/arcade'
@@ -1266,6 +1278,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAppPagesPageIdRouteImport
       parentRoute: typeof AuthedAppPagesRoute
     }
+    '/_authed/_app/tasks/$taskId': {
+      id: '/_authed/_app/tasks/$taskId'
+      path: '/$taskId'
+      fullPath: '/tasks/$taskId'
+      preLoaderRoute: typeof AuthedAppTasksTaskIdRouteImport
+      parentRoute: typeof AuthedAppTasksRoute
+    }
     '/_authed/admin/components/': {
       id: '/_authed/admin/components/'
       path: '/components'
@@ -1525,6 +1544,18 @@ const AuthedAppPagesRouteWithChildren = AuthedAppPagesRoute._addFileChildren(
   AuthedAppPagesRouteChildren,
 )
 
+interface AuthedAppTasksRouteChildren {
+  AuthedAppTasksTaskIdRoute: typeof AuthedAppTasksTaskIdRoute
+}
+
+const AuthedAppTasksRouteChildren: AuthedAppTasksRouteChildren = {
+  AuthedAppTasksTaskIdRoute: AuthedAppTasksTaskIdRoute,
+}
+
+const AuthedAppTasksRouteWithChildren = AuthedAppTasksRoute._addFileChildren(
+  AuthedAppTasksRouteChildren,
+)
+
 interface AuthedAppRouteChildren {
   AuthedAppActivityRoute: typeof AuthedAppActivityRoute
   AuthedAppApprovalsRoute: typeof AuthedAppApprovalsRoute
@@ -1538,7 +1569,7 @@ interface AuthedAppRouteChildren {
   AuthedAppRoutinesRoute: typeof AuthedAppRoutinesRoute
   AuthedAppSkillsRoute: typeof AuthedAppSkillsRoute
   AuthedAppStartRoute: typeof AuthedAppStartRoute
-  AuthedAppTasksRoute: typeof AuthedAppTasksRoute
+  AuthedAppTasksRoute: typeof AuthedAppTasksRouteWithChildren
   AuthedAppTeamBotsRoute: typeof AuthedAppTeamBotsRoute
   AuthedAppIndexRoute: typeof AuthedAppIndexRoute
   AuthedAppChannelChannelIdRoute: typeof AuthedAppChannelChannelIdRoute
@@ -1573,7 +1604,7 @@ const AuthedAppRouteChildren: AuthedAppRouteChildren = {
   AuthedAppRoutinesRoute: AuthedAppRoutinesRoute,
   AuthedAppSkillsRoute: AuthedAppSkillsRoute,
   AuthedAppStartRoute: AuthedAppStartRoute,
-  AuthedAppTasksRoute: AuthedAppTasksRoute,
+  AuthedAppTasksRoute: AuthedAppTasksRouteWithChildren,
   AuthedAppTeamBotsRoute: AuthedAppTeamBotsRoute,
   AuthedAppIndexRoute: AuthedAppIndexRoute,
   AuthedAppChannelChannelIdRoute: AuthedAppChannelChannelIdRoute,

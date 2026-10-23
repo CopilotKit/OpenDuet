@@ -46,6 +46,7 @@ let suggestions: unknown[] = [];
 let settings: unknown[] = [];
 let activity: Record<string, unknown> = {};
 let channels: unknown[] = [];
+let tasks: unknown[] = [];
 const sent: { method: string; path: string; body: unknown }[] = [];
 function serving() {
   sent.length = 0;
@@ -66,6 +67,7 @@ function serving() {
       return Response.json({ activity });
     if (url === "/api/channels")
       return Response.json({ channels, nextCursor: null });
+    if (url === "/api/openduet/tasks") return Response.json({ tasks });
     return Response.json({});
   }) as unknown as typeof fetch;
 }
@@ -93,6 +95,7 @@ function quiet() {
   settings = [research()];
   activity = { inProgress: [], scheduled: [], completed: [] };
   channels = [];
+  tasks = [];
 }
 
 const research = (overrides: Record<string, unknown> = {}) => ({
@@ -182,6 +185,8 @@ test("with nothing waiting or under way, only Suggested is shown, and it says so
   const view = draw();
   expect(await view.findByText("Nothing to suggest right now.")).toBeTruthy();
   expect(view.getByRole("region", { name: "Suggested" })).toBeTruthy();
+  expect(view.queryByRole("region", { name: "Your tasks" })).toBeNull();
+  expect(view.queryByRole("alert")).toBeNull();
   expect(view.queryByRole("region", { name: "Needs you" })).toBeNull();
   expect(view.queryByRole("region", { name: "Working on" })).toBeNull();
   expect(view.queryByRole("region", { name: "Coming up" })).toBeNull();
@@ -614,4 +619,86 @@ test("with nothing finished, Done is left out", async () => {
   const view = draw();
   await view.findByRole("region", { name: "Working on" });
   expect(view.queryByRole("region", { name: "Done" })).toBeNull();
+});
+
+const task = (overrides: Record<string, unknown>) => ({
+  id: "task",
+  botId: "openduet",
+  channelId: "task-channel",
+  title: "Draft a reply to Rosa about Oat Satin",
+  why: null,
+  origin: "asked",
+  suggestionId: null,
+  sourceApp: null,
+  sourceLink: null,
+  status: "working",
+  resolvedAt: null,
+  createdAt: "2026-10-22T10:00:00Z",
+  updatedAt: "2026-10-22T10:00:00Z",
+  ...overrides,
+});
+
+test("Your tasks lists the open ones with where each stands and opens each; a done one moves to Done", async () => {
+  quiet();
+  tasks = [
+    task({ id: "rosa", status: "working" }),
+    task({
+      id: "hearth",
+      channelId: "hearth-channel",
+      title: "Prepare notes for the Hearth & Co visit",
+      status: "needs_input",
+    }),
+    task({
+      id: "sam",
+      channelId: "sam-channel",
+      title: "Answer Sam about Friday off",
+      status: "ready_for_review",
+    }),
+    task({
+      id: "invoice",
+      channelId: "invoice-channel",
+      title: "Pay the kiln repair invoice",
+      status: "resolved",
+      resolvedAt: "2026-10-22T11:00:00Z",
+    }),
+  ];
+  serving();
+  const view = draw();
+  const yours = await view.findByRole("region", { name: "Your tasks" });
+  const rows = within(yours).getAllByRole("link");
+  expect(rows.map((row) => row.getAttribute("href"))).toEqual([
+    "/tasks/rosa",
+    "/tasks/hearth",
+    "/tasks/sam",
+  ]);
+  expect(
+    rows.map((row) => row.querySelector("[data-status]")?.textContent),
+  ).toEqual(["Working", "Needs input", "Ready for review"]);
+  expect(yours.textContent).not.toContain("Pay the kiln repair invoice");
+  // Right under what waits on the person, above the suggestions.
+  const regions = view
+    .getAllByRole("region")
+    .map((region) => region.getAttribute("aria-label"));
+  expect(regions.indexOf("Your tasks")).toBeLessThan(
+    regions.indexOf("Suggested"),
+  );
+
+  const done = await view.findByRole("region", { name: "Done" });
+  const doneTask = within(done).getByRole("link", {
+    name: /Pay the kiln repair invoice/,
+  });
+  expect(doneTask.getAttribute("href")).toBe("/tasks/invoice");
+  expect(doneTask.textContent).toContain("Task · Done");
+});
+
+test("a task whose conversation is running a turn reads Working, even before the server says so", async () => {
+  quiet();
+  tasks = [task({ id: "sam", status: "ready_for_review" })];
+  channels = [conversation({ id: "task-channel", taskId: "sam", busy: true })];
+  serving();
+  const view = draw();
+  const yours = await view.findByRole("region", { name: "Your tasks" });
+  await waitFor(() =>
+    expect(yours.querySelector("[data-status]")?.textContent).toBe("Working"),
+  );
 });

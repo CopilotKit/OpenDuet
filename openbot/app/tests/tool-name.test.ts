@@ -169,6 +169,11 @@ describe("this deployment's own tools", () => {
     expect(readToolName("offer_task", false).label).toBe("Added a task");
   });
 
+  test("starting a task reads as words while the card is on its way", () => {
+    expect(readToolName("start_task", true).label).toBe("Starting a task");
+    expect(readToolName("start_task", false).label).toBe("Started a task");
+  });
+
   test("any other bare name is left exactly as it is", () => {
     expect(readToolName("run_command", true)).toEqual({ label: "run_command" });
   });

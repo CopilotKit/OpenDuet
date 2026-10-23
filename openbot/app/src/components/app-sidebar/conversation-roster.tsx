@@ -58,6 +58,20 @@ export function matchingChannels(
 }
 
 /**
+ * The roster without the conversations tasks work in. Each task has one of its own with the Bot, and
+ * they live in Tasks; listed here, a handful of tasks would bury every conversation the person had.
+ * Returns the input unchanged when it holds none, for the identity reason `matchingChannels` gives.
+ */
+export function withoutTasks(
+  channels: ChannelSummary[] | undefined,
+): ChannelSummary[] {
+  if (!channels) return [];
+  return channels.some((channel) => channel.taskId)
+    ? channels.filter((channel) => !channel.taskId)
+    : channels;
+}
+
+/**
  * Pinned channels first, everything else after, newest activity first within each group.
  *
  * The mirror of a server rule, not the rule itself: the roster query orders pinned-first and its
@@ -152,8 +166,9 @@ function ChannelRow({
 
 /**
  * Every conversation this person has, searchable, newest first, paged in as they scroll. It was
- * the app sidebar's body; it now lives in the shell's menu, so the conversations other than the
- * one on the Chat tab stay a tap away.
+ * the app sidebar's body; it now lives in the shell's menu, under Earlier conversations, so the
+ * conversations other than the one on the Chat tab stay a tap away. Tasks' own conversations are
+ * left out; they open from Tasks.
  *
  * `scrollRoot` is the element that scrolls the list, which the pager watches to fetch older pages.
  */
@@ -164,16 +179,16 @@ export function ConversationRoster({
 }) {
   const emphasis = useMessageListEmphasis();
   const channels = useInfiniteQuery(channelListQueryOptions());
+  const conversations = withoutTasks(channels.data);
   const [search, setSearch] = useState("");
   const searching = search.trim().length > 0;
-  const visibleChannels = pinnedFirst(matchingChannels(channels.data, search));
+  const visibleChannels = pinnedFirst(matchingChannels(conversations, search));
   /*
    * FILTERING DOES NOT ANIMATE. Rows exit and relayout on every keystroke otherwise, which is a
    * list thrashing under somebody who is still typing. Order animation is for a channel that was
    * just spoken in, which is occasional; this is not.
    */
-  const animateOrder =
-    !searching && (channels.data?.length ?? 0) <= MAX_ANIMATED_ROWS;
+  const animateOrder = !searching && conversations.length <= MAX_ANIMATED_ROWS;
 
   return (
     <div className="flex flex-col gap-px">
@@ -215,7 +230,10 @@ export function ConversationRoster({
           </Empty>
         </div>
       ) : null}
-      {!searching && channels.data?.length === 0 ? (
+      {!searching &&
+      channels.data &&
+      conversations.length === 0 &&
+      !channels.hasNextPage ? (
         <div className="py-4">
           <Empty className="border border-dashed min-h-40">
             <EmptyHeader>

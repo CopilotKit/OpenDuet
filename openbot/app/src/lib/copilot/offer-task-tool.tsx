@@ -95,7 +95,13 @@ export function OfferedTaskCard({ offered }: { offered: OfferedTask }) {
         chatBot ? `${chatBot.name} could take this on` : "Ready to start"
       }
       onAnswer={(action, comeBack) =>
-        act.mutate({ id: offered.id, action }, { onError: () => comeBack?.() })
+        act.mutate(
+          // Started here, the task records that it began at a check-in.
+          action === "start"
+            ? { id: offered.id, action, from: "check_in" }
+            : { id: offered.id, action },
+          { onError: () => comeBack?.() },
+        )
       }
       suggestion={suggestion}
     />
