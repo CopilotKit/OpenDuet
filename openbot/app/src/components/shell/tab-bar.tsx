@@ -6,22 +6,22 @@ import { needsInputCount } from "@/lib/tasks/groups";
 import { taskListQueryOptions } from "@/lib/tasks/queries";
 import { cn } from "@/lib/utils";
 
-export type ShellTab = "chat" | "tasks" | "pages";
+export type ShellTab = "chat" | "tasks" | "make";
 
 const TABS: {
   id: ShellTab;
-  to: "/" | "/tasks" | "/pages";
+  to: "/" | "/tasks" | "/make";
   icon: DuetIconName;
   label: string;
 }[] = [
   { id: "chat", to: "/", icon: "chat", label: "Chat" },
   { id: "tasks", to: "/tasks", icon: "tasks", label: "Tasks" },
-  { id: "pages", to: "/pages", icon: "page", label: "Pages" },
+  { id: "make", to: "/make", icon: "sparkle", label: "Make" },
 ];
 
 /**
- * Which tab a path belongs to, or null for a screen opened from the menu. A page open over the
- * Pages list (`/pages/<id>`) is still the Pages tab, and any other conversation with a Bot
+ * Which tab a path belongs to, or null for a screen opened from the menu. Something open over the
+ * Make grid (`/make/<id>`) is still the Make tab, and any other conversation with a Bot
  * (`/channel/<id>`) is drawn as Chat is. Starting one (`/channel/new`, where Bots are picked) keeps
  * its own page.
  */
@@ -31,12 +31,12 @@ export function tabForPath(pathname: string): ShellTab | null {
   if (/^\/channel\/[^/]+$/.test(path) && path !== "/channel/new") return "chat";
   // A task opens over the Tasks list, so the list's tab stays current under it.
   if (path === "/tasks" || /^\/tasks\/[^/]+$/.test(path)) return "tasks";
-  if (path === "/pages" || /^\/pages\/[^/]+$/.test(path)) return "pages";
+  if (path === "/make" || /^\/make\/[^/]+$/.test(path)) return "make";
   return null;
 }
 
 /**
- * The floating pill at the foot of the app: Chat, Tasks and Pages, the current one on a grey
+ * The floating pill at the foot of the app: Chat, Tasks and Make, the current one on a grey
  * capsule. Tasks carries the number of things waiting on the person, counted the way its Needs input
  * group lists them (`needsInputCount`), so the badge and the screen never disagree.
  */

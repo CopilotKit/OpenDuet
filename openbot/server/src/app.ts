@@ -111,6 +111,7 @@ import {
 import { REFUSAL_MARKER, vendorAnswer } from "./plugins/tools";
 import { createPageRoutes, type PageStore } from "./openduet/pages";
 import { createSetupRoutes, type SetupSources } from "./openduet/setup";
+import type { TaskReportReader } from "./openduet/task-report";
 import {
   createTaskRoutes,
   type TaskIntake,
@@ -455,6 +456,8 @@ export function createApp(
       setup?: SetupSources;
       tasks?: TaskStore;
       intake?: TaskIntake;
+      /** A task's report, read from its conversation. See openduet/task-report.ts. */
+      report?: TaskReportReader;
     };
   },
   /**
@@ -1697,6 +1700,7 @@ export function createApp(
         requireUser,
         coworker.proactive?.engine,
         coworker.openduet.intake,
+        coworker.openduet.report,
       ),
     );
   if (coworker?.memory)

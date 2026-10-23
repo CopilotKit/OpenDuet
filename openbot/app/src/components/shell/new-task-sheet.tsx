@@ -1,6 +1,6 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useMutation } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { PillButton } from "@/components/approvals/approval-card";
 import { DuetIcon } from "@/components/duet/icons";
 import type { AgentProfile } from "@/lib/agents/queries";
@@ -11,35 +11,59 @@ import {
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 
+/** Where the caret goes in a starter line: on its "…", selected, so typing replaces it. */
+export const STARTER_BLANK = "…";
+
 /**
  * The + on Tasks: a sheet on the frosted veil that asks what the Bot should do, with one field and
  * two answers. Start now opens it as a task straight away, in a conversation of its own, as asking
  * in Chat would. Save for Up next leaves it on Up next, marked as one the person asked for, to start
  * later. Either way the sheet closes and Tasks shows where it went.
+ *
+ * Make's + opens the same sheet with a starter line, such as "Make a deck about …", and the "…"
+ * selected, so the person only types what it is about. A starter left as it was is not an ask yet.
  */
 export function NewTaskSheet({
   bot,
   onClose,
   onAdded,
+  starter = "",
+  question: asked,
 }: {
   bot: AgentProfile;
   onClose: () => void;
   /** It was added: `active` once started, `up_next` once saved. */
-  onAdded: (where: "active" | "up_next") => void;
+  onAdded: (where: "active" | "up_next", task: { id: string } | null) => void;
+  /** The field's first words, with the caret on their "…". */
+  starter?: string;
+  /** The sheet's question, when it is not what the Bot should do. */
+  question?: string;
 }) {
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(starter);
   const field = useRef<HTMLTextAreaElement>(null);
   const start = useMutation(startTaskMutationOptions(queryClient));
   const save = useMutation(saveForUpNextMutationOptions(queryClient));
   const busy = start.isPending || save.isPending;
   const error = start.error ?? save.error;
-  const instruction = draft.trim();
+  const instruction = draft.trim() === starter.trim() ? "" : draft.trim();
   const ask = { botId: bot.id, instruction };
-  const question = `What should ${bot.name} do?`;
+  const question = asked ?? `What should ${bot.name} do?`;
+  /*
+   * The caret on the starter's blank: set before the field takes focus, and again as it does, since
+   * focusing a field can put its caret back at the start.
+   */
+  const placed = useRef(false);
+  const placeCaret = () => {
+    const element = field.current;
+    const blank = starter.lastIndexOf(STARTER_BLANK);
+    if (!element || blank < 0 || placed.current) return;
+    element.setSelectionRange(blank, blank + STARTER_BLANK.length);
+  };
+  useLayoutEffect(placeCaret);
   const startNow = () => {
     if (!instruction || busy) return;
     save.reset();
-    start.mutate(ask, { onSuccess: () => onAdded("active") });
+    start.mutate(ask, { onSuccess: (task) => onAdded("active", task) });
   };
   return (
     <DialogPrimitive.Root
@@ -84,6 +108,10 @@ export function NewTaskSheet({
                 disabled={busy}
                 maxLength={4000}
                 onChange={(event) => setDraft(event.target.value)}
+                onFocus={() => {
+                  placeCaret();
+                  placed.current = true;
+                }}
                 onKeyDown={(event) => {
                   // ⌘ or Ctrl with Enter starts it, as a keyboard sends from Chat's composer.
                   if (
@@ -108,7 +136,9 @@ export function NewTaskSheet({
                   disabled={busy || !instruction}
                   onClick={() => {
                     start.reset();
-                    save.mutate(ask, { onSuccess: () => onAdded("up_next") });
+                    save.mutate(ask, {
+                      onSuccess: () => onAdded("up_next", null),
+                    });
                   }}
                 >
                   Save for Up next

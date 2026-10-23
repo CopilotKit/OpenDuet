@@ -1,17 +1,15 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { PageSheet, useCloseSheet } from "@/components/duet/page-sheet";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 /**
- * One page, open over the Pages list. Also where a `/pages/<id>` link lands on its own. There is no
- * conversation here, so its rows are still.
+ * `/pages/<id>` became `/make/<id>` when Pages became Make. Cards drawn in Chat before then, and
+ * links sent from them, still point here, so they open the same page there.
  */
 export const Route = createFileRoute("/_authed/_app/pages/$pageId")({
-  component: PageRoute,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/make/$pageId",
+      params: { pageId: params.pageId },
+      replace: true,
+    });
+  },
 });
-
-function PageRoute() {
-  const { pageId } = Route.useParams();
-  const navigate = Route.useNavigate();
-  const close = useCloseSheet(() => void navigate({ to: "/pages" }));
-  return <PageSheet key={pageId} onClose={close} pageId={pageId} />;
-}

@@ -8,7 +8,13 @@ import {
 } from "@copilotkit/react-core/v2";
 import { observeApprovalAgent } from "@/lib/copilot/approval-context";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { HandoffResumeNotice } from "@/components/computer/handoff-resume-notice";
 import { attachmentModality } from "@/components/channels/chat-messages";
 import { toAgentOptions } from "@/components/channels/composer";
@@ -354,6 +360,9 @@ export function ChannelChat({
   inShell = false,
   topic,
   task,
+  lead,
+  folded = false,
+  onSubmitted,
 }: {
   channel: AgentChannel;
   runtimeAgentId: string;
@@ -375,6 +384,12 @@ export function ChannelChat({
     busy: boolean;
     send?: (input: { text: string; messageId: string }) => Promise<void>;
   };
+  /** Drawn above the conversation in place of the topic, such as a task's report. */
+  lead?: ReactNode;
+  /** Keep the conversation folded under the lead; see `ChatTranscript`. */
+  folded?: boolean;
+  /** The person sent something from the composer. */
+  onSubmitted?: () => void;
 }) {
   const taskBusy = task?.busy ?? false;
   // The core attaches the frontend tool registry; direct agent runs do not.
@@ -1580,8 +1595,9 @@ export function ChannelChat({
             taskRunning={agent.isRunning || runsInFlight > 0}
           />
           <ConversationView
+            folded={folded}
             inShell={inShell}
-            lead={topic ? <Topic>{topic}</Topic> : null}
+            lead={lead ?? (topic ? <Topic>{topic}</Topic> : null)}
             placeholder={task ? `Reply to ${botName}` : `Message ${botName}`}
             queuedNotice={
               following && followQuiet
@@ -1676,6 +1692,7 @@ export function ChannelChat({
               </>
             }
             onSubmit={async (draft) => {
+              onSubmitted?.();
               if (task?.send) {
                 const messageId = newId();
                 agent.addMessage({

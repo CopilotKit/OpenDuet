@@ -48,6 +48,7 @@ export const taskKeys = {
   all: ["openduet-tasks"] as const,
   list: ["openduet-tasks", "list"] as const,
   detail: (id: string) => ["openduet-tasks", "detail", id] as const,
+  report: (id: string) => ["openduet-tasks", "report", id] as const,
 };
 
 /** Something is moving: read again soon. Otherwise only now and then, for a change made elsewhere. */
@@ -114,3 +115,70 @@ export function failureLine(failure: string | null): string {
     ? `I couldn't finish this: ${failure}.`
     : "I couldn't finish this.";
 }
+
+/*
+ * A task's report, as `GET /api/openduet/tasks/:id/report` works it out from the task's conversation
+ * (server/src/openduet/task-report.ts): its decisions, the Bot's updates and the person's replies in
+ * the order they happened, and the emails and events its tool calls read. A time is null where no
+ * ledger saw that moment.
+ */
+
+/** Something the person decided in the task's conversation, by the approval it answered. */
+export type ReportDecision = {
+  kind: "decision";
+  id: string;
+  decision: "allow_once" | "allow_always" | "deny" | "handled";
+  by: "you";
+  at: string | null;
+  /** What was asked about, in the approval inbox's shape, so it is named the way the inbox names it. */
+  action: {
+    toolRef: string;
+    effect: string;
+    scope: string;
+    args: unknown;
+    target?: unknown;
+  };
+};
+export type ReportEntry =
+  | ReportDecision
+  | { kind: "reply"; id: string; text: string; at: string | null }
+  | { kind: "update"; id: string; text: string; at: string | null };
+
+export type ReportResource =
+  | {
+      kind: "email";
+      id: string;
+      from: string;
+      subject: string;
+      at: string | null;
+      link: string | null;
+    }
+  | {
+      kind: "event";
+      id: string;
+      title: string;
+      start: string;
+      end: string | null;
+      location: string | null;
+      link: string | null;
+    };
+
+export type TaskReport = {
+  taskId: string;
+  entries: ReportEntry[];
+  resources: ReportResource[];
+};
+
+/**
+ * One task's report, read again while the task is moving, as the task itself is. `status` is the
+ * task's own, passed in so the report keeps pace with the page it is on.
+ */
+export const taskReportQueryOptions = (id: string, status?: TaskStatus) =>
+  queryOptions({
+    queryKey: taskKeys.report(id),
+    queryFn: (): Promise<TaskReport> =>
+      client(`/api/openduet/tasks/${encodeURIComponent(id)}/report`, "report", {
+        fallback: "Couldn't load this task's report.",
+      }),
+    refetchInterval: moving(status) ? LIVE_MS : QUIET_MS,
+  });

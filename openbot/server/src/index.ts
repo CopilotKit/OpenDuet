@@ -260,6 +260,10 @@ import {
   modelKeyOf,
   primaryBotIdOf,
 } from "./openduet/setup";
+import {
+  createTaskReportReader,
+  intelligenceHistory,
+} from "./openduet/task-report";
 import { createTaskStore } from "./openduet/task-store";
 import { createTaskThreads, createTaskTurn } from "./openduet/task-threads";
 import type { TaskStarter } from "./openduet/tasks";
@@ -1413,6 +1417,14 @@ const openDuetTools = createOpenDuetTools({
   complete: chooseSkills,
   model: runtimeModel.defaultModel,
   directChannel: openDuetDirectChannel,
+});
+/*
+ * A task's report, read from its conversation as the runtime holds it (openduet/task-report.ts).
+ * Built after `routineIntelligence`, the client every headless turn reads history through.
+ */
+const openDuetReport = createTaskReportReader({
+  database,
+  history: intelligenceHistory(routineIntelligence),
 });
 // The + on Tasks: the same start and the same Up next as the tools above.
 const openDuetIntake = createTaskIntake({
@@ -2681,6 +2693,7 @@ const app = createApp(
         chat: Boolean(deliveryProviders.slack),
       }),
       intake: openDuetIntake,
+      report: openDuetReport,
     },
     responsibilities: {
       store: responsibilityStore,

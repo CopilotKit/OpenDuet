@@ -131,6 +131,11 @@ type ChatTranscriptProps = {
   lead?: ReactNode;
   /** Extra classes on the scrolling column, such as room for a header floating over it. */
   contentClassName?: string;
+  /**
+   * Draw the lead alone and keep the conversation folded under it, as a task's report does until
+   * Show conversation is pressed. The conversation is still joined; only its rows are not drawn.
+   */
+  folded?: boolean;
 };
 
 /** The film's message bubbles (launch-film/film/src/duet/app.tsx `Bubble`). */
@@ -1811,6 +1816,7 @@ export function ChatTranscript({
   stopped,
   lead,
   contentClassName,
+  folded = false,
 }: ChatTranscriptProps) {
   const isDrawn = useDrawnTool();
   /*
@@ -1823,10 +1829,9 @@ export function ChatTranscript({
    * cost was markdown parsing and chart SVGs, and those are skipped by the memoised children below,
    * which is where the 25x came from. This runs per render and is not worth guarding.
    */
-  const items = groupToolSteps(
-    repliesLast(toVisibleChatItems(messages)),
-    isDrawn,
-  );
+  const items = folded
+    ? []
+    : groupToolSteps(repliesLast(toVisibleChatItems(messages)), isDrawn);
   /*
    * The first day's answer and its two replies. The replies only once the run has ended, while
    * nothing the person said or parked comes after it, and only on a first day that read mail: they
@@ -1964,12 +1969,12 @@ export function ChatTranscript({
              * position, which is the library's to change and is worth asking for.
              */}
             <div className="contents [&>*]:order-1">
-              {stopped ? (
+              {folded ? null : stopped ? (
                 <Stopped reason={stopped} />
               ) : waitingOnFirstToken ? (
                 <Thinking />
               ) : null}
-              {queued.map((message) => (
+              {(folded ? EMPTY_QUEUE : queued).map((message) => (
                 <Queued
                   attachments={message.attachments}
                   key={message.id}
@@ -1992,7 +1997,9 @@ export function ChatTranscript({
             >
               {lead}
             </div>
-            {items.length === 0 && restoring ? <RestoringTranscript /> : null}
+            {items.length === 0 && restoring && !folded ? (
+              <RestoringTranscript />
+            ) : null}
             {items.map((item, index) =>
               item.kind === "tools" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>

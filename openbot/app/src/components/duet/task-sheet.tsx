@@ -1,7 +1,8 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
+import { agentListQueryOptions } from "@/lib/agents/queries";
 import { clockTime } from "@/lib/approval-view";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { channelQueryOptions } from "@/lib/channels/queries";
@@ -13,18 +14,23 @@ import {
   failureLine,
   liveStatus,
   type TaskRecord,
+  taskKeys,
   taskQueryOptions,
+  taskReportQueryOptions,
 } from "@/lib/tasks/queries";
 import { useConversationBusy } from "@/lib/tasks/use-task";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 import { DuetIcon } from "./icons";
 import { TaskButton, TaskStatusPill } from "./task-card";
+import { noticedLine, TaskReportView } from "./task-report";
 
 /*
- * A task, opened: a large card on the frosted veil, × at its top left and the title across its
- * header with when it started, then where it stands with Mark done (Reopen once it is done), then
- * the task's own conversation, where the person can reply to steer it.
+ * A task, opened, as a report: a large card on the frosted veil, × at its top left and the title
+ * across its header. Under it, when and why it was noticed, where it stands, and Mark done (Reopen
+ * once it is done). Then the report itself (task-report.tsx): Decisions and updates, Resources, and
+ * Show conversation, which unfolds the task's own conversation under them. The reply box sits at the
+ * foot and sends into that conversation; sending unfolds it, so the reply is seen landing.
  *
  * Opened from its card in Chat or its row in Tasks, at `/tasks/<id>`, over the Tasks list. Never
  * over Chat itself: that would put two conversations on screen at once.
@@ -33,9 +39,6 @@ import { TaskButton, TaskStatusPill } from "./task-card";
  * turn runs once more in this conversation. A reply typed on it does the same, with the person's
  * words as their message and the ask beside them, so a reply never runs without the task. While the
  * task's own turn runs on the server, replies wait in the conversation's queue and go when it ends.
- *
- * The conversation is the whole report for now. A fuller layout (the decisions it made, its updates,
- * the resources it used) is a later slice.
  */
 
 export function TaskSheet({
@@ -76,12 +79,9 @@ export function TaskSheet({
                 >
                   <DuetIcon name="x" size={22} stroke={2.1} />
                 </button>
-                <div className="min-w-0 px-1 text-center">
-                  <DialogPrimitive.Title className="type-row truncate font-semibold">
-                    {task.data?.title ?? ""}
-                  </DialogPrimitive.Title>
-                  {task.data ? <StartedAt iso={task.data.createdAt} /> : null}
-                </div>
+                <DialogPrimitive.Title className="type-row min-w-0 truncate px-1 text-center font-semibold">
+                  {task.data?.title ?? ""}
+                </DialogPrimitive.Title>
                 <span aria-hidden />
               </header>
               {task.isPending ? null : task.error ? (
@@ -97,16 +97,6 @@ export function TaskSheet({
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
   );
-}
-
-/** When the task began, under its title: "Started 9:41 AM", or the day for an older one. */
-function StartedAt({ iso }: { iso: string }) {
-  const when = clockTime(iso);
-  return when ? (
-    <p className="type-label truncate font-medium text-duet-ink-3">
-      Started {when}
-    </p>
-  ) : null;
 }
 
 /**
@@ -142,6 +132,11 @@ function TaskBody({ task }: { task: TaskRecord }) {
   const resolve = useMutation(resolveTaskMutationOptions(queryClient));
   const again = useMutation(tryTaskAgainMutationOptions(queryClient));
   const conversation = useQuery(channelQueryOptions(task.channelId));
+  const report = useQuery(taskReportQueryOptions(task.id, status));
+  const agents = useQuery(agentListQueryOptions());
+  const botName =
+    agents.data?.find((agent) => agent.id === task.botId)?.name ?? "your Bot";
+  const [conversationShown, setConversationShown] = useState(false);
   const done = task.resolvedAt !== null;
   const failed = status === "failed";
   /*
@@ -155,9 +150,21 @@ function TaskBody({ task }: { task: TaskRecord }) {
    */
   const replyRunsTask = task.failure !== null && !serverTurn;
   const error = resolve.error ?? again.error;
+  // A turn in the conversation just ended: what it said and did belongs in the report now.
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (wasBusy.current && !busy)
+      void queryClient.invalidateQueries({
+        queryKey: taskKeys.report(task.id),
+      });
+    wasBusy.current = busy;
+  }, [busy, task.id]);
   return (
     <>
-      <div className="flex shrink-0 flex-col gap-2 border-duet-hair-2 border-b px-5 pt-1 pb-3">
+      <div className="flex shrink-0 flex-col gap-2 border-duet-hair-2 border-b px-5 pt-0.5 pb-3">
+        <p className="type-sub line-clamp-2 text-duet-ink-2">
+          {noticedLine(task)}
+        </p>
         <div className="flex items-center justify-between gap-2.5">
           <TaskStatusPill status={status} />
           <div className="flex items-center gap-2">
@@ -208,7 +215,22 @@ function TaskBody({ task }: { task: TaskRecord }) {
            */
           <ChannelChat
             channel={conversation.data}
+            folded={!conversationShown}
             key={conversation.data.id}
+            lead={
+              <TaskReportView
+                botName={botName}
+                conversationShown={conversationShown}
+                error={report.error}
+                onToggleConversation={() =>
+                  setConversationShown((shown) => !shown)
+                }
+                pending={report.isPending}
+                report={report.data}
+              />
+            }
+            // A reply unfolds the conversation, so it is seen landing and answered.
+            onSubmitted={() => setConversationShown(true)}
             runtimeAgentId={task.botId}
             task={{
               busy: serverTurn,

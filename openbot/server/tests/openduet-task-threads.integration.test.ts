@@ -27,6 +27,7 @@ import {
   createTaskStore,
   type TaskRecord,
 } from "../src/openduet/task-store";
+import { createTaskReportReader } from "../src/openduet/task-report";
 import { createTaskThreads } from "../src/openduet/task-threads";
 import { START_TASK_TOOL } from "../src/openduet/tasks";
 import {
@@ -1254,5 +1255,130 @@ describe("the + on Tasks", () => {
       body: JSON.stringify({ botId: bot, instruction: "Do a thing" }),
     });
     expect(response.status).toBe(404);
+  });
+});
+
+describe("report", () => {
+  test("reads its decisions and turn ends from the ledgers and the rest from the conversation", async () => {
+    const opened = await threads.open({
+      ownerUserId: owner.id,
+      agentId: bot,
+      title: `Report ${randomUUID()}`,
+      why: "Ana needs an answer today.",
+      origin: "suggestion",
+      suggestionId: null,
+      sourceApp: "Gmail",
+      sourceLink: null,
+    });
+    const task = await taskStore.get(owner.id, opened.id);
+    const threadId = task.threadId ?? "";
+    expect(threadId).not.toBe("");
+
+    // The first turn ended here, and stopped to ask before sending.
+    const firstTurnEnded = new Date("2026-10-22T16:41:12.000Z");
+    await database.insert(workItems).values({
+      kind: PROACTIVE_TASK_KIND,
+      key: `task:${task.id}`,
+      payload: { ownerUserId: owner.id, taskId: task.id, text: "Go" },
+      finishedAt: firstTurnEnded,
+    });
+    const approvalId = `${prefix}-report-${randomUUID()}`;
+    const asked = new Date("2026-10-22T16:41:10.000Z");
+    const decided = new Date("2026-10-22T16:42:00.000Z");
+    const resumed = new Date("2026-10-22T16:42:20.000Z");
+    const action = {
+      threadId,
+      botId: bot,
+      toolRef: "openbot/share_private_information",
+      effect: "share_private",
+      scope: "external:ana@hearthandco.com",
+      args: { audience: "google-workspace: ana@hearthandco.com" },
+    };
+    await database.insert(approvalRequests).values([
+      {
+        id: approvalId,
+        ownerUserId: owner.id,
+        runId: `task-${task.id}`,
+        toolCallId: "call-send",
+        actionDigest: "digest",
+        action: action as never,
+        status: "completed",
+        decision: "allow_once",
+        createdAt: asked,
+        decidedAt: decided,
+        completedAt: resumed,
+      },
+      // Another conversation's, and another person's: neither is this report's.
+      {
+        id: `${approvalId}-elsewhere`,
+        ownerUserId: owner.id,
+        runId: "elsewhere",
+        toolCallId: "call-send",
+        actionDigest: "digest",
+        action: { ...action, threadId: "another-thread" } as never,
+        status: "completed",
+        decision: "deny",
+        decidedAt: decided,
+      },
+      {
+        id: `${approvalId}-theirs`,
+        ownerUserId: other.id,
+        runId: "theirs",
+        toolCallId: "call-send-theirs",
+        actionDigest: "digest",
+        action: action as never,
+        status: "completed",
+        decision: "deny",
+        decidedAt: decided,
+      },
+    ]);
+    await database.insert(workItems).values({
+      kind: "approval.resume",
+      key: approvalId,
+      payload: { ownerUserId: owner.id, approvalId },
+      finishedAt: resumed,
+    });
+
+    const read: [string, string][] = [];
+    const report = await createTaskReportReader({
+      database,
+      history: async ({ threadId: wanted, ownerUserId }) => {
+        read.push([wanted, ownerUserId]);
+        return [
+          {
+            id: `task-${task.id}`,
+            role: "user",
+            content: frameTaskBrief("Reply to Ana."),
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: "I read Ana's email. Sending the reply.",
+            toolCalls: [{ id: "call-send", name: "send", args: "{}" }],
+          },
+          {
+            id: `approval:${approvalId}`,
+            role: "tool",
+            toolCallId: "call-send",
+            content: "Allowed.",
+          },
+          { id: "a2", role: "assistant", content: "Sent. Ana has it." },
+        ];
+      },
+    })(owner.id, task);
+
+    expect(read).toEqual([[threadId, owner.id]]);
+    expect(
+      report.entries.map((entry) =>
+        entry.kind === "decision"
+          ? `${entry.decision} ${entry.id} ${entry.at}`
+          : `${entry.kind} ${entry.text} ${entry.at}`,
+      ),
+    ).toEqual([
+      `update I read Ana's email. ${asked.toISOString()}`,
+      `allow_once ${approvalId} ${decided.toISOString()}`,
+      `update Sent. ${resumed.toISOString()}`,
+    ]);
+    expect(report.resources).toEqual([]);
   });
 });
