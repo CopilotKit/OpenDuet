@@ -469,6 +469,7 @@ describe("GET /api/openduet/tasks/:id/report", () => {
     status: "ready_for_review",
     failure: null,
     failedAt: null,
+    next: null,
     resolvedAt: null,
     createdAt: "2026-10-23T09:41:00.000Z",
     updatedAt: "2026-10-23T09:41:00.000Z",

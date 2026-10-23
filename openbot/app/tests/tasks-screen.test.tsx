@@ -16,7 +16,8 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { CHECK_HOLD_MS, RESOLVED_SHOWN } from "@/components/shell/tasks-active";
+import { QuestionSheet } from "@/components/duet/question-sheet";
+import { CHECK_HOLD_MS } from "@/components/shell/tasks-active";
 import {
   TASKS_VIEW_STORAGE_KEY,
   TasksScreen,
@@ -247,6 +248,14 @@ const regionNames = (view: ReturnType<typeof draw>) =>
       ),
     );
 
+/** Unfolds Resolved, which starts folded, and returns its region. */
+async function unfoldResolved(view: ReturnType<typeof draw>) {
+  const resolved = await view.findByRole("region", { name: "Resolved" });
+  const toggle = within(resolved).getByRole("button", { name: /^Resolved/ });
+  if (toggle.getAttribute("aria-expanded") !== "true") fireEvent.click(toggle);
+  return resolved;
+}
+
 /** Each task row's title, in the order a group lists them. */
 const taskTitles = (group: HTMLElement) =>
   within(group)
@@ -307,6 +316,7 @@ test("Active groups everything by what it needs: Ready for review, Needs input, 
       status: "ready_for_review",
       origin: "suggestion",
       sourceApp: "Gmail",
+      next: "Send the reply to Sam? It tells him Friday is fine.",
     }),
     task({
       id: "invoice",
@@ -348,10 +358,18 @@ test("Active groups everything by what it needs: Ready for review, Needs input, 
   });
   expect(row.getAttribute("href")).toBe("/tasks/sam");
   const status = row.querySelector("[data-status]");
-  expect(status?.textContent).toBe("Ready for review · Read what it did");
-  // The state word carries the group's colour.
+  // The run's own next step, after the state word, on one line.
+  expect(status?.textContent).toBe(
+    "Ready for review · Send the reply to Sam? It tells him Friday is fine.",
+  );
+  expect(status?.className).toContain("truncate");
+  // The state word carries the group's colour, at regular weight.
   expect(status?.querySelector("span")?.className).toContain("text-duet-green");
-  expect(row.textContent).toContain("Gmail");
+  expect(status?.querySelector("span")?.className).not.toContain(
+    "font-semibold",
+  );
+  // A flat row: where it came from is not a line of its own.
+  expect(row.textContent).not.toContain("Gmail");
 
   const needs = view.getByRole("region", { name: "Needs input" });
   expect(taskTitles(needs)).toEqual([
@@ -370,7 +388,8 @@ test("Active groups everything by what it needs: Ready for review, Needs input, 
   expect(working.textContent).toContain(
     "Draft a reply to Rosa about Oat Satin",
   );
-  expect(working.textContent).toContain("You asked");
+  expect(working.textContent).not.toContain("You asked");
+  expect(working.textContent).toContain("Working · Just started");
   expect(working.textContent).toContain("Draft the wholesale reply");
   expect(
     within(working)
@@ -379,6 +398,12 @@ test("Active groups everything by what it needs: Ready for review, Needs input, 
   ).toBe("/channel/chat-1");
 
   const resolved = view.getByRole("region", { name: "Resolved" });
+  // Folded: its heading alone, with no count, until it is pressed.
+  expect(resolved.textContent).not.toContain("Pay the kiln repair invoice");
+  expect(within(resolved).getByRole("heading").textContent?.trim()).toBe(
+    "Resolved",
+  );
+  await unfoldResolved(view);
   expect(resolved.textContent).toContain("Pay the kiln repair invoice");
   expect(resolved.textContent).toContain("Sorted the inbox");
   // A task is opened from its row; approvals have no circle.
@@ -418,13 +443,14 @@ test("each group heads itself with how many it holds and when the newest one cha
   const view = draw();
   const ready = await view.findByRole("region", { name: "Ready for review" });
   expect(within(ready).getByRole("heading").textContent).toBe(
-    "Ready for review 2 · Updated 1 min ago",
+    "Ready for review 2",
   );
+  // The list's freshness, once, beside the first heading.
+  expect(ready.textContent).toContain("Updated 1 min ago");
   expect(taskTitles(ready)).toEqual(["Newer", "Older"]);
-  expect(
-    within(view.getByRole("region", { name: "Working" })).getByRole("heading")
-      .textContent,
-  ).toBe("Working 1 · Updated 1 hr ago");
+  const working = view.getByRole("region", { name: "Working" });
+  expect(within(working).getByRole("heading").textContent).toBe("Working 1");
+  expect(working.textContent).not.toContain("Updated");
 });
 
 test("sorted oldest first, each group turns round", async () => {
@@ -543,7 +569,7 @@ test("a decided action is not waiting, and not a task: it is left out of Needs i
   expect(resolved.textContent).not.toContain("Allowed once by you");
 });
 
-test("a question is answered in place", async () => {
+test("a question outside any task is a row under Needs input that opens its own page", async () => {
   quiet();
   inbox = {
     requests: [],
@@ -559,7 +585,45 @@ test("a question is answered in place", async () => {
   };
   serving();
   const view = draw();
-  expect(await view.findByText("OpenDuet asks")).toBeTruthy();
+  const needs = await view.findByRole("region", { name: "Needs input" });
+  const row = within(needs).getByRole("link", { name: /OpenDuet asks/ });
+  expect(row.getAttribute("href")).toBe("/tasks/questions/q-1");
+  expect(row.querySelector("[data-status]")?.textContent).toBe(
+    "Needs input · Which deck should I review?",
+  );
+  // Answered on its page, not here: no box and no Send on the list.
+  expect(view.queryByRole("textbox", { name: "Your answer" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Send answer" })).toBeNull();
+});
+
+test("a question's page shows the question and sends the answer, then closes", async () => {
+  quiet();
+  inbox = {
+    requests: [],
+    questions: [
+      {
+        id: "q-1",
+        botId: "openduet",
+        threadId: "thread",
+        question: "Which deck should I review?",
+        why: "Two decks changed today.",
+        createdAt: ago(10),
+      },
+    ],
+  };
+  serving();
+  queryClient.setQueryData(agentKeys.list(false), [
+    { id: "openduet", name: "OpenDuet" },
+  ]);
+  let closed = 0;
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <QuestionSheet onClose={() => (closed += 1)} questionId="q-1" />
+    </QueryClientProvider>,
+  );
+  expect(await view.findByText("Which deck should I review?")).toBeTruthy();
+  expect(view.getByText("OpenDuet asks")).toBeTruthy();
+  expect(view.getByText("Two decks changed today.")).toBeTruthy();
   const send = view.getByRole("button", { name: "Send answer" });
   expect(send.hasAttribute("disabled")).toBe(true);
   const user = userEvent.setup({ document: view.container.ownerDocument });
@@ -576,6 +640,20 @@ test("a question is answered in place", async () => {
       body: { response: "The launch deck" },
     }),
   );
+  await waitFor(() => expect(closed).toBe(1));
+});
+
+test("a question already answered says so on its page", async () => {
+  quiet();
+  serving();
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <QuestionSheet onClose={() => {}} questionId="gone" />
+    </QueryClientProvider>,
+  );
+  expect(
+    await view.findByText("This question has been answered."),
+  ).toBeTruthy();
 });
 
 test("the check circle marks a task done: the check lands, and the row stays put a moment before it moves", async () => {
@@ -613,11 +691,13 @@ test("the check circle marks a task done: the check lands, and the row stays put
   await act(
     () => new Promise((resolve) => setTimeout(resolve, CHECK_HOLD_MS + 50)),
   );
+  await waitFor(() =>
+    expect(view.queryByRole("region", { name: "Ready for review" })).toBeNull(),
+  );
+  await unfoldResolved(view);
   expect(
     await view.findByRole("button", { name: "Reopen Answer Sam" }),
   ).toBeTruthy();
-  expect(view.queryByRole("region", { name: "Ready for review" })).toBeNull();
-  expect(view.getByRole("region", { name: "Resolved" })).toBeTruthy();
 });
 
 test("a done task's circle is filled, and pressing it reopens the task", async () => {
@@ -632,6 +712,7 @@ test("a done task's circle is filled, and pressing it reopens the task", async (
   ];
   serving();
   const view = draw();
+  await unfoldResolved(view);
   const circle = await view.findByRole("button", { name: "Reopen Answer Sam" });
   expect(circle.getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(circle);
@@ -644,7 +725,7 @@ test("a done task's circle is filled, and pressing it reopens the task", async (
   );
 });
 
-test("Resolved keeps a week of done tasks, newest first, and folds after five with Show all", async () => {
+test("Resolved keeps a week of done tasks, newest first, folded until its heading is pressed", async () => {
   quiet();
   tasks = [
     ...Array.from({ length: 6 }, (_, index) =>
@@ -665,18 +746,22 @@ test("Resolved keeps a week of done tasks, newest first, and folds after five wi
   serving();
   const view = draw();
   const resolved = await view.findByRole("region", { name: "Resolved" });
-  expect(within(resolved).getByRole("heading").textContent).toContain(
-    "Resolved 6",
-  );
-  expect(taskTitles(resolved)).toEqual(
-    ["Done 0", "Done 1", "Done 2", "Done 3", "Done 4"].slice(0, RESOLVED_SHOWN),
-  );
+  const toggle = within(resolved).getByRole("button", { name: /^Resolved/ });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(taskTitles(resolved)).toEqual([]);
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(taskTitles(resolved)).toEqual([
+    "Done 0",
+    "Done 1",
+    "Done 2",
+    "Done 3",
+    "Done 4",
+    "Done 5",
+  ]);
   expect(resolved.textContent).not.toContain("Done last month");
-  fireEvent.click(within(resolved).getByRole("button", { name: "Show all 6" }));
-  expect(taskTitles(resolved)).toHaveLength(6);
-  expect(
-    within(resolved).getByRole("button", { name: "Show fewer" }),
-  ).toBeTruthy();
+  fireEvent.click(toggle);
+  expect(taskTitles(resolved)).toEqual([]);
 });
 
 test("Resolved lists finished work, read-only, beside done tasks, and not the actions answered", async () => {
@@ -713,7 +798,7 @@ test("Resolved lists finished work, read-only, beside done tasks, and not the ac
   };
   serving();
   const view = draw();
-  const resolved = await view.findByRole("region", { name: "Resolved" });
+  const resolved = await unfoldResolved(view);
   const text = resolved.textContent ?? "";
   expect(text).toContain("Follow-up · Done");
   expect(text).toContain("Didn't finish");
@@ -723,7 +808,8 @@ test("Resolved lists finished work, read-only, beside done tasks, and not the ac
   );
   expect(order.every((at) => at >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
-  expect(within(resolved).queryAllByRole("button")).toHaveLength(0);
+  // Read-only: the only button is the heading that folds it.
+  expect(within(resolved).queryAllByRole("button")).toHaveLength(1);
 });
 
 test("Working keeps Stop on other work under way", async () => {
@@ -778,7 +864,7 @@ test("a task whose conversation is running a turn reads Working, even before the
   expect(
     within(working).getByRole("link").querySelector("[data-status]")
       ?.textContent,
-  ).toBe("Working · Nothing needed from you yet");
+  ).toBe("Working · Just started");
 });
 
 test("search narrows Active by title", async () => {

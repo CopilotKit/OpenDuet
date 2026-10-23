@@ -8,11 +8,12 @@ import type { AppVariables } from "../auth/guards";
 import type { Database } from "../db/client";
 import {
   approvalRequests,
+  channels,
   intelligenceChannelMappings,
   workItems,
 } from "../db/schema";
 import { type OpenDuetTaskOrigin, openduetTasks } from "../db/schema/openduet";
-import { PROACTIVE_TASK_KIND, TASK_RUNS } from "../proactive/engine";
+import { PROACTIVE_TASK_KIND, replyTail, TASK_RUNS } from "../proactive/engine";
 import { ProactiveRefusedError } from "../proactive/types";
 import { DEFAULT_MAX_ATTEMPTS } from "../work/queue";
 import type { TaskReportReader } from "./task-report";
@@ -79,6 +80,12 @@ export type TaskRecord = {
   failure: string | null;
   /** When it failed, alongside `failure`. */
   failedAt: string | null;
+  /**
+   * The run's own next step, one line, for Tasks: the last sentence or question of the Bot's newest
+   * words in its conversation, or the person's own words in quotes while their reply is being
+   * worked on. Null before anything has been said there.
+   */
+  next: string | null;
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -174,7 +181,27 @@ type TaskState = {
   /** The plain reason, when its turn ran out of runs, and when. */
   failure: string | null;
   failedAt: Date | null;
+  /** See `TaskRecord.next`. */
+  next: string | null;
 };
+
+/** How long the person's own words may run as a task's next step. */
+const QUOTE_MAX = 120;
+
+/**
+ * A task's next step, from the last line said in its conversation: the Bot's words end on what comes
+ * next (`replyTail`); the person's are what the Bot is now working on, quoted.
+ */
+export function nextStepOf(
+  said: string | null | undefined,
+  byBot: boolean,
+): string | null {
+  const text = said?.trim();
+  if (!text) return null;
+  if (byBot) return replyTail(text);
+  const words = Array.from(text);
+  return `“${words.length > QUOTE_MAX ? `${words.slice(0, QUOTE_MAX - 1).join("")}…` : text}”`;
+}
 
 /** A JSON field of a work item's payload, as text. */
 const payload = (field: string) => sql<string>`${workItems.payload}->>${field}`;
@@ -209,11 +236,29 @@ export function createTaskStore(
           threadId: null,
           failure: null,
           failedAt: null,
+          next: null,
         },
       ]),
     );
     if (rows.length === 0) return state;
     const channelIds = rows.map((row) => row.channelId);
+    // The last line said in each task's conversation, for its next step.
+    const lastSaid = await database
+      .select({
+        id: channels.id,
+        lastMessage: channels.lastMessage,
+        byBot: sql<boolean>`${channels.lastMessageAgentId} is not null`,
+        sourceId: channels.lastMessageSourceId,
+      })
+      .from(channels)
+      .where(inArray(channels.id, channelIds));
+    const taskOfChannelId = new Map(rows.map((row) => [row.channelId, row.id]));
+    for (const said of lastSaid) {
+      const entry = state.get(taskOfChannelId.get(said.id) ?? "");
+      // The ask a turn starts on is the task itself, not a step: "Just started" says that better.
+      const ask = !said.byBot && (said.sourceId?.endsWith(":input") ?? false);
+      if (entry && !ask) entry.next = nextStepOf(said.lastMessage, said.byBot);
+    }
     const threads = await database
       .select({
         channelId: intelligenceChannelMappings.channelId,
@@ -421,6 +466,7 @@ export function createTaskStore(
       // Kept while it is marked done, too: Reopen brings the failure back, and so may a reply.
       failure: failedOrDone ? (state?.failure ?? null) : null,
       failedAt: failedOrDone ? (state?.failedAt?.toISOString() ?? null) : null,
+      next: state?.next ?? null,
       resolvedAt: row.resolvedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),

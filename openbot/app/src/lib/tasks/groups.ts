@@ -120,20 +120,27 @@ function statusOf(task: TaskRecord, busy: boolean, waits: boolean) {
 const lowerFirst = (text: string) =>
   text.charAt(0).toLowerCase() + text.slice(1);
 
-/** What a task needs next, said after its status. */
+/**
+ * What a task needs next, said after its status: the run's own next step (parity-spec S3d). A
+ * question it stopped on is the question itself, an approval says what it would do, and a failed
+ * run says why. Otherwise the Bot's newest words end on what comes next; before it has said
+ * anything, a working task has "Just started".
+ */
 function needOf(
   status: TaskStatus,
   waiting: { request?: ApprovalRequest; question?: PersonQuestion } | undefined,
-  failure: string | null = null,
+  task: Pick<TaskRecord, "failure" | "next" | "why">,
 ): string {
-  if (status === "ready_for_review") return "Read what it did";
-  if (status === "working") return "Nothing needed from you yet";
-  if (status === "resolved") return "Marked done";
-  if (status === "failed") return couldNotFinish(failure);
-  if (waiting?.request)
-    return `Allow it to ${lowerFirst(describeApproval(waiting.request).title)}, or refuse`;
-  if (waiting?.question) return "Answer its question";
-  return "Open it to answer";
+  const said = task.next?.trim() || null;
+  if (status === "failed") return couldNotFinish(task.failure);
+  if (status === "needs_input") {
+    if (waiting?.question) return waiting.question.question;
+    if (waiting?.request)
+      return `Allow it to ${lowerFirst(describeApproval(waiting.request).title)}, or refuse`;
+    return said ?? "Open it to answer";
+  }
+  if (status === "working") return said ?? "Just started";
+  return said ?? task.why ?? "Read what it did";
 }
 
 /** The line under a task: who asked for it, or where it came from. */
@@ -223,7 +230,7 @@ export function activeGroups<Row extends OtherRow>(input: {
       title: task.title,
       task,
       status,
-      need: needOf(status, waits, task.failure),
+      need: needOf(status, waits, task),
       tag: taskTag(task),
     });
   }
