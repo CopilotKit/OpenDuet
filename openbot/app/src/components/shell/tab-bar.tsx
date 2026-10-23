@@ -19,11 +19,14 @@ const TABS: {
 
 /**
  * Which tab a path belongs to, or null for a screen opened from the menu. A page open over the
- * Pages list (`/pages/<id>`) is still the Pages tab.
+ * Pages list (`/pages/<id>`) is still the Pages tab, and any other conversation with a Bot
+ * (`/channel/<id>`) is drawn as Chat is. Starting one (`/channel/new`, where Bots are picked) keeps
+ * its own page.
  */
 export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
+  if (/^\/channel\/[^/]+$/.test(path) && path !== "/channel/new") return "chat";
   if (path === "/tasks") return "tasks";
   if (path === "/pages" || /^\/pages\/[^/]+$/.test(path)) return "pages";
   return null;
