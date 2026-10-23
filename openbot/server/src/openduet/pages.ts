@@ -10,6 +10,7 @@ import { openduetPages } from "../db/schema/openduet";
 import { REFUSAL_MARKER } from "../plugins/tools";
 import {
   MAX_BLOCKS,
+  MAX_SLIDE_BLOCKS,
   MAX_SLIDES,
   MAX_SUMMARY,
   MAX_TITLE,
@@ -20,6 +21,10 @@ import {
   type PageSlide,
   pageBlockSchema,
   pageSlideSchema,
+  SLIDE_MAX_BARS,
+  SLIDE_MAX_BULLETS,
+  SLIDE_MAX_LIST,
+  SLIDE_MAX_METRICS,
 } from "./page-content";
 
 /*
@@ -107,7 +112,7 @@ const inputSchema = z
       .max(MAX_SLIDES)
       .optional()
       .describe(
-        `A deck's slides, in order, each a title and at most three blocks. Required for "slides".`,
+        `A deck's slides, in order, each a title and at most ${MAX_SLIDE_BLOCKS} blocks that read in full on a phone. Required for "slides".`,
       ),
   })
   .strict()
@@ -142,11 +147,15 @@ export type PageInput = z.infer<typeof inputSchema>;
 /**
  * Why the input was refused, in a line the model can act on: where, and what was wrong there.
  * The first issue is enough. A model fixes one thing at a time, and a list of ten reads as noise.
+ * A slide too full for a phone says how to split it (see `slideHeight` in page-content.ts).
+ *
+ * The retry is between the model and the tool. The person sees one card when it lands, never a
+ * line about a cap or a split.
  */
 function refusalFor(error: z.ZodError): string {
   const issue = error.issues[0];
   const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
-  return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${where}${issue?.message ?? "Invalid arguments."} Fix it and call ${PAGE_TOOL} again.`;
+  return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${where}${issue?.message ?? "Invalid arguments."} Fix it and call ${PAGE_TOOL} again. Don't mention this to the person.`;
 }
 
 export function parsePageInput(
@@ -284,6 +293,7 @@ export function pageTools(options: {
         'Use kind "page" with blocks for anything to read, and kind "slides" with slides for a deck to present.',
         "A dashboard is a page that starts with a text block holding one short headline sentence (under 90 characters), then a metrics block of up to 8 tiles, then anything else, such as a list block of what to look at next.",
         "Blocks: heading, text, bullets, metrics (label, value, optional note), bars (a bar chart of labelled numbers) and list (rows worth a closer look).",
+        `A slide is read on a phone, in full: a title and at most ${MAX_SLIDE_BLOCKS} blocks, with at most ${SLIDE_MAX_METRICS} metrics, ${SLIDE_MAX_BULLETS} bullets, ${SLIDE_MAX_LIST} list rows or ${SLIDE_MAX_BARS} bars, and less when blocks share a slide. Keep figures and bar labels short. When there is more, use more slides.`,
         "The app shows it as a card under your message, and the person opens it from there. So never paste its content into the chat: write one or two sentences about it, such as what it covers and how long it takes to read.",
         "To change one you already made, call it again with that page's id and the whole new content.",
       ].join(" "),

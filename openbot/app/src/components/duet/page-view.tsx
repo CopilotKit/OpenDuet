@@ -299,9 +299,22 @@ export function formatValue(value: number): string {
   }).format(value);
 }
 
+/*
+ * A slide, drawn for a phone. Every block on it is laid out whole: words wrap, figures sit in tiles
+ * that grow to fit them, and nothing is cut off, clamped or left out. What keeps a slide from
+ * running long is the tool, not the slide: `make_page` refuses, at save, a slide that would not fit
+ * this frame at 390px wide (`slideHeight` in server/src/openduet/page-content.ts), and tells the
+ * model to split it.
+ *
+ * So the sizes here are a contract with that check, in px rather than rem so the person's root
+ * size never moves them: an 18px title, 15px text, 13px captions, 12px between blocks, 16px of
+ * padding. Change one here and change it there.
+ */
+
 /**
- * One slide on a 16:9 card. A slide holds at most three blocks, drawn small; a chart takes whatever
- * height the others leave it.
+ * One slide of a deck: its title, then its blocks. It is at least 16:9 and grows to show
+ * everything it holds. In a deck every slide fills its place, which is as tall as the tallest
+ * slide, so the frame doesn't jump as the slides turn.
  */
 export function SlideCard({
   slide,
@@ -312,33 +325,35 @@ export function SlideCard({
   onListItem?: OnListItem;
   className?: string;
 }) {
-  // A chart needs the height. Beside one, the words get fewer lines so the bars stay readable.
-  const tight = slide.blocks.some((block) => block.type === "bars");
   return (
     <div
       className={cn(
-        "flex aspect-video w-full flex-col overflow-hidden rounded-[18px] bg-duet-card p-4 text-duet-ink shadow-duet-raised",
+        "grid h-full w-full grid-cols-1 rounded-[18px] bg-duet-card p-[16px] text-duet-ink shadow-duet-raised",
         className,
       )}
     >
-      <h3
-        className={cn(
-          "font-semibold text-[19px] leading-[23px] tracking-[-0.015em]",
-          tight ? "line-clamp-1" : "line-clamp-2",
-        )}
-      >
-        {slide.title}
-      </h3>
-      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
-        {slide.blocks.map((block, index) => (
-          <SlideBlock
-            block={block}
-            // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
-            key={index}
-            onListItem={onListItem}
-            tight={tight}
-          />
-        ))}
+      {/*
+       * The floor: a spacer in the same cell as the content, so the card is the taller of the two.
+       * 31:16 inside 16px of padding is 16:9 outside it at phone width. An aspect ratio on the card
+       * itself would fix its height instead, and the content would spill out of it.
+       */}
+      <div aria-hidden className="col-start-1 row-start-1 aspect-[31/16]" />
+      <div className="col-start-1 row-start-1 flex min-w-0 flex-col self-start">
+        <h3 className="font-semibold text-[18px] leading-[22px] tracking-[-0.01em] [overflow-wrap:anywhere]">
+          {slide.title}
+        </h3>
+        {slide.blocks.length > 0 ? (
+          <div className="mt-[12px] flex flex-col gap-[12px]">
+            {slide.blocks.map((block, index) => (
+              <SlideBlock
+                block={block}
+                // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
+                key={index}
+                onListItem={onListItem}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -347,99 +362,209 @@ export function SlideCard({
 function SlideBlock({
   block,
   onListItem,
-  tight,
 }: {
   block: PageBlock;
   onListItem?: OnListItem | undefined;
-  tight: boolean;
 }): ReactNode {
-  const lines = tight ? 2 : 4;
   switch (block.type) {
     case "heading":
       return (
-        <p className="font-semibold text-[14px] text-duet-ink leading-[18px]">
+        <p className="font-semibold text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
           {block.text}
         </p>
       );
     case "text":
       return (
-        <p
-          className={cn(
-            "shrink-0 text-[14px] text-duet-ink-2 leading-[19px]",
-            tight ? "line-clamp-2" : "line-clamp-3",
-          )}
-        >
+        <p className="whitespace-pre-line text-[15px] text-duet-ink-2 leading-[20px] [overflow-wrap:anywhere]">
           {block.text}
         </p>
       );
     case "bullets":
       return (
-        <ul className="flex flex-col gap-0.5">
-          {block.items.slice(0, lines).map((item, index) => (
+        <ul className="flex flex-col gap-[4px]">
+          {block.items.map((item, index) => (
             <li
-              className="flex gap-2 text-[14px] text-duet-ink-2 leading-[19px]"
+              className="flex gap-[8px] text-[15px] text-duet-ink-2 leading-[20px]"
               // biome-ignore lint/suspicious/noArrayIndexKey: two bullets may say the same thing.
               key={index}
             >
               <span
                 aria-hidden
-                className="mt-[8px] size-1 shrink-0 rounded-full bg-duet-ink-3"
+                className="mt-[8px] size-[4px] shrink-0 rounded-full bg-duet-ink-3"
               />
-              <span className="line-clamp-1 min-w-0">{item}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{item}</span>
             </li>
           ))}
         </ul>
       );
     case "metrics":
       return (
-        <ul className="grid grid-cols-3 gap-1.5">
-          {block.items.slice(0, 3).map((metric, index) => (
+        <ul
+          className={cn(
+            "grid gap-[8px]",
+            block.items.length > 1 ? "grid-cols-2" : "grid-cols-1",
+          )}
+        >
+          {block.items.map((metric, index) => (
             <li
-              className="min-w-0 rounded-[10px] bg-duet-tile px-2 py-1.5"
+              className="flex min-w-0 flex-col rounded-[10px] bg-duet-tile px-[10px] py-[8px]"
               // biome-ignore lint/suspicious/noArrayIndexKey: two tiles may share a label.
               key={index}
             >
-              <span className="block truncate font-semibold text-[16px] tabular-nums leading-5">
+              <span className="font-semibold text-[18px] leading-[22px] tracking-[-0.01em] tabular-nums [overflow-wrap:anywhere]">
                 {metric.value}
               </span>
-              <span className="block truncate text-[11px] text-duet-ink-2 leading-[14px]">
+              <span className="font-medium text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
                 {metric.label}
               </span>
+              {metric.note ? (
+                <span className="mt-[2px] text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+                  {metric.note}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>
       );
     case "bars":
-      return <BarChart compact items={block.items} label={block.label} />;
+      return <SlideBars items={block.items} label={block.label} />;
     case "list":
       return (
-        <ul className="flex flex-col">
-          {block.items.slice(0, tight ? 2 : 3).map((item, index) => (
-            <li
-              className="flex items-center gap-1 text-[14px] leading-[19px]"
-              // biome-ignore lint/suspicious/noArrayIndexKey: rows may repeat a line.
-              key={index}
-            >
-              {onListItem ? (
-                <button
-                  className="flex min-w-0 flex-1 items-center gap-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-duet-violet/40"
-                  onClick={() => onListItem(item.text)}
-                  type="button"
-                >
-                  <span className="min-w-0 flex-1 truncate">{item.text}</span>
-                  <DuetIcon
-                    className="text-duet-ink-3"
-                    name="chevronRight"
-                    size={14}
-                    stroke={2.2}
-                  />
-                </button>
-              ) : (
-                <span className="min-w-0 flex-1 truncate">{item.text}</span>
-              )}
-            </li>
-          ))}
-        </ul>
+        <div>
+          {block.title ? (
+            <p className="mb-[4px] font-semibold text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
+              {block.title}
+            </p>
+          ) : null}
+          <ul aria-label={block.title ?? undefined} className="flex flex-col">
+            {block.items.map((item, index) => (
+              <li
+                className={index > 0 ? "border-duet-hair border-t" : undefined}
+                // biome-ignore lint/suspicious/noArrayIndexKey: rows may repeat a line.
+                key={index}
+              >
+                <SlideRow
+                  note={item.note}
+                  onPress={onListItem ? () => onListItem(item.text) : undefined}
+                  text={item.text}
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
       );
   }
+}
+
+/** A row on a slide: at least a 44px target, its note under it, a chevron when it can be pressed. */
+function SlideRow({
+  text,
+  note,
+  onPress,
+}: {
+  text: string;
+  note?: string | undefined;
+  onPress?: (() => void) | undefined;
+}) {
+  const body = (
+    <>
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
+          {text}
+        </span>
+        {note ? (
+          <span className="block text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+            {note}
+          </span>
+        ) : null}
+      </span>
+      {onPress ? (
+        <DuetIcon
+          className="shrink-0 text-duet-ink-3"
+          name="chevronRight"
+          size={16}
+          stroke={2.2}
+        />
+      ) : null}
+    </>
+  );
+  const row =
+    "flex min-h-[44px] w-full items-center gap-[8px] py-[4px] text-left";
+  return onPress ? (
+    <button
+      className={cn(
+        row,
+        "rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-duet-violet/40 active:bg-duet-hair-2",
+      )}
+      onClick={onPress}
+      type="button"
+    >
+      {body}
+    </button>
+  ) : (
+    <div className={row}>{body}</div>
+  );
+}
+
+/**
+ * A chart on a slide: a column per bar, its figure over it and its label under it, the last one in
+ * violet. The bars share one 72px height so they compare; a label wraps under its bar rather than
+ * being cut, and the tool refuses a label or figure too wide for its column.
+ */
+function SlideBars({
+  items,
+  label,
+}: {
+  items: readonly { label: string; value: number }[];
+  label?: string | undefined;
+}) {
+  const max = Math.max(...items.map((item) => item.value), 0);
+  const described = items.map((item) => `${item.label} ${item.value}`);
+  return (
+    <figure className="flex flex-col">
+      {label ? (
+        <figcaption className="mb-[6px] font-semibold text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+          {label}
+        </figcaption>
+      ) : null}
+      <div
+        aria-label={[label, described.join(", ")].filter(Boolean).join(": ")}
+        className="flex gap-[6px]"
+        role="img"
+      >
+        {items.map((item, index) => {
+          const last = index === items.length - 1;
+          const share = max > 0 ? item.value / max : 0;
+          return (
+            <div
+              className="flex min-w-0 flex-1 basis-0 flex-col items-center"
+              // biome-ignore lint/suspicious/noArrayIndexKey: two bars may share a label.
+              key={index}
+            >
+              <span
+                className={cn(
+                  "font-medium text-[13px] leading-[16px] tabular-nums",
+                  last ? "text-duet-violet" : "text-duet-ink-2",
+                )}
+              >
+                {formatValue(item.value)}
+              </span>
+              <div className="mt-[2px] flex h-[72px] w-full items-end">
+                <div
+                  className={cn(
+                    "w-full rounded-[6px]",
+                    last ? "bg-duet-violet" : "bg-duet-ink-3/35",
+                  )}
+                  style={{ height: `${Math.max(share * 100, 3)}%` }}
+                />
+              </div>
+              <span className="mt-[4px] w-full text-center text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+                {item.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </figure>
+  );
 }
