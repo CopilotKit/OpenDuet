@@ -177,7 +177,7 @@ const bot: TurnRunner = async ({ continuation }) => {
   const again = calls.filter(
     (call) =>
       resendsEverything ||
-      answers.get(call.id)?.includes("Send it again now, unchanged."),
+      answers.get(call.id)?.includes("make the same call now, unchanged"),
   );
   const runId = randomUUID();
   const sent = await Promise.allSettled(
