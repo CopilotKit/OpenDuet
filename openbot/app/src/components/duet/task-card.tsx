@@ -13,8 +13,8 @@ import { CardRow, DuetCard, OutcomePill, type PillTone } from "./kit";
 
 /*
  * A task OpenDuet is working on, as one compact row: what it is, where it stands, and a chevron that
- * opens it. The same row sits under the Bot's "On it" in Chat and in Tasks' Your tasks. The caller
- * supplies the link, since a task opens from both.
+ * opens it. It sits under the Bot's "On it" in Chat; Tasks draws its own rows (tasks-active.tsx).
+ * The caller supplies the link.
  *
  * A task that couldn't finish says so on its status line, "Failed · Couldn't finish: <reason>.", and
  * has Try again under the row. The button sits outside the link, so pressing it never opens the task.

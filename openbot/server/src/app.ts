@@ -111,7 +111,11 @@ import {
 import { REFUSAL_MARKER, vendorAnswer } from "./plugins/tools";
 import { createPageRoutes, type PageStore } from "./openduet/pages";
 import { createSetupRoutes, type SetupSources } from "./openduet/setup";
-import { createTaskRoutes, type TaskStore } from "./openduet/task-store";
+import {
+  createTaskRoutes,
+  type TaskIntake,
+  type TaskStore,
+} from "./openduet/task-store";
 import type { ProactiveEngine } from "./proactive/engine";
 import { createProactiveRoutes } from "./proactive/routes";
 import type { ProactiveStore } from "./proactive/store";
@@ -446,7 +450,12 @@ export function createApp(
      * And the setup checklist onboarding ends on, read from this server's own configuration and
      * state. See openduet/setup.ts. Absent, the checklist route is not mounted.
      */
-    openduet?: { pages: PageStore; setup?: SetupSources; tasks?: TaskStore };
+    openduet?: {
+      pages: PageStore;
+      setup?: SetupSources;
+      tasks?: TaskStore;
+      intake?: TaskIntake;
+    };
   },
   /**
    * Whether to offer help self-hosting, which also hides it from a deployment that pays for
@@ -1687,6 +1696,7 @@ export function createApp(
         coworker.openduet.tasks,
         requireUser,
         coworker.proactive?.engine,
+        coworker.openduet.intake,
       ),
     );
   if (coworker?.memory)

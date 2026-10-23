@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Hono, type MiddlewareHandler } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
+import { AgentNotFoundError } from "../agents/profile-store";
 import type { AppVariables } from "../auth/guards";
 import type { Database } from "../db/client";
 import {
@@ -55,6 +57,11 @@ export type TaskRecord = {
   botId: string;
   /** The task's own conversation. */
   channelId: string;
+  /**
+   * That conversation's thread, which an approval or a question raised in it names. Null when the
+   * conversation is gone, and on the record `create` returns.
+   */
+  threadId: string | null;
   title: string;
   why: string | null;
   origin: OpenDuetTaskOrigin;
@@ -154,9 +161,11 @@ export function plainFailure(error: string | null | undefined): string {
 }
 
 type Row = typeof openduetTasks.$inferSelect;
+/** What a task's conversation is doing, and its thread, as one read of the ledgers found them. */
 type TaskState = {
   needsInput: boolean;
   working: boolean;
+  threadId: string | null;
   /** The plain reason, when its turn ran out of runs, and when. */
   failure: string | null;
   failedAt: Date | null;
@@ -189,7 +198,13 @@ export function createTaskStore(
     const state = new Map<string, TaskState>(
       rows.map((row) => [
         row.id,
-        { needsInput: false, working: false, failure: null, failedAt: null },
+        {
+          needsInput: false,
+          working: false,
+          threadId: null,
+          failure: null,
+          failedAt: null,
+        },
       ]),
     );
     if (rows.length === 0) return state;
@@ -211,6 +226,11 @@ export function createTaskStore(
     );
     const threadIds = [...channelOfThread.keys()];
     const taskOfChannel = new Map(rows.map((row) => [row.channelId, row.id]));
+    for (const row of threads) {
+      const taskId = taskOfChannel.get(row.channelId);
+      const entry = taskId ? state.get(taskId) : undefined;
+      if (entry) entry.threadId = row.threadId;
+    }
     const mark = (
       channelId: string | null | undefined,
       field: "needsInput" | "working",
@@ -384,6 +404,7 @@ export function createTaskStore(
       id: row.id,
       botId: row.botId,
       channelId: row.channelId,
+      threadId: state?.threadId ?? null,
       title: row.title,
       why: row.why,
       origin: row.origin,
@@ -558,20 +579,105 @@ const againSchema = z
   })
   .strict();
 
+/**
+ * How a person adds a task themselves, from the + on Tasks: start it now, as `start_task` would from
+ * Chat, or save it for Up next, as `add_tasks` does. The server's assembly provides both; see
+ * wiring.ts.
+ */
+export type TaskIntake = {
+  start(
+    ownerUserId: string,
+    botId: string,
+    task: { title: string; instruction: string },
+  ): Promise<{ id: string }>;
+  save(
+    ownerUserId: string,
+    botId: string,
+    card: { title: string; detail: string },
+  ): Promise<{ id: string; title: string }>;
+};
+
+/** The longest ask the + takes, as `start_task` takes. */
+export const MAX_ASK = 4000;
+/** How long a title made from the ask gets before it is cut at a word. */
+const TITLE_LENGTH = 80;
+
+/**
+ * A task's title from the person's ask when they gave none: the first sentence of its first line,
+ * with its full stop dropped, cut at a word with an ellipsis past `TITLE_LENGTH`.
+ */
+export function titleFrom(ask: string): string {
+  const line =
+    ask
+      .split("\n")
+      .map((part) => part.replace(/\s+/g, " ").trim())
+      .find(Boolean) ?? "";
+  // A sentence ends at a stop followed by a capital: "Sam. He", but not "no. 5521" or "it... then".
+  const sentence = line.split(/(?<=[^.][.!?])\s+(?=\p{Lu})/u)[0] ?? line;
+  const plain = sentence.replace(/(?<!\.)\.$/, "");
+  if (plain.length <= TITLE_LENGTH) return plain;
+  const cut = plain.slice(0, TITLE_LENGTH);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > TITLE_LENGTH / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "")}…`;
+}
+
+const askSchema = z
+  .object({
+    botId: z.string().trim().min(1).max(200),
+    instruction: z.string().trim().min(1).max(MAX_ASK),
+    title: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+class TaskRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskRefusedError";
+  }
+}
+
+/** The + sheet's ask, with its title worked out when the person gave none. */
+async function readAsk(request: Request) {
+  if (!request.headers.get("content-type")?.includes("application/json"))
+    throw new TaskRefusedError("Say what OpenDuet should do.");
+  const parsed = askSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success)
+    throw new TaskRefusedError(
+      parsed.error.issues.some((issue) => issue.path[0] === "instruction")
+        ? `Say what OpenDuet should do, in at most ${MAX_ASK} characters.`
+        : "Choose one of your Bots.",
+    );
+  const { botId, instruction } = parsed.data;
+  return {
+    botId,
+    instruction,
+    title: parsed.data.title ?? titleFrom(instruction),
+  };
+}
+
 /** `/api/openduet/tasks`: the person's own tasks, as Chat's cards, the task page and Tasks read them. */
 export function createTaskRoutes(
   store: TaskStore,
   requireUser: MiddlewareHandler<{ Variables: AppVariables }>,
   /** Absent, Try again is not served. */
   retry?: TaskRetry,
+  /** Absent, the + routes are not served: there is nowhere to start or save a task. */
+  intake?: TaskIntake,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
-  routes.use("*", requireUser);
+  routes.use("*", requireUser, bodyLimit({ maxSize: 16_384 }));
   routes.onError((error, context) => {
     if (error instanceof TaskNotFoundError)
       return context.json({ error: error.message }, 404);
     if (error instanceof ProactiveRefusedError)
       return context.json({ error: error.message }, 409);
+    if (error instanceof AgentNotFoundError)
+      return context.json(
+        { error: "Couldn't find that Bot. Reload the page." },
+        404,
+      );
+    if (error instanceof TaskRefusedError)
+      return context.json({ error: error.message }, 400);
     console.error(
       JSON.stringify({
         type: "openduet-tasks-route-error",
@@ -585,6 +691,34 @@ export function createTaskRoutes(
   routes.get("/", async (context) =>
     context.json({ tasks: await store.list(context.var.actor.id) }),
   );
+  if (intake) {
+    /*
+     * Start now: the ask opens a task in a conversation of its own and starts there, the path
+     * `start_task` takes from Chat. Answers with the task as Tasks reads it.
+     */
+    routes.post("/", async (context) => {
+      const owner = context.var.actor.id;
+      const ask = await readAsk(context.req.raw);
+      const opened = await intake.start(owner, ask.botId, {
+        title: ask.title,
+        instruction: ask.instruction,
+      });
+      return context.json({ task: await store.get(owner, opened.id) }, 201);
+    });
+    /*
+     * Save for Up next: a card with Start and Hide, the path `add_tasks` takes, marked as one the
+     * person asked for. The card's detail is the whole ask, unless the title already says all of it.
+     */
+    routes.post("/up-next", async (context) => {
+      const ask = await readAsk(context.req.raw);
+      const said = ask.instruction.replace(/\s+/g, " ").replace(/\.$/, "");
+      const suggestion = await intake.save(context.var.actor.id, ask.botId, {
+        title: ask.title,
+        detail: said === ask.title ? "" : ask.instruction,
+      });
+      return context.json({ suggestion }, 201);
+    });
+  }
   routes.get("/:id", async (context) =>
     context.json({
       task: await store.get(context.var.actor.id, context.req.param("id")),

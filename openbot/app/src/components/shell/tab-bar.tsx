@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
-import { approvalInboxOptions, waitingOnYou } from "@/lib/approvals";
+import { approvalInboxOptions } from "@/lib/approvals";
+import { needsInputCount } from "@/lib/tasks/groups";
+import { taskListQueryOptions } from "@/lib/tasks/queries";
 import { cn } from "@/lib/utils";
 
 export type ShellTab = "chat" | "tasks" | "pages";
@@ -35,12 +37,13 @@ export function tabForPath(pathname: string): ShellTab | null {
 
 /**
  * The floating pill at the foot of the app: Chat, Tasks and Pages, the current one on a grey
- * capsule. Tasks carries the number of things waiting on the person, counted from the same list its
- * "Needs you" section shows, so the badge and the screen never disagree.
+ * capsule. Tasks carries the number of things waiting on the person, counted the way its Needs input
+ * group lists them (`needsInputCount`), so the badge and the screen never disagree.
  */
 export function TabBar({ current }: { current: ShellTab }) {
   const inbox = useQuery(approvalInboxOptions());
-  const waiting = waitingOnYou(inbox.data).count;
+  const tasks = useQuery(taskListQueryOptions());
+  const waiting = needsInputCount(tasks.data, inbox.data);
   return (
     <nav
       aria-label="Main"

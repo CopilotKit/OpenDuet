@@ -103,7 +103,8 @@ export function SuggestionCard({
   );
 }
 
-function SmallPill({
+/** Hide or Start on a suggestion's card, sharing the card's width; Start in black. */
+export function SmallPill({
   primary = false,
   ...props
 }: ComponentProps<"button"> & { primary?: boolean }) {

@@ -145,7 +145,7 @@ export function taskTools(options: {
         });
         return JSON.stringify({
           added,
-          note: `${added.length === 1 ? "The task is" : `All ${added.length} tasks are`} on the Tasks tab, under Suggested, each with Start and Hide. Say so in one short sentence; do not list them again.`,
+          note: `${added.length === 1 ? "The task is" : `All ${added.length} tasks are`} on the Tasks tab, under Up next, each with Start and Hide. Say so in one short sentence; do not list them again.`,
         });
       },
     },

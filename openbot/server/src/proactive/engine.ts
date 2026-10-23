@@ -711,17 +711,19 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
      */
     try {
       await deps.startTask(scope, {
-      runId:
-        work.messageId && attempt === 1
-          ? work.messageId
-          : rerun
-            ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
-            : `task-${taskId}`,
-      // A reply is the person's own message; the ask goes with it for the model, not in their bubble.
-      text: work.reply ? frameTaskReply(ask, work.reply) : frameTaskBrief(ask),
-      signal,
-      final: attempt >= TASK_RUNS,
-    });
+        runId:
+          work.messageId && attempt === 1
+            ? work.messageId
+            : rerun
+              ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
+              : `task-${taskId}`,
+        // A reply is the person's own message; the ask goes with it for the model, not in their bubble.
+        text: work.reply
+          ? frameTaskReply(ask, work.reply)
+          : frameTaskBrief(ask),
+        signal,
+        final: attempt >= TASK_RUNS,
+      });
     } catch (error) {
       if (!(error instanceof HeadlessToolSuspension)) throw error;
     }

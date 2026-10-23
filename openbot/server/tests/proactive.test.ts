@@ -620,7 +620,12 @@ describe("a started task's turn", () => {
       {
         kind: "proactive.task",
         key: "task:t1",
-        payload: { ownerUserId: "owner", taskId: "t1", text: "Reply to Rosa", runs: 2 },
+        payload: {
+          ownerUserId: "owner",
+          taskId: "t1",
+          text: "Reply to Rosa",
+          runs: 2,
+        },
       },
     ];
     const queue = {
