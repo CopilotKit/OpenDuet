@@ -58,9 +58,11 @@ import { queryClient } from "@/query-client";
 import { splitChatOrigin } from "./chat-origin";
 import {
   FIRST_DAY_PLAN,
+  firstDayPlan,
   firstDayWelcome,
   firstNameOf,
 } from "./first-day-greeting";
+import { ReplyChips } from "@/lib/copilot/reply-chips-tool";
 import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 import { readToolName } from "@/lib/plugins/tool-name";
@@ -599,7 +601,14 @@ function RoutineFiring({ instruction }: { instruction: string }) {
  * The name is read from the signed-in account through the app's one query client, the way the voice
  * widget reads it, because the transcript is drawn on screens with no provider of its own.
  */
-function FirstDayGreeting({ delay }: { delay: number }) {
+function FirstDayGreeting({
+  delay,
+  request,
+}: {
+  delay: number;
+  /** The request Chat sent, which says which plan went with it. */
+  request: string | null;
+}) {
   const { data: me } = useQuery(currentUserQueryOptions(), queryClient);
   return (
     <MessageRow align="start">
@@ -614,7 +623,7 @@ function FirstDayGreeting({ delay }: { delay: number }) {
         <Arriving delay={delay + FIRST_DAY_PLAN_DELAY_SECONDS}>
           <Bubble align="start" className={AGENT_BUBBLE} variant="secondary">
             <BubbleContent className={BUBBLE_CONTENT}>
-              {FIRST_DAY_PLAN}
+              {firstDayPlan(request)}
             </BubbleContent>
           </Bubble>
         </Arriving>
@@ -625,6 +634,117 @@ function FirstDayGreeting({ delay }: { delay: number }) {
 
 /** The plan arrives a beat after the welcome, as a second message would. */
 const FIRST_DAY_PLAN_DELAY_SECONDS = 0.4;
+
+/**
+ * THE FIRST DAY'S ANSWER, ONE BUBBLE PER PART. The request asks for three parts with a blank line
+ * between them (who you are, "How I'll help:" with three bullets, and the closing sentence), and the
+ * film draws them as three bubbles rather than one long one. So the first day's answer is cut at its
+ * blank lines, keeping a line that ends in a colon with the list under it, and a list in one piece.
+ *
+ * SCOPED TO THE FIRST DAY, ON PURPOSE. A general split for every answer is a larger change with its
+ * own review (the visual-system work), and replaces this when it lands.
+ */
+export function firstDayParts(text: string): string[] {
+  const listItem = /^\s*([-*+]|\d+[.)])\s/;
+  const parts: string[] = [];
+  for (const chunk of text.split(/\n[ \t]*\n/)) {
+    const part = chunk.trim();
+    if (!part) continue;
+    const previous = parts.at(-1);
+    if (
+      previous !== undefined &&
+      (previous.endsWith(":") ||
+        (listItem.test(part) &&
+          listItem.test(previous.split("\n").at(-1) ?? "")))
+    ) {
+      parts[parts.length - 1] = `${previous}\n\n${part}`;
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.length > 0 ? parts : [text];
+}
+
+function FirstDayAnswer({ delay, text }: { delay: number; text: string }) {
+  return (
+    <MessageRow align="start">
+      <MessageContent>
+        {firstDayParts(text).map((part, at) => (
+          <Arriving
+            delay={delay + at * FIRST_DAY_PLAN_DELAY_SECONDS}
+            // biome-ignore lint/suspicious/noArrayIndexKey: the parts are positions in one answer.
+            key={at}
+          >
+            <Bubble align="start" className={AGENT_BUBBLE} variant="secondary">
+              <BubbleContent className={cn(BUBBLE_CONTENT, AGENT_PROSE)}>
+                <Streamdown components={markdownComponents}>{part}</Streamdown>
+              </BubbleContent>
+            </Bubble>
+          </Arriving>
+        ))}
+      </MessageContent>
+    </MessageRow>
+  );
+}
+
+/** The two answers to the first day's "who you are": the app's, not the model's. */
+export const FIRST_DAY_REPLIES = ["Sounds right", "Something's off"] as const;
+
+/**
+ * Where the first day stands in a conversation: the first-day message's place, whether it read
+ * mail, the Bot's answer to it, and whether the person has said anything since.
+ */
+export function firstDayOf(items: readonly TranscriptItem[]): {
+  mail: boolean;
+  answer: ReadonlySet<string>;
+  replied: boolean;
+} | null {
+  const at = items.findIndex(
+    (item) =>
+      item.kind === "text" &&
+      item.role === "user" &&
+      readFirstDay(item.text) !== null,
+  );
+  const opened = items[at];
+  if (opened?.kind !== "text") return null;
+  const answer = new Set<string>();
+  let replied = false;
+  for (const item of items.slice(at + 1)) {
+    if (
+      item.kind === "attachments" ||
+      (item.kind === "text" && item.role === "user")
+    ) {
+      replied = true;
+      break;
+    }
+    if (item.kind === "text" && item.role === "assistant") answer.add(item.id);
+  }
+  return {
+    mail: firstDayPlan(readFirstDay(opened.text)) === FIRST_DAY_PLAN,
+    answer,
+    replied,
+  };
+}
+
+/**
+ * "Sounds right" and "Something's off" under the first day's answer, drawn by the app.
+ *
+ * NOT THE MODEL'S `suggest_replies`. Offered that tool on the first day, the model called it before
+ * writing anything and the answer collapsed to its closing question (`NO_BUTTONS` in
+ * shared/first-day.ts). The app knows when the first day's run has ended and what the two answers
+ * are, so it draws them with the same chips, and a tap goes out as the person's own words.
+ */
+function FirstDayReplies() {
+  return (
+    <MessageRow align="start">
+      <MessageContent>
+        <Arriving delay={0}>
+          <ReplyChips replies={FIRST_DAY_REPLIES} />
+        </Arriving>
+      </MessageContent>
+    </MessageRow>
+  );
+}
 
 /** `manual/requested` reads as "manual"; anything else keeps its event type beside the source. */
 function describeTrigger(trigger: string): string {
@@ -689,15 +809,21 @@ function ResponsibilityFiring({
 const TranscriptMessage = memo(function TranscriptMessage({
   commandNames = "",
   delay,
+  firstDayAnswer = false,
   role,
   text,
 }: {
   commandNames?: string;
   delay: number;
+  /** The Bot's answer to the first-day message, drawn one bubble per part. */
+  firstDayAnswer?: boolean;
   role: "user" | "assistant";
   text: string;
 }) {
   const isUser = role === "user";
+  if (!isUser && firstDayAnswer) {
+    return <FirstDayAnswer delay={delay} text={text} />;
+  }
   /*
    * Checked before anything else a person's message gets. A firing is not a person's message: the
    * chip split, the end alignment and the bubble are all wrong for it, and each one of them would
@@ -716,8 +842,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
     );
   }
   // Chat's first message, sent for the person rather than by them: the Bot's greeting goes here.
-  if (isUser && readFirstDay(text) !== null) {
-    return <FirstDayGreeting delay={delay} />;
+  const firstDay = isUser ? readFirstDay(text) : null;
+  if (firstDay !== null) {
+    return <FirstDayGreeting delay={delay} request={firstDay} />;
   }
   const align = isUser ? "end" : "start";
   // Slack/Teams turns carry a model-facing participant line; show a marker instead of the line.
@@ -1645,6 +1772,18 @@ export function ChatTranscript({
     repliesLast(toVisibleChatItems(messages)),
     isDrawn,
   );
+  /*
+   * The first day's answer and its two replies. The replies only once the run has ended, while
+   * nothing the person said or parked comes after it, and only on a first day that read mail: they
+   * answer "who you are", which the first day without mail doesn't say.
+   */
+  const firstDay = firstDayOf(items);
+  const firstDayReplies =
+    firstDay?.mail === true &&
+    firstDay.answer.size > 0 &&
+    !firstDay.replied &&
+    !busy &&
+    queued.length === 0;
 
   /*
    * ONLY WHILE THERE IS NOTHING ELSE TO LOOK AT. Once a reply starts streaming, or a tool line
@@ -1837,6 +1976,7 @@ export function ChatTranscript({
                   <TranscriptMessage
                     commandNames={commandNames}
                     delay={delays.delayFor(item.id, index, items.length)}
+                    firstDayAnswer={firstDay?.answer.has(item.id) === true}
                     role={item.role}
                     text={item.text}
                   />
@@ -1859,6 +1999,11 @@ export function ChatTranscript({
                 assertNever(item)
               ),
             )}
+            {firstDayReplies ? (
+              <MessageScrollerItem messageId="first-day-replies">
+                <FirstDayReplies />
+              </MessageScrollerItem>
+            ) : null}
           </MessageScrollerContent>
         </MessageScrollerViewport>
         {/* A floating disc, like the shell's own controls. */}

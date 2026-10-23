@@ -400,7 +400,17 @@ export function registerOAuthClientMutationOptions(queryClient: QueryClient) {
  * what makes the branch below it obligatory rather than advisory.
  */
 export function connectAccountMutationOptions(
-  returnTo: "settings" | "admin" = "settings",
+  /*
+   * Which screen the vendor's consent comes back to. `onboarding` is the setup checklist at the end
+   * of it and `onboarding-apps` its Connect your apps step: onboarding is the one page somebody who
+   * has not finished it may land on. `settings-setup` is the same checklist in Settings.
+   */
+  returnTo:
+    | "settings"
+    | "admin"
+    | "onboarding"
+    | "onboarding-apps"
+    | "settings-setup" = "settings",
 ) {
   return mutationOptions({
     mutationFn: async (serverId: string): Promise<string | null> => {

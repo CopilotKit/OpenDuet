@@ -62,6 +62,38 @@ describe("the state that travels through the vendor", () => {
     expect((await readConnectState(sealed, KEY, NOW))?.returnTo).toBe("admin");
   });
 
+  test("onboarding is a screen to return to as well", async () => {
+    const sealed = await sealConnectState(
+      {
+        userId: "user-1",
+        serverId: "google-workspace",
+        verifier: "v-1",
+        returnTo: "onboarding",
+      },
+      KEY,
+      NOW,
+    );
+    expect((await readConnectState(sealed, KEY, NOW))?.returnTo).toBe(
+      "onboarding",
+    );
+  });
+
+  test("so is onboarding's Connect your apps step", async () => {
+    const sealed = await sealConnectState(
+      {
+        userId: "user-1",
+        serverId: "google-workspace",
+        verifier: "v-1",
+        returnTo: "onboarding-apps",
+      },
+      KEY,
+      NOW,
+    );
+    expect((await readConnectState(sealed, KEY, NOW))?.returnTo).toBe(
+      "onboarding-apps",
+    );
+  });
+
   /*
    * THE OPEN REDIRECT THIS CANNOT BECOME. A destination carried through an OAuth flow is the classic
    * shape of one: the callback arrives with a fresh consent behind it, and anything it is willing to
@@ -420,6 +452,59 @@ describe("where the callback sends somebody afterwards", () => {
     expect(
       connectedAccountsUrlFor(undefined, { serverId: "google-drive" }),
     ).toBe("/connections/google-drive");
+  });
+
+  test("a connect started in onboarding returns to its checklist, either way", () => {
+    // Onboarding is the one page somebody who has not finished it may open, so both outcomes land
+    // there. Any other page would send them back to its first step.
+    expect(
+      connectedAccountsUrlFor(
+        "http://localhost:3010",
+        { serverId: "google-workspace" },
+        "onboarding",
+      ),
+    ).toBe("http://localhost:3010/onboarding?step=setup");
+    expect(
+      connectedAccountsUrlFor(
+        "http://localhost:3010",
+        { failed: true },
+        "onboarding",
+      ),
+    ).toBe("http://localhost:3010/onboarding?step=setup&connected=failed");
+  });
+
+  test("a connect started in Settings › Setup returns to Setup, either way", () => {
+    expect(
+      connectedAccountsUrlFor(
+        "http://localhost:3010",
+        { serverId: "google-workspace" },
+        "settings-setup",
+      ),
+    ).toBe("http://localhost:3010/settings/setup");
+    expect(
+      connectedAccountsUrlFor(
+        "http://localhost:3010",
+        { failed: true },
+        "settings-setup",
+      ),
+    ).toBe("http://localhost:3010/settings/setup?connected=failed");
+  });
+
+  test("a connect started on onboarding's apps step returns to that step, either way", () => {
+    expect(
+      connectedAccountsUrlFor(
+        "http://localhost:3010",
+        { serverId: "google-workspace" },
+        "onboarding-apps",
+      ),
+    ).toBe("http://localhost:3010/onboarding?step=apps");
+    expect(
+      connectedAccountsUrlFor(
+        "http://localhost:3010",
+        { failed: true },
+        "onboarding-apps",
+      ),
+    ).toBe("http://localhost:3010/onboarding?step=apps&connected=failed");
   });
 
   test("a connect started on the admin page returns to the admin page", () => {

@@ -8,6 +8,7 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ConversationView } from "@/components/channels/conversation-view";
+import { FIRST_DAY_REQUEST_WITHOUT_MAIL } from "@/components/channels/first-day-greeting";
 import { ChatSuggestionProvider } from "@/components/shell/chat-suggestion";
 import {
   DraftWatch,
@@ -20,6 +21,7 @@ import {
 } from "@/components/channels/transcript-messages";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { type AgentProfile, agentListQueryOptions } from "@/lib/agents/queries";
+import { botAppQueryOptions } from "@/lib/app-access/queries";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { frameFirstDay } from "@/lib/channels/first-day";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
@@ -128,6 +130,12 @@ function OngoingChat({
  * typed it, and the transcript draws the Bot's greeting where it sits. The composer stays usable
  * throughout: a message the person sends, or starts typing, before the greeting goes wins, and no
  * greeting is sent.
+ *
+ * WHAT IT ASKS FOR DEPENDS ON WHAT THE BOT CAN READ. The greeting waits for the app-access state of
+ * Gmail and Calendar on this Bot, the answer the checklist and the chat card draw. Only `ready` sends
+ * the request that reads mail and calendar. Anything else, including a state that could not be read,
+ * sends the one that says what it can do now and offers the Connect card, and the plan bubble over
+ * it promises no mail (see `firstDayPlan`).
  */
 function FirstMessage({
   bot,
@@ -178,11 +186,23 @@ function FirstMessage({
     }
   };
 
+  const gmail = useQuery(botAppQueryOptions(bot.id, GOOGLE_WORKSPACE));
+  const canReadMail = gmail.data?.state === "ready";
+
   useFirstDayGreeting({
-    // Whose first day, with which Bot. Waits for the account; one that failed to load still greets.
-    claimKey: me.isPending ? null : `${me.data?.id ?? "unknown"}:${bot.id}`,
+    // Whose first day, with which Bot. Waits for the account and for whether the Bot can read their
+    // mail; an account that failed to load still greets, and a state that failed reads as no mail.
+    claimKey:
+      me.isPending || gmail.isPending
+        ? null
+        : `${me.data?.id ?? "unknown"}:${bot.id}`,
     clear: () => !begun.current && !typed.current,
-    greet: () => start(frameFirstDay(FIRST_DAY_REQUEST)),
+    greet: () =>
+      start(
+        canReadMail
+          ? frameFirstDay(FIRST_DAY_REQUEST)
+          : frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+      ),
   });
 
   return (
@@ -206,6 +226,9 @@ function FirstMessage({
     </>
   );
 }
+
+/** The app the first day reads: Gmail and Google Calendar, one connection for both. */
+const GOOGLE_WORKSPACE = "google-workspace";
 
 /** A sentence in place of a screen that could not be drawn. */
 export function ScreenNotice({
