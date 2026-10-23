@@ -326,6 +326,14 @@ function sentencesOf(text: string): string[] {
 }
 
 /**
+ * A chart's part, laid out on a continuation slide: `scale` is the whole chart's largest value, so
+ * every part draws against it. Set here at save, never by the model, so it is not in the schema.
+ */
+export type ScaledBars = Extract<PageBlock, { type: "bars" }> & {
+  scale?: number;
+};
+
+/**
  * A block cut in two: its first `count` units and the rest. The units are items for a block of
  * them (a list keeps its title on the first part) and sentences, or failing that words, for text.
  */
@@ -355,7 +363,19 @@ function cut(block: PageBlock, count: number): [PageBlock, PageBlock] | null {
         { ...block, text: units.slice(count).join("").trim() },
       ];
     }
-    // A chart's bars share one scale, and a heading is one line: neither is cut.
+    // A chart too tall for a slide continues its bars on the next, every part drawn against the
+    // whole chart's largest value (`scale`), so a bar on the second slide still compares with one on
+    // the first.
+    case "bars": {
+      const scale =
+        (block as ScaledBars).scale ??
+        Math.max(...block.items.map((item) => item.value), 0);
+      return [
+        { ...block, scale, items: block.items.slice(0, count) } as PageBlock,
+        { ...block, scale, items: block.items.slice(count) } as PageBlock,
+      ];
+    }
+    // A heading is one line: it is not cut.
     default:
       return null;
   }
@@ -392,7 +412,9 @@ function firstPart(
  * A slide laid out on as many slides as it takes to show it all on a phone. Blocks go on in order
  * while they fit; one that does not starts a continuation slide, carrying a heading that would
  * otherwise end a slide with it; one too long for any slide is cut by items, or by sentence, and
- * continues. What cannot be laid out (a chart taller than a slide by itself) comes back as an issue.
+ * continues; a chart too tall for a slide by itself goes on its own slide and continues its bars on
+ * the next, on one scale. Never refused for a chart's height: that ended runs with nothing saved and
+ * nothing said. What still cannot be laid out (one unit taller than a slide) comes back as an issue.
  */
 function layOutSlide(
   slide: PageSlide,
@@ -432,7 +454,7 @@ function layOutSlide(
         issues: [
           {
             path: ["slides", at],
-            message: `This slide's ${block.type} is taller than a phone shows by itself (about ${Math.ceil(slideHeight({ title: current.title, blocks: [block] }))}px against ${SLIDE_FIT_HEIGHT}px). ${block.type === "bars" ? "Use fewer bars or shorter labels" : "Shorten it"}.`,
+            message: `This slide's ${block.type} is taller than a phone shows by itself (about ${Math.ceil(slideHeight({ title: current.title, blocks: [block] }))}px against ${SLIDE_FIT_HEIGHT}px). Shorten it.`,
           },
         ],
       };
@@ -447,7 +469,7 @@ function layOutSlide(
 /**
  * A deck as the viewer shows it: every slide laid out on as many slides as it needs (`layOutSlide`),
  * so nothing a slide holds is cut off and nothing is refused for length. What is still refused is a
- * figure too wide to draw whole even in a whole-width tile, a chart taller than a slide by itself,
+ * figure too wide to draw whole even in a whole-width tile, one unit taller than a slide by itself,
  * and a deck that runs past `MAX_LAID_OUT_SLIDES` once laid out.
  */
 export function layOutDeck(slides: readonly PageSlide[]): {

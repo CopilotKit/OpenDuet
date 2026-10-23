@@ -22,6 +22,8 @@ const blockSchema = z.discriminatedUnion("type", [
     type: z.literal("bars"),
     label: z.string().optional(),
     items: z.array(z.object({ label: z.string(), value: z.number() })),
+    // A chart continued across slides: the whole chart's largest value, so its parts compare.
+    scale: z.number().optional(),
   }),
   z.object({
     type: z.literal("list"),

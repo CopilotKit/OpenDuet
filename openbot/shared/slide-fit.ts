@@ -51,7 +51,7 @@ const TILE_GAP = 8;
 const BAR_GAP = 6;
 /** The height every bar in columns shares, so the bars compare. */
 export const BAR_PLOT = 72;
-/** In rows, the narrowest a label column is: it widens to the longest word, up to `rowLabelWidth`. */
+/** In rows, the narrowest a label column is: it widens to the widest label, up to `rowLabelWidth`. */
 export const ROW_LABEL_WIDTH = 128;
 /** In rows, the least room a bar keeps beside its label and figure. */
 const ROW_BAR = 48;
@@ -274,9 +274,11 @@ export function barsLayout(
 }
 
 /**
- * In rows, how wide the label column may be: wide enough for the longest word of any label, so a
- * word like "noreply@shopify.com" stays whole, and never so wide that the bar has less than 48px
- * beside it and the widest figure. Labels wrap at this width.
+ * In rows, how wide the label column may be: wide enough for the widest whole label, so a label
+ * like "Coastal Bank: KilnMart charge" reads on one line where the row has the room, and never so
+ * wide that the bar has less than 48px beside it and the widest figure. Labels wrap at this width
+ * only when the widest is wider than that. Widened only to the longest word, labels wrapped to two
+ * or three lines in a row with 200px to spare, and a chart by sender ran taller than a slide.
  */
 export function rowLabelWidth(
   block: Extract<SlideBlockShape, { type: "bars" }>,
@@ -287,12 +289,13 @@ export function rowLabelWidth(
     ),
   );
   const most = SLIDE_CONTENT_WIDTH - figure - ROW_BAR - 2 * ROW_SPACE;
-  const word = Math.max(
-    ...block.items.map((item) =>
-      widestPiece(item.label, CAPTION[0], "regular"),
-    ),
+  const label = Math.max(
+    ...block.items.map((item) => widthOf(item.label, CAPTION[0], "regular")),
   );
-  return Math.min(Math.floor(most), Math.ceil(Math.max(ROW_LABEL_WIDTH, word)));
+  return Math.min(
+    Math.floor(most),
+    Math.ceil(Math.max(ROW_LABEL_WIDTH, label)),
+  );
 }
 
 /** The width of the words in a tile of figures, in a row of `columns` tiles. */

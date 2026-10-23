@@ -444,6 +444,63 @@ describe("laying a slide out", () => {
   });
 });
 
+describe("a chart is never refused for its height", () => {
+  test("a chart by sender keeps each whole label on one line where the row has the room", () => {
+    const senders = [
+      "Coastal Bank: KilnMart charge",
+      "Ana Pereira, Hearth & Co",
+      "Rosa at Clayworks Supply",
+      "noreply@shopify.com",
+      "Priya Shah, accountant",
+      "Dev Patel, kiln repairs",
+      "Sam Okafor, studio",
+      "Leah Gold, gallery",
+    ];
+    const block = {
+      type: "bars" as const,
+      label: "Emails by sender",
+      items: senders.map((label, i) => ({ label, value: 12 - i })),
+    };
+    const widest = Math.max(
+      ...senders.map((label) => widthOf(label, 13, "regular")),
+    );
+    expect(rowLabelWidth(block)).toBeGreaterThanOrEqual(Math.ceil(widest));
+    const result = saved(deck({ title: "Who writes to you", blocks: [block] }));
+    expect(result.value.slides).toHaveLength(1);
+  });
+
+  test("a chart taller than a slide goes on its own slide and continues its bars on one scale", () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      label: `Wholesale order from a long-named shop ${i}`,
+      value: i + 1,
+    }));
+    const result = saved(
+      deck({
+        title: "Orders",
+        blocks: [
+          { type: "text", text: "Orders by customer this month." },
+          { type: "bars", items },
+        ],
+      }),
+    );
+    const slides = result.value.slides ?? [];
+    expect(slides.length).toBeGreaterThanOrEqual(3);
+    expect(slides[0]?.blocks.map((block) => block.type)).toEqual(["text"]);
+    const parts = slides
+      .slice(1)
+      .flatMap((slide) => slide.blocks)
+      .filter((block) => block.type === "bars");
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    // Every bar, in order, once.
+    expect(parts.flatMap((part) => part.items)).toEqual(items);
+    // Each part draws against the whole chart's largest value.
+    for (const part of parts)
+      expect((part as { scale?: number }).scale).toBe(12);
+    for (const slide of slides)
+      expect(slideHeight(slide)).toBeLessThanOrEqual(SLIDE_FIT_HEIGHT);
+  });
+});
+
 describe("what is still refused, silently", () => {
   test("a figure too wide for even a whole-width tile", () => {
     const value = "Ж".repeat(15);
@@ -459,29 +516,6 @@ describe("what is still refused, silently", () => {
       `slides.0.blocks.0.items.0.value: "${value}"`,
     );
     expect(parsed.refusal).toEndWith(FIX_SILENTLY);
-  });
-
-  test("a chart taller than a slide by itself, since its bars share one scale and aren't cut", () => {
-    const label = "A long label that wraps over three lines";
-    const parsed = parsePageInput(
-      deck({
-        title: "Orders",
-        blocks: [
-          {
-            type: "bars",
-            items: Array.from({ length: 12 }, (_, i) => ({
-              label: `${label} ${i}`,
-              value: i,
-            })),
-          },
-        ],
-      }),
-    );
-    if (parsed.ok) throw new Error("expected a refusal");
-    expect(parsed.refusal).toContain(
-      "slides.0: This slide's bars is taller than a phone shows",
-    );
-    expect(parsed.refusal).toContain("fewer bars or shorter labels");
   });
 
   test("a deck that runs past forty slides once laid out, though its written slides may run past twenty", () => {

@@ -639,14 +639,15 @@ function SlideRow({
  */
 function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
   const { items, label } = block;
-  const max = Math.max(...items.map((item) => item.value), 0);
+  // A part of a chart continued across slides draws against the whole chart's largest value.
+  const max = block.scale ?? Math.max(...items.map((item) => item.value), 0);
   const described = items.map((item) => `${item.label} ${item.value}`);
   const name = [label, described.join(", ")].filter(Boolean).join(": ");
   const tone = (index: number) =>
     index === items.length - 1 ? "violet" : "grey";
   const share = (value: number) => (max > 0 ? value / max : 0);
   const rows = barsLayout(block) === "rows";
-  // In rows, the label column takes the longest label word, as the measure does (`rowLabelWidth`).
+  // In rows, the label column takes the widest label, as the measure does (`rowLabelWidth`).
   const labelWidth = rows ? rowLabelWidth(block) : 0;
   return (
     <figure className="flex flex-col">
