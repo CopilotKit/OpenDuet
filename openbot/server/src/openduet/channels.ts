@@ -65,6 +65,14 @@ export type ChannelRecord = {
   agentIds: string[];
   lastMessageAt: string | null;
   createdAt: string;
+  /**
+   * What the conversation is called while it has no look of its own: its summary, and the last
+   * thing said in it, for "Earlier conversations" under Archived. Its thread, so the app can read
+   * what the person first asked in it.
+   */
+  summary: string | null;
+  lastMessage: string | null;
+  threadId: string;
 };
 
 export type ChannelList = {
@@ -152,6 +160,9 @@ export function createDuetChannelStore(deps: {
         description: channels.description,
         lastMessageAt: channels.lastMessageAt,
         createdAt: channels.createdAt,
+        summary: channels.summary,
+        lastMessage: channels.lastMessage,
+        threadId: intelligenceChannelMappings.threadId,
         icon: openduetChannels.icon,
         colour: openduetChannels.colour,
         archivedAt: openduetChannels.archivedAt,
@@ -203,6 +214,9 @@ export function createDuetChannelStore(deps: {
       agentIds: row.agentIds,
       lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
+      summary: row.summary,
+      lastMessage: row.lastMessage,
+      threadId: row.threadId,
     };
   }
 

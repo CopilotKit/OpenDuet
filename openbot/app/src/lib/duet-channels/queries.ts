@@ -34,6 +34,14 @@ export type DuetChannel = {
   agentIds: string[];
   lastMessageAt: string | null;
   createdAt: string;
+  /**
+   * For a conversation with no look of its own, listed under Archived as one of the "Earlier
+   * conversations": its summary, the last thing said in it, and its thread, to read what the person
+   * first asked (`conversationTitle`). Absent from a server that does not send them.
+   */
+  summary?: string | null;
+  lastMessage?: string | null;
+  threadId?: string;
 };
 
 export type DuetChannelList = {

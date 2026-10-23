@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
+import { GmailLogo, GoogleCalendarLogo } from "@/components/duet/google-logos";
 import type { DuetIconName } from "@/components/duet/icons";
 import { DuetCard, OutcomePill, Tile } from "@/components/duet/kit";
 import { deliveryQueryOptions } from "@/lib/delivery";
@@ -272,7 +273,18 @@ function SetupItem({
       data-setup-row={row.id}
       data-status={row.status}
     >
-      <Tile icon={ICONS[row.id]} size={36} tone={tone} />
+      {row.id === "gmail" ? (
+        // The apps' own marks, so the row reads as Gmail and Calendar at a glance.
+        <span
+          className="flex h-9 w-9 shrink-0 items-center justify-center gap-0.5"
+          data-tile="gmail"
+        >
+          <GmailLogo size={17} />
+          <GoogleCalendarLogo size={17} />
+        </span>
+      ) : (
+        <Tile icon={ICONS[row.id]} size={36} tone={tone} />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">

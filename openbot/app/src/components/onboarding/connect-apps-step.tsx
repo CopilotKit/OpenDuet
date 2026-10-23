@@ -1,6 +1,6 @@
-import { IconBrandGmail } from "@tabler/icons-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { GmailAndCalendarLogos } from "@/components/duet/google-logos";
 import { DuetIcon } from "@/components/duet/icons";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { agentListQueryOptions } from "@/lib/agents/queries";
@@ -132,9 +132,7 @@ function AppRow({
 
   const body = (
     <>
-      <span className="grid size-8 shrink-0 place-items-center text-duet-red">
-        <IconBrandGmail aria-hidden className="size-7" stroke={1.6} />
-      </span>
+      <GmailAndCalendarLogos size={26} />
       <span className="min-w-0 flex-1 text-left">
         <span className="type-row block text-duet-ink">{name}</span>
         {note ? (

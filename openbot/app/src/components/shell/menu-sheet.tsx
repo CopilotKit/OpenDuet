@@ -1,5 +1,9 @@
 import { IconArchive, IconChevronRight, IconStack2 } from "@tabler/icons-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  conversationTitle,
+  firstMessageQueryOptions,
+} from "@/lib/channels/conversation-title";
 import { Link, type LinkOptions, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useId, useState } from "react";
 import { BotsNavBadge } from "@/components/bot-profile/attention";
@@ -132,11 +136,26 @@ export function MenuSheet({
   const channels = [...(list.data?.channels ?? [])].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
-  const current = channels.filter((channel) => channel.archivedAt === null);
+  /*
+   * A channel is a conversation made or kept as one: it has a look of its own ("dressed"). Every
+   * other conversation is from before channels, and is listed under Archived as one of the
+   * "Earlier conversations", titled by what it is about, never as a channel named after the Bot.
+   */
+  const current = channels.filter(
+    (channel) => channel.dressed && channel.archivedAt === null,
+  );
   // Newest put away first.
   const away = channels
-    .filter((channel) => channel.archivedAt !== null)
+    .filter((channel) => channel.dressed && channel.archivedAt !== null)
     .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+  // Most recently used first. One where nothing was ever said has nothing to go back to.
+  const earlier = channels
+    .filter((channel) => !channel.dressed && channel.lastMessageAt !== null)
+    .sort((a, b) =>
+      (b.lastMessageAt ?? b.createdAt).localeCompare(
+        a.lastMessageAt ?? a.createdAt,
+      ),
+    );
 
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
@@ -178,33 +197,39 @@ export function MenuSheet({
             <RowText line={EVERYTHING_LINE} name="Everything" wrap />
           </Link>
           {/*
-           * The one part that scrolls: the channels, New channel and Archived. Short of a phone's
-           * height it does not; with many channels the rows above and below it stay put.
+           * Only the channels scroll (parity-spec 1.1), and Archived's rows once it is open. New
+           * channel and Archived stay put right under the channels however many there are, so New
+           * channel is never pushed out of reach below a long list.
            */}
-          <div className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-            {bot === undefined || list.isPending ? null : list.error ? (
-              <p className="type-sub px-3 py-2 text-duet-red" role="alert">
-                Couldn't load your channels. Reload the page.
-              </p>
-            ) : current.length > 0 ? (
-              /*
-               * Indented under Everything and joined to it by a hairline, which runs down from
-               * Everything's icon: these are the parts of the one thread, not threads beside it.
-               */
-              <ul
-                aria-label="Channels"
-                className="ml-[21px] flex flex-col border-duet-ink-3/40 border-l pl-1.5"
-              >
-                {current.map((channel) => (
-                  <li key={channel.id}>
-                    <ChannelLink channel={channel} onOpen={close} />
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+          <div className="mt-1 flex min-h-0 flex-1 flex-col">
+            <div
+              className="min-h-0 shrink overflow-y-auto overscroll-contain"
+              data-testid="drawer-channels"
+            >
+              {bot === undefined || list.isPending ? null : list.error ? (
+                <p className="type-sub px-3 py-2 text-duet-red" role="alert">
+                  Couldn't load your channels. Reload the page.
+                </p>
+              ) : current.length > 0 ? (
+                /*
+                 * Indented under Everything and joined to it by a hairline, which runs down from
+                 * Everything's icon: these are the parts of the one thread, not threads beside it.
+                 */
+                <ul
+                  aria-label="Channels"
+                  className="ml-[21px] flex flex-col border-duet-ink-3/40 border-l pl-1.5"
+                >
+                  {current.map((channel) => (
+                    <li key={channel.id}>
+                      <ChannelLink channel={channel} onOpen={close} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
             {onNewChannel && bot ? (
               <button
-                className={cn(ROW, "mt-1")}
+                className={cn(ROW, "mt-1 shrink-0")}
                 onClick={onNewChannel}
                 type="button"
               >
@@ -212,9 +237,9 @@ export function MenuSheet({
                 New channel
               </button>
             ) : null}
-            {away.length > 0 ? (
+            {away.length > 0 || earlier.length > 0 ? (
               <>
-                <h2 className="mt-1">
+                <h2 className="mt-1 shrink-0">
                   <button
                     aria-controls={archived.id}
                     aria-expanded={archived.open}
@@ -233,36 +258,64 @@ export function MenuSheet({
                     />
                   </button>
                 </h2>
-                <ul
-                  aria-label="Archived channels"
-                  className="flex flex-col"
+                <div
+                  className="min-h-0 shrink overflow-y-auto overscroll-contain"
                   hidden={!archived.open}
                   id={archived.id}
                 >
-                  {away.map((channel) => (
-                    <li className="flex items-center gap-1" key={channel.id}>
-                      <ChannelLink
-                        className="min-w-0 flex-1"
-                        channel={channel}
-                        onOpen={close}
-                      />
-                      <button
-                        aria-label={`Unarchive ${channel.name}`}
-                        className="type-label shrink-0 rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
-                        disabled={
-                          unarchive.isPending &&
-                          unarchive.variables?.id === channel.id
-                        }
-                        onClick={() =>
-                          unarchive.mutate({ id: channel.id, archived: false })
-                        }
-                        type="button"
+                  <ul aria-label="Archived channels" className="flex flex-col">
+                    {away.map((channel) => (
+                      <li className="flex items-center gap-1" key={channel.id}>
+                        <ChannelLink
+                          className="min-w-0 flex-1"
+                          channel={channel}
+                          onOpen={close}
+                        />
+                        <button
+                          aria-label={`Unarchive ${channel.name}`}
+                          className="type-label shrink-0 rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+                          disabled={
+                            unarchive.isPending &&
+                            unarchive.variables?.id === channel.id
+                          }
+                          onClick={() =>
+                            unarchive.mutate({
+                              id: channel.id,
+                              archived: false,
+                            })
+                          }
+                          type="button"
+                        >
+                          Unarchive
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {earlier.length > 0 && archived.open ? (
+                    <>
+                      {/* A label, not a heading: the menu keeps one heading level. */}
+                      <p
+                        aria-hidden
+                        className="type-label mt-2 px-3 pb-1 font-medium text-duet-ink-2"
                       >
-                        Unarchive
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                        Earlier conversations
+                      </p>
+                      <ul
+                        aria-label="Earlier conversations"
+                        className="flex flex-col"
+                      >
+                        {earlier.map((conversation) => (
+                          <li key={conversation.id}>
+                            <EarlierLink
+                              conversation={conversation}
+                              onOpen={close}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                </div>
                 {unarchive.error ? (
                   <p className="type-label px-3 text-duet-red" role="alert">
                     {unarchive.error.message}
@@ -414,6 +467,51 @@ function ChannelLink({
       to="/channels/$channelId"
     >
       {body}
+    </Link>
+  );
+}
+
+/**
+ * A conversation from before channels, under Archived: titled by its summary, else what the person
+ * first asked in it, else what was last said (`conversationTitle`), and opened as the conversation
+ * it is, at `/channel/<id>`, so opening it does not make it a channel.
+ */
+function EarlierLink({
+  conversation,
+  onOpen,
+}: {
+  conversation: DuetChannel;
+  onOpen: () => void;
+}) {
+  const agentId =
+    conversation.agentIds.length === 1 ? conversation.agentIds[0] : undefined;
+  const said = conversation.lastMessageAt !== null;
+  const first = useQuery({
+    ...firstMessageQueryOptions(
+      conversation.threadId ?? "",
+      agentId ?? "",
+      said,
+    ),
+    enabled: Boolean(
+      !conversation.summary && conversation.threadId && agentId && said,
+    ),
+  });
+  const title = conversationTitle({
+    summary: conversation.summary,
+    firstMessage: first.data,
+    lastMessage: conversation.lastMessage,
+  });
+  return (
+    <Link
+      activeProps={{ className: "bg-duet-tile" }}
+      className={cn(ROW, "min-h-11 pl-3")}
+      onClick={onOpen}
+      params={{ channelId: conversation.id }}
+      to="/channel/$channelId"
+    >
+      <span className="block min-w-0 flex-1 truncate font-normal text-[16px] text-duet-ink">
+        {title}
+      </span>
     </Link>
   );
 }

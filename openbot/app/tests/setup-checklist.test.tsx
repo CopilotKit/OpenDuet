@@ -222,6 +222,13 @@ test("Ready and Needs setup rows come from the server's answer", async () => {
   expect(
     view.getByText("3 things need setup, and 1 is required."),
   ).not.toBeNull();
+  // Gmail's row wears Gmail's and Calendar's own marks.
+  const gmail = view.container.querySelector('[data-setup-row="gmail"]');
+  expect(
+    [...(gmail?.querySelectorAll("[data-logo]") ?? [])].map((logo) =>
+      logo.getAttribute("data-logo"),
+    ),
+  ).toEqual(["gmail", "google-calendar"]);
 });
 
 test("an admin is shown the variable to set, the page, and the guide", async () => {
