@@ -71,9 +71,36 @@ export function createProactiveRoutes(
       suggestions: await store.suggestions(context.var.actor.id),
     }),
   );
-  // What the person started from a suggestion, and how each one's run stands, for Tasks.
-  routes.get("/started", async (context) =>
-    context.json({ started: await store.started(context.var.actor.id) }),
+  // What the person started from a suggestion, and where each one stands, for Tasks.
+  routes.get("/started", async (context) => {
+    const asked = Number.parseInt(context.req.query("resolved") ?? "", 10);
+    const resolvedLimit = Number.isFinite(asked)
+      ? Math.min(Math.max(asked, 0), 500)
+      : 20;
+    return context.json(
+      await store.started(context.var.actor.id, resolvedLimit),
+    );
+  });
+  routes.post("/started/:id/resolve", async (context) => {
+    await store.resolveTask(
+      context.var.actor.id,
+      context.req.param("id"),
+      true,
+    );
+    return context.json({ resolved: true });
+  });
+  routes.post("/started/:id/reopen", async (context) => {
+    await store.resolveTask(
+      context.var.actor.id,
+      context.req.param("id"),
+      false,
+    );
+    return context.json({ resolved: false });
+  });
+  routes.post("/started/:id/retry", async (context) =>
+    context.json(
+      await engine.retry(context.var.actor.id, context.req.param("id")),
+    ),
   );
   routes.post("/suggestions/:id/start", async (context) =>
     context.json({

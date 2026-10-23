@@ -96,25 +96,57 @@ export type ProactiveSuggestion = {
 };
 
 /**
- * How the turn a started suggestion asked for stands: waiting for the next sweep, running, done, or
- * given up on. A task gets one attempt, so one that errored, lost its replica mid-run or was never
- * queued has failed and stays failed.
+ * Where a started suggestion stands, as Tasks lists it.
+ *
+ * - `working`: its turn is queued, running, or waiting for its one retry after a lost lease.
+ * - `needs_input`: its turn ended on something only the person can give: a pending approval, a
+ *   question asked through a tool, or a last sentence that asks them something.
+ * - `ready_for_review`: its turn finished, and there is a reply to read.
+ * - `failed`: its turn errored, lost its lease twice, or was never queued. Never ready for review.
  */
-export type StartedRun = "queued" | "running" | "finished" | "failed";
+export type StartedState =
+  | "working"
+  | "needs_input"
+  | "ready_for_review"
+  | "failed";
 
-/** A suggestion the person started, with how its turn stands and where its results land. */
+/** A suggestion the person started, with where it stands and where its results land. */
 export type StartedSuggestion = Pick<
   ProactiveSuggestion,
   "id" | "agentId" | "title" | "detail" | "sourceApp" | "sourceLink"
 > & {
   startedAt: Date;
-  run: StartedRun;
-  /** When the run last changed: started, finished, or gave up. */
+  state: StartedState;
+  /**
+   * The next step, one line, in plain words: the reply's last sentence, the question it is waiting
+   * on, or why it failed. Null when there is none to say.
+   */
+  next: string | null;
+  /** The approval or question it stopped on, when the person's inbox also lists that request. */
+  waitingOn: { kind: "approval" | "question"; id: string } | null;
+  /** When the person checked it off. Null while it is still theirs to deal with. */
+  resolvedAt: Date | null;
+  /** When it last changed: started, finished, gave up, or was checked off. */
   at: Date;
-  /** Why it gave up, when it did and the queue kept a reason. */
-  error: string | null;
   /** The conversation the turn runs in: its research setting's. */
   channelId: string;
+};
+
+/**
+ * What the person started: everything not yet checked off, and the newest of what was, with how
+ * many older checked-off ones were left out so a screen can say so rather than drop them quietly.
+ */
+export type StartedList = {
+  started: StartedSuggestion[];
+  olderResolved: number;
+};
+
+/** What a started suggestion's turn ended on, kept on its work queue row for Tasks. */
+export type TaskOutcome = {
+  /** The last sentence of its reply. */
+  reply?: string | null;
+  /** The request it stopped on, when it was suspended for one. */
+  waiting?: { kind: string; id: string | null };
 };
 
 export class ProactiveRefusedError extends Error {

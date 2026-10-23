@@ -38,10 +38,13 @@ afterEach(() => {
 });
 
 let inbox: Record<string, unknown> = { requests: [], questions: [] };
+let started: unknown[] = [];
 function serving() {
   global.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/approvals") return Response.json(inbox);
+    if (url.startsWith("/api/proactive/started"))
+      return Response.json({ started, olderResolved: 0 });
     if (url.startsWith("/api/bots/attention"))
       return Response.json({ bots: [] });
     if (url === "/api/settings/preferences")
@@ -179,6 +182,41 @@ test("the Tasks badge counts what Needs you lists: pending actions and open ques
     await view.findByRole("link", { name: "Tasks, 3 waiting" }),
   ).toBeTruthy();
   expect(view.getByRole("link", { name: "Pages" })).toBeTruthy();
+});
+
+test("the Tasks badge counts started tasks that need input or failed, and each request only once", async () => {
+  inbox = { requests: [pending("a"), pending("b")], questions: [] };
+  const task = (id: string, state: string, waitingOn: unknown = null) => ({
+    id,
+    agentId: "openduet",
+    title: id,
+    detail: "",
+    sourceApp: null,
+    sourceLink: null,
+    startedAt: "2026-10-22T05:00:00Z",
+    state,
+    next: null,
+    waitingOn,
+    resolvedAt: null,
+    at: "2026-10-22T05:00:00Z",
+    channelId: "chat",
+  });
+  started = [
+    // Waits on request a, so a is not counted again.
+    task("asks-to-send", "needs_input", { kind: "approval", id: "a" }),
+    task("asks-in-its-reply", "needs_input"),
+    task("broke", "failed"),
+    task("running", "working"),
+    task("read", "ready_for_review"),
+    { ...task("checked", "needs_input"), resolvedAt: "2026-10-22T06:00:00Z" },
+  ];
+  serving();
+  const view = draw(<TabBar current="chat" />);
+  // Three tasks, and request b.
+  expect(
+    await view.findByRole("link", { name: "Tasks, 4 waiting" }),
+  ).toBeTruthy();
+  started = [];
 });
 
 test("with nothing waiting Tasks carries no badge", async () => {

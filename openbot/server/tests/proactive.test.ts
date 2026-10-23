@@ -9,7 +9,10 @@ import { Observable } from "rxjs";
 import { z } from "zod";
 import type { ApprovalRecord } from "../src/approvals/types";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
-import { createProactiveEngine } from "../src/proactive/engine";
+import {
+  createProactiveEngine,
+  startedTaskTestFailure,
+} from "../src/proactive/engine";
 import { createPrivateShareCheck } from "../src/proactive/private-share";
 import {
   createReadOnlyClassifier,
@@ -21,6 +24,7 @@ import {
 import type { ProactiveStore } from "../src/proactive/store";
 import type { ProactiveSetting } from "../src/proactive/types";
 import { createTurnRunner, type RunnerLike } from "@openbot/toolkit/run-turn";
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { WorkQueue } from "../src/work/queue";
 import { serverTurnAdmission } from "../src/agents/turn-admission";
 
@@ -326,6 +330,7 @@ describe("proactive run", () => {
       },
       startTask: async () => {
         writes.push("task");
+        return undefined;
       },
       catalogue: { listServers: async () => [] },
       // The real write tool is never in this turn; a call to it gets the hidden refusal.
@@ -574,5 +579,169 @@ describe("private information sharing check", () => {
     ).toBe("allowed");
     expect((await check(input)).status).toBe("allowed");
     expect(opened).toHaveLength(0);
+  });
+});
+
+describe("a started suggestion's turn", () => {
+  /** An engine with one started suggestion queued, whose turn does what `startTask` does. */
+  function withTask(
+    startTask: () => Promise<{ replyText?: string } | undefined>,
+  ) {
+    const calls: { name: string; args: unknown[] }[] = [];
+    const record =
+      (name: string, answer: unknown = undefined) =>
+      async (...args: unknown[]) => {
+        calls.push({ name, args });
+        return answer;
+      };
+    const suggestion = {
+      id: "s1",
+      ownerUserId: "owner",
+      agentId: "bot",
+      settingId: "set",
+      title: "Reply to Rosa",
+      detail: "She asked about the glaze.",
+      sourceLink: null,
+      status: "started",
+    };
+    const store = {
+      claimDue: async () => [],
+      suggestion: async () => suggestion,
+      get: async () => ({ id: "set", channelId: "chat" }),
+      recordTaskOutcome: record("recordTaskOutcome"),
+      giveUpTask: record("giveUpTask"),
+      resetTask: record("resetTask", "missing"),
+    } as unknown as ProactiveStore;
+    let queued = [
+      {
+        kind: "proactive.task",
+        key: "s1",
+        payload: { ownerUserId: "owner", suggestionId: "s1" },
+      },
+    ];
+    const queue = {
+      offer: record("offer", "queued"),
+      claim: async ({
+        kind,
+        maxAttempts,
+      }: {
+        kind: string;
+        maxAttempts: number;
+      }) => {
+        calls.push({ name: "claim", args: [kind, maxAttempts] });
+        const items = queued.filter((item) => item.kind === kind);
+        queued = queued.filter((item) => item.kind !== kind);
+        return items.map((item) => ({ ...item, attempts: 1 }));
+      },
+      renew: async () => true,
+      finish: record("finish", true),
+      release: record("release", true),
+      purge: async () => 0,
+    } as unknown as WorkQueue;
+    const engine = createProactiveEngine({
+      store,
+      memory: {
+        formMemory: async () => ({
+          id: "m",
+          duplicate: false,
+          forgotten: false,
+        }),
+      },
+      queue,
+      owner: "replica",
+      runTurn: (async () => ({ replyText: "" })) as never,
+      resolveScope: async (ownerUserId, channelId, agentId) => ({
+        ownerUserId,
+        channelId,
+        agentId,
+        threadId: "chat-thread",
+      }),
+      notify: async () => undefined,
+      startTask,
+      catalogue: { listServers: async () => [] },
+      mintThreadId: () => "t",
+    });
+    return { engine, calls };
+  }
+  const named = (calls: { name: string; args: unknown[] }[], name: string) =>
+    calls.filter((call) => call.name === name).map((call) => call.args);
+
+  test("keeps its reply's last sentence, and is claimed with one retry for a lost lease", async () => {
+    const { engine, calls } = withTask(async () => ({
+      replyText: "I drafted it.\n\nShould I send it to Rosa now?",
+    }));
+    await engine.sweep();
+    expect(named(calls, "claim")).toContainEqual(["proactive.task", 2]);
+    expect(named(calls, "recordTaskOutcome")).toEqual([
+      ["s1", { reply: "Should I send it to Rosa now?" }],
+    ]);
+    expect(named(calls, "finish")).toHaveLength(1);
+  });
+
+  test("stopped on an approval, it ends waiting on that request rather than failing", async () => {
+    const { engine, calls } = withTask(async () => {
+      throw new HeadlessToolSuspension(
+        "This action is waiting for your approval.",
+        { kind: "approval", requestId: "approval-1" },
+      );
+    });
+    await engine.sweep();
+    expect(named(calls, "recordTaskOutcome")).toEqual([
+      ["s1", { waiting: { kind: "approval", id: "approval-1" } }],
+    ]);
+    expect(named(calls, "finish")).toHaveLength(1);
+    expect(named(calls, "giveUpTask")).toEqual([]);
+  });
+
+  test("an error is final on its first try: given up with the reason, never released for another go", async () => {
+    const { engine, calls } = withTask(async () => {
+      throw new Error("The routine's turn was stopped after 180s.");
+    });
+    await engine.sweep().catch(() => undefined);
+    expect(named(calls, "giveUpTask")).toEqual([
+      ["s1", "replica", "The routine's turn was stopped after 180s.", 2],
+    ]);
+    expect(named(calls, "release")).toEqual([]);
+    expect(named(calls, "finish")).toEqual([]);
+  });
+
+  test("Try again resets a failed turn, and queues one that never was", async () => {
+    const { engine, calls } = withTask(async () => undefined);
+    expect(await engine.retry("owner", "s1")).toEqual({ retried: true });
+    expect(named(calls, "resetTask")).toEqual([["s1", 2]]);
+    expect(named(calls, "offer")).toEqual([
+      [
+        {
+          kind: "proactive.task",
+          key: "s1",
+          payload: { ownerUserId: "owner", suggestionId: "s1" },
+        },
+      ],
+    ]);
+  });
+});
+
+describe("the test-only failure for started tasks", () => {
+  test("fails the first try of a matching task only, and never in production", () => {
+    const fail = startedTaskTestFailure({
+      OPENDUET_TEST_FAIL_STARTED_TASK: "Shopify",
+    });
+    expect(() => fail({ runId: "a", text: "Fix the Shopify card" })).toThrow(
+      "stopped after 180s",
+    );
+    expect(() =>
+      fail({ runId: "a", text: "Fix the Shopify card" }),
+    ).not.toThrow();
+    expect(() => fail({ runId: "b", text: "Reply to Rosa" })).not.toThrow();
+    const off = startedTaskTestFailure({
+      OPENDUET_TEST_FAIL_STARTED_TASK: "Shopify",
+      NODE_ENV: "production",
+    });
+    expect(() =>
+      off({ runId: "c", text: "Fix the Shopify card" }),
+    ).not.toThrow();
+    expect(() =>
+      startedTaskTestFailure({})({ runId: "d", text: "Fix the Shopify card" }),
+    ).not.toThrow();
   });
 });

@@ -28,39 +28,55 @@ export type ProactiveSuggestion = {
 };
 
 /**
- * How the turn a started suggestion asked for stands: waiting for the next sweep, running, done, or
- * given up on. A started suggestion gets one attempt, so a failed one stays failed.
+ * Where a started suggestion stands, as the server decides it: working while its turn is queued or
+ * running, needs input when it ended on something only the person can give, ready for review when
+ * it finished with a reply to read, and failed when it couldn't finish. Failed is never ready.
  */
-export type StartedRun = "queued" | "running" | "finished" | "failed";
+export type StartedState =
+  | "working"
+  | "needs_input"
+  | "ready_for_review"
+  | "failed";
 
-/** A suggestion the person started, with how its turn stands and the conversation it runs in. */
+/** A suggestion the person started, with where it stands and the conversation it runs in. */
 export type StartedSuggestion = Pick<
   ProactiveSuggestion,
   "id" | "agentId" | "title" | "detail" | "sourceApp" | "sourceLink"
 > & {
   startedAt: string;
-  run: StartedRun;
-  /** When the run last changed: started, finished, or gave up. */
+  state: StartedState;
+  /** The next step, one line: its reply's last sentence, its question, or why it failed. */
+  next: string | null;
+  /** The approval or question it stopped on, when the person's inbox lists that request too. */
+  waitingOn: { kind: "approval" | "question"; id: string } | null;
+  /** When the person checked it off. Null while it is still theirs to deal with. */
+  resolvedAt: string | null;
+  /** When it last changed. */
   at: string;
-  /** Why it gave up, when it did. */
-  error: string | null;
   /** Where the turn runs and its reply lands: the research setting's conversation. */
   channelId: string;
 };
+
+/** Everything started and not checked off, the newest checked-off ones, and how many older. */
+export type StartedList = {
+  started: StartedSuggestion[];
+  olderResolved: number;
+};
+
+/** How many checked-off tasks a list shows at first, and how many more each "Show more" adds. */
+export const RESOLVED_PAGE = 20;
 
 export const proactiveKeys = {
   settings: ["proactive", "settings"] as const,
   suggestions: ["proactive", "suggestions"] as const,
   started: ["proactive", "started"] as const,
+  startedList: (resolvedLimit: number) =>
+    ["proactive", "started", { resolvedLimit }] as const,
 };
 
-/** Started and not yet ended: queued for the next sweep, or running. */
-export const stillWorking = (item: Pick<StartedSuggestion, "run">) =>
-  item.run === "queued" || item.run === "running";
-
 /**
- * How often to read what was started: every few seconds while one is still working, so it reaches
- * Ready for review when its turn ends, and otherwise as the suggestions read.
+ * How often to read what was started: every few seconds while one is still working, so it moves on
+ * when its turn ends, and otherwise as the suggestions read.
  */
 const STARTED_WORKING_POLL_MS = 5_000;
 
@@ -83,31 +99,92 @@ export const proactiveSuggestionsQueryOptions = () =>
     refetchInterval: 30_000,
   });
 
-export const startedSuggestionsQueryOptions = () =>
+export const startedSuggestionsQueryOptions = (resolvedLimit = RESOLVED_PAGE) =>
   queryOptions({
-    queryKey: proactiveKeys.started,
-    queryFn: (): Promise<StartedSuggestion[]> =>
-      client("/api/proactive/started", "started", {
-        fallback: "Could not load what you started",
-      }),
+    queryKey: proactiveKeys.startedList(resolvedLimit),
+    queryFn: async (): Promise<StartedList> =>
+      (
+        await client(`/api/proactive/started?resolved=${resolvedLimit}`, {
+          fallback: "Could not load your tasks",
+        })
+      ).json(),
     refetchInterval: (query) =>
-      query.state.data?.some(stillWorking) ? STARTED_WORKING_POLL_MS : 30_000,
+      query.state.data?.started.some(
+        (item) => item.state === "working" && !item.resolvedAt,
+      )
+        ? STARTED_WORKING_POLL_MS
+        : 30_000,
   });
 
 /**
- * What the person started, by where Tasks lists it: Working on while its turn is queued or running,
- * Ready for review once it finished, and Done, as not finished, when it gave up. A failed turn is
- * never Ready for review. Each list is newest first by when it last changed.
+ * What the person started, by the section Tasks lists it under, each newest first by when it last
+ * changed. Checked-off ones are resolved whatever they were. A failed one waits on the person, to
+ * try it again or check it off, so it is listed with what needs input.
  */
-export function startedByState(started: readonly StartedSuggestion[]) {
-  const newest = (items: StartedSuggestion[]) =>
-    items.sort((a, b) => b.at.localeCompare(a.at));
+export function startedSections(started: readonly StartedSuggestion[]) {
+  const where = (keep: (item: StartedSuggestion) => boolean) =>
+    started.filter(keep).sort((a, b) => b.at.localeCompare(a.at));
+  const active = (state: StartedState) => (item: StartedSuggestion) =>
+    !item.resolvedAt && item.state === state;
   return {
-    working: newest(started.filter(stillWorking)),
-    ready: newest(started.filter((item) => item.run === "finished")),
-    failed: newest(started.filter((item) => item.run === "failed")),
+    ready: where(active("ready_for_review")),
+    needsInput: where(
+      (item) =>
+        !item.resolvedAt &&
+        (item.state === "needs_input" || item.state === "failed"),
+    ),
+    working: where(active("working")).sort((a, b) =>
+      b.startedAt.localeCompare(a.startedAt),
+    ),
+    resolved: where((item) => Boolean(item.resolvedAt)),
   };
 }
+
+/**
+ * What needs input, counted once each: the started tasks waiting on the person, and the approvals
+ * and questions in their inbox that no started task is already waiting on. The tab's badge and
+ * the Needs input heading both read this, so they never disagree.
+ */
+export function needsInputCount(
+  inbox: { requests: { id: string }[]; questions: { id: string }[] },
+  started: readonly StartedSuggestion[] | undefined,
+): number {
+  const tasks = startedSections(started ?? []).needsInput;
+  const claimed = new Set(tasks.flatMap((item) => item.waitingOn?.id ?? []));
+  const loose = [...inbox.requests, ...inbox.questions].filter(
+    (request) => !claimed.has(request.id),
+  );
+  return tasks.length + loose.length;
+}
+
+/** Check a started task off, or put it back. */
+export const resolveStartedMutationOptions = (queryClient: QueryClient) =>
+  mutationOptions({
+    mutationFn: ({ id, resolved }: { id: string; resolved: boolean }) =>
+      client(
+        `/api/proactive/started/${encodeURIComponent(id)}/${resolved ? "resolve" : "reopen"}`,
+        {
+          method: "POST",
+          fallback: resolved
+            ? "Couldn't check this off. Try again."
+            : "Couldn't put this back. Try again.",
+        },
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
+  });
+
+/** Run a failed task's turn again. */
+export const retryStartedMutationOptions = (queryClient: QueryClient) =>
+  mutationOptions({
+    mutationFn: (id: string) =>
+      client(`/api/proactive/started/${encodeURIComponent(id)}/retry`, {
+        method: "POST",
+        fallback: "Couldn't try this again. Try once more in a moment.",
+      }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: proactiveKeys.started }),
+  });
 
 export const createProactiveSetting = (input: {
   agentId: string;

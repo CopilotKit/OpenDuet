@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { createAuditStore } from "../src/audit";
 import { createCredentialStore } from "../src/credentials";
 import { createDatabase } from "../src/db/client";
+import { approvalRequests } from "../src/db/schema/approvals";
 import { agents, users } from "../src/db/schema/core";
 import { agentProfiles } from "../src/db/schema/coworker";
 import { mcpServers, mcpTools } from "../src/db/schema/plugins";
@@ -12,7 +13,11 @@ import {
   proactiveSuggestions,
 } from "../src/db/schema/proactive";
 import { workItems } from "../src/db/schema/work";
-import { PROACTIVE_TASK_KIND } from "../src/proactive/engine";
+import {
+  PROACTIVE_TASK_KIND,
+  replyTail,
+  TASK_ATTEMPTS,
+} from "../src/proactive/engine";
 import { createMemoryIngestion } from "../src/memory/ingestion";
 import { createMemoryStore } from "../src/memory/store";
 import { MemoryRefusedError } from "../src/memory/types";
@@ -271,7 +276,7 @@ test("suggestions are delivered once, listed to their owner, and resolved once",
   ).toBe(false);
 });
 
-test("what the person started is listed with how its run stands and the conversation it lands in", async () => {
+test("what the person started is listed with where it stands, its next step, and the conversation it lands in", async () => {
   const [setting] = await proactive.list(owner);
   if (!setting) throw new Error("setting missing");
   const runId = randomUUID();
@@ -287,116 +292,275 @@ test("what the person started is listed with how its run stands and the conversa
       sourceRef: ref,
       sourceLink: null,
     });
-  const [queued, running, finished, failed, lost, unoffered, open, hidden] =
-    await Promise.all(
-      [
-        "Queued",
-        "Running",
-        "Finished",
-        "Failed",
-        "Lost",
-        "Unoffered",
-        "Open",
-        "Hidden",
-      ].map(make),
-    );
-  if (
-    !queued ||
-    !running ||
-    !finished ||
-    !failed ||
-    !lost ||
-    !unoffered ||
-    !open ||
-    !hidden
-  )
-    throw new Error("suggestions missing");
-  const started = [queued, running, finished, failed, lost, unoffered];
-  for (const suggestion of started)
-    await proactive.resolveSuggestion(owner, suggestion.id, "started");
-  await proactive.resolveSuggestion(owner, hidden.id, "dismissed");
+  const titles = [
+    "Queued",
+    "Running",
+    "Answered",
+    "Asks in its reply",
+    "Asked through a tool",
+    "Stopped on an approval",
+    "Approval decided",
+    "Errored",
+    "Lost once",
+    "Lost twice",
+    "Never queued",
+    "Just started",
+    "Open",
+    "Hidden",
+  ];
+  const made = await Promise.all(titles.map(make));
+  const by = Object.fromEntries(
+    made.map((suggestion, index) => [titles[index] as string, suggestion]),
+  );
+  const id = (title: string) => {
+    const found = by[title];
+    if (!found) throw new Error(`${title} missing`);
+    return found.id;
+  };
+  for (const title of titles.filter((t) => t !== "Open" && t !== "Hidden"))
+    await proactive.resolveSuggestion(owner, id(title), "started");
+  await proactive.resolveSuggestion(owner, id("Hidden"), "dismissed");
   // Started a few minutes ago and never queued: past the moment between starting and queueing.
   await database
     .update(proactiveSuggestions)
     .set({ resolvedAt: new Date(Date.now() - 5 * 60_000) })
-    .where(eq(proactiveSuggestions.id, unoffered.id));
-  const justStarted = await make("Just started");
-  await proactive.resolveSuggestion(owner, justStarted.id, "started");
-  // The rows `start` offers, in each state the queue can leave one in.
+    .where(eq(proactiveSuggestions.id, id("Never queued")));
+
   const later = new Date(Date.now() + 5 * 60_000);
   const earlier = new Date(Date.now() - 5 * 60_000);
+  // Task turns run one at a time: the one that asked the question finished first after it.
+  const finished = new Date(Date.now() + 60_000);
+  const askerFinished = new Date(Date.now() + 1_000);
+  const task = (title: string, values: Record<string, unknown> = {}) => ({
+    kind: PROACTIVE_TASK_KIND,
+    key: id(title),
+    payload: { ownerUserId: owner, suggestionId: id(title) },
+    ...values,
+  });
+  const pendingApproval = `${prefix}-approval-pending`;
+  const decidedApproval = `${prefix}-approval-decided`;
+  const questionKey = `${prefix}-question`;
   await database.insert(workItems).values([
-    { kind: PROACTIVE_TASK_KIND, key: queued.id },
+    task("Queued"),
+    task("Running", { claimedBy: "a", leaseUntil: later, attempts: 1 }),
+    task("Answered", { attempts: 1, finishedAt: finished }),
+    task("Asks in its reply", { attempts: 1, finishedAt: finished }),
+    task("Asked through a tool", { attempts: 1, finishedAt: askerFinished }),
+    task("Stopped on an approval", { attempts: 1, finishedAt: finished }),
+    task("Approval decided", { attempts: 1, finishedAt: finished }),
+    // Given up after an error on its first try: at the cap, with the runner's reason.
+    task("Errored", { claimedBy: "a", leaseUntil: later, attempts: 1 }),
+    // Its replica died mid-run; it gets one more go.
+    task("Lost once", { claimedBy: "b", leaseUntil: earlier, attempts: 1 }),
+    task("Lost twice", { claimedBy: "b", leaseUntil: earlier, attempts: 2 }),
+    // A question it asked in its conversation while it ran, still waiting.
     {
-      kind: PROACTIVE_TASK_KIND,
-      key: running.id,
-      claimedBy: "replica-a",
-      leaseUntil: later,
-      attempts: 1,
-    },
-    {
-      kind: PROACTIVE_TASK_KIND,
-      key: finished.id,
-      attempts: 1,
-      finishedAt: new Date(),
-    },
-    // Released after an error: one attempt only, so it is never claimed again.
-    {
-      kind: PROACTIVE_TASK_KIND,
-      key: failed.id,
-      attempts: 1,
-      runAt: later,
-      lastError: "The model stopped answering.",
-    },
-    // Its replica died mid-run, and nothing claims it again.
-    {
-      kind: PROACTIVE_TASK_KIND,
-      key: lost.id,
-      claimedBy: "replica-b",
-      leaseUntil: earlier,
-      attempts: 1,
+      kind: "person.question",
+      key: questionKey,
+      payload: {
+        actorId: owner,
+        botId: bot,
+        channelId: setting.channelId,
+        threadId: "t",
+        question: "Which box size should I quote?",
+      },
     },
   ]);
+  await database.insert(approvalRequests).values(
+    [pendingApproval, decidedApproval].map((approvalId) => ({
+      id: approvalId,
+      ownerUserId: owner,
+      runId: approvalId,
+      toolCallId: "call",
+      actionDigest: "digest",
+      ...(approvalId === decidedApproval
+        ? { status: "completed" as const, decision: "allow_once" as const }
+        : {}),
+      action: {
+        actorId: owner,
+        botId: bot,
+        toolRef: "mail/send",
+        effect: "send",
+        scope: "once",
+        args: {},
+        runId: approvalId,
+        threadId: "t",
+        toolCallId: "call",
+        actionDigest: "digest",
+      },
+    })),
+  );
+  await proactive.recordTaskOutcome(id("Answered"), {
+    reply: "The draft is in your conversation.",
+  });
+  await proactive.recordTaskOutcome(id("Asks in its reply"), {
+    reply: "Should I send it now?",
+  });
+  await proactive.recordTaskOutcome(id("Stopped on an approval"), {
+    waiting: { kind: "approval", id: pendingApproval },
+  });
+  await proactive.recordTaskOutcome(id("Approval decided"), {
+    waiting: { kind: "approval", id: decidedApproval },
+  });
+  await proactive.giveUpTask(
+    id("Errored"),
+    "a",
+    "The routine's turn was stopped after 180s.",
+    TASK_ATTEMPTS,
+  );
+  const justStarted = id("Just started");
   try {
-    const listed = await proactive.started(owner);
-    const runOf = (id: string) => listed.find((row) => row.id === id)?.run;
-    expect(runOf(queued.id)).toBe("queued");
-    expect(runOf(running.id)).toBe("running");
-    expect(runOf(finished.id)).toBe("finished");
-    expect(runOf(failed.id)).toBe("failed");
-    expect(runOf(lost.id)).toBe("failed");
-    expect(runOf(unoffered.id)).toBe("failed");
-    // Read between being marked started and being queued: still just started, not failed.
-    expect(runOf(justStarted.id)).toBe("queued");
-    // Only what was started: not what is still open, and not what was hidden.
-    expect(runOf(open.id)).toBeUndefined();
-    expect(runOf(hidden.id)).toBeUndefined();
-    const row = listed.find((entry) => entry.id === failed.id);
-    expect(row).toMatchObject({
-      agentId: bot,
-      title: "Failed",
-      channelId: setting.channelId,
-      error: "The model stopped answering.",
+    const { started, olderResolved } = await proactive.started(owner);
+    const of = (title: string) => {
+      const row = started.find((entry) => entry.id === id(title));
+      return row ? { state: row.state, next: row.next } : undefined;
+    };
+    expect(of("Queued")).toEqual({ state: "working", next: "Just started" });
+    expect(of("Running")).toEqual({ state: "working", next: "Just started" });
+    expect(of("Just started")).toEqual({
+      state: "working",
+      next: "Just started",
     });
-    expect(row?.startedAt).toBeInstanceOf(Date);
+    expect(of("Lost once")).toEqual({
+      state: "working",
+      next: "Starting again",
+    });
+    expect(of("Answered")).toEqual({
+      state: "ready_for_review",
+      next: "The draft is in your conversation.",
+    });
+    // Ending on a question to the person is waiting on them.
+    expect(of("Asks in its reply")).toEqual({
+      state: "needs_input",
+      next: "Should I send it now?",
+    });
+    expect(of("Asked through a tool")).toEqual({
+      state: "needs_input",
+      next: "Which box size should I quote?",
+    });
+    expect(of("Stopped on an approval")).toEqual({
+      state: "needs_input",
+      next: null,
+    });
+    expect(of("Approval decided")).toEqual({
+      state: "ready_for_review",
+      next: "You allowed what it asked to do.",
+    });
+    // A failure is said in plain words, never as the runner's message.
+    expect(of("Errored")).toEqual({
+      state: "failed",
+      next: "it ran out of time",
+    });
+    expect(of("Lost twice")).toEqual({
+      state: "failed",
+      next: "it was interrupted twice",
+    });
+    expect(of("Never queued")).toEqual({
+      state: "failed",
+      next: "it never started",
+    });
+    // Only what was started: not what is still open, and not what was hidden.
+    expect(of("Open")).toBeUndefined();
+    expect(of("Hidden")).toBeUndefined();
+    const waiting = started.find(
+      (entry) => entry.id === id("Stopped on an approval"),
+    );
+    expect(waiting).toMatchObject({
+      agentId: bot,
+      channelId: setting.channelId,
+      waitingOn: { kind: "approval", id: pendingApproval },
+      resolvedAt: null,
+    });
     expect(
-      listed.find((entry) => entry.id === finished.id)?.at.getTime(),
-    ).toBeGreaterThanOrEqual(
-      listed.find((entry) => entry.id === finished.id)?.startedAt.getTime() ??
-        0,
+      started.find((entry) => entry.id === id("Asked through a tool"))
+        ?.waitingOn,
+    ).toEqual({ kind: "question", id: questionKey });
+    expect(olderResolved).toBe(0);
+    expect(await proactive.started(other)).toEqual({
+      started: [],
+      olderResolved: 0,
+    });
+
+    // Checked off, it stays listed, marked; put back, it is active again. Older marks are counted.
+    await proactive.resolveTask(owner, id("Answered"), true);
+    const checked = (await proactive.started(owner)).started.find(
+      (entry) => entry.id === id("Answered"),
     );
-    expect(await proactive.started(other)).toEqual([]);
-  } finally {
-    await database.delete(workItems).where(
-      and(
-        eq(workItems.kind, PROACTIVE_TASK_KIND),
-        inArray(
-          workItems.key,
-          started.map((suggestion) => suggestion.id),
-        ),
+    expect(checked?.resolvedAt).toBeInstanceOf(Date);
+    expect(checked?.state).toBe("ready_for_review");
+    expect((await proactive.started(owner, 0)).olderResolved).toBe(1);
+    expect(
+      (await proactive.started(owner, 0)).started.some(
+        (entry) => entry.id === id("Answered"),
       ),
+    ).toBe(false);
+    await proactive.resolveTask(owner, id("Answered"), false);
+    expect(
+      (await proactive.started(owner)).started.find(
+        (entry) => entry.id === id("Answered"),
+      )?.resolvedAt,
+    ).toBeNull();
+    await expect(
+      proactive.resolveTask(other, id("Answered"), true),
+    ).rejects.toBeInstanceOf(ProactiveNotFoundError);
+    await expect(
+      proactive.resolveTask(owner, id("Open"), true),
+    ).rejects.toBeInstanceOf(ProactiveRefusedError);
+    // A turn that was never queued can still be checked off.
+    await proactive.resolveTask(owner, id("Never queued"), true);
+    expect(
+      (await proactive.started(owner)).started.find(
+        (entry) => entry.id === id("Never queued"),
+      )?.resolvedAt,
+    ).toBeInstanceOf(Date);
+
+    // Only a failed turn goes back on the queue.
+    expect(await proactive.resetTask(id("Errored"), TASK_ATTEMPTS)).toBe(
+      "reset",
     );
+    expect(
+      (await proactive.started(owner)).started.find(
+        (entry) => entry.id === id("Errored"),
+      ),
+    ).toMatchObject({ state: "working", next: "Just started" });
+    expect(await proactive.resetTask(id("Answered"), TASK_ATTEMPTS)).toBe(
+      "busy",
+    );
+    expect(await proactive.resetTask(id("Lost once"), TASK_ATTEMPTS)).toBe(
+      "busy",
+    );
+    expect(await proactive.resetTask(justStarted, TASK_ATTEMPTS)).toBe(
+      "missing",
+    );
+  } finally {
+    await database
+      .delete(workItems)
+      .where(
+        inArray(workItems.key, [...made.map((row) => row.id), questionKey]),
+      );
+    await database
+      .delete(approvalRequests)
+      .where(inArray(approvalRequests.id, [pendingApproval, decidedApproval]));
   }
+});
+
+test("a reply's last sentence is kept as its next step, without its Markdown", () => {
+  expect(
+    replyTail(
+      "I drafted the reply.\n\n- **Rosa:** she needs a yes.\n\nShould I send it now?",
+    ),
+  ).toBe("Should I send it now?");
+  expect(
+    replyTail("Sent. It's in her thread. Tell me if Rosa answers by Friday."),
+  ).toBe("Tell me if Rosa answers by Friday.");
+  // A short closing question is kept with what it asks about.
+  expect(
+    replyTail("I can draft a note to Shopify support.\n\nDo you want me to?"),
+  ).toBe("I can draft a note to Shopify support. Do you want me to?");
+  expect(replyTail("1. Check the `order` page.")).toBe("Check the order page.");
+  expect(replyTail("   \n\n")).toBeNull();
+  expect(replyTail(undefined)).toBeNull();
+  expect(replyTail("x".repeat(500))?.length).toBe(240);
 });
 
 test("Bot-formed memories carry provenance, await review, and never come back once forgotten", async () => {

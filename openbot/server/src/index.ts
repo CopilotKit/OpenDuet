@@ -214,7 +214,10 @@ import {
   REFUSAL_MARKER,
   vendorAnswer,
 } from "./plugins/tools";
-import { createProactiveEngine } from "./proactive/engine";
+import {
+  createProactiveEngine,
+  startedTaskTestFailure,
+} from "./proactive/engine";
 import {
   createPrivateShareCheck,
   PRIVATE_SHARE_TOOL_REF,
@@ -2060,6 +2063,7 @@ deliveryNotifications = (scope, input) => deliveryRouter.notify(scope, input);
  * work queue as routines. Suggestions go to the web inbox and the owner's delivery routing.
  */
 const proactiveStore = createProactiveStore(database);
+const failStartedTaskForTesting = startedTaskTestFailure(process.env);
 const proactiveEngine = createProactiveEngine({
   store: proactiveStore,
   memory: personalMemoryStore,
@@ -2087,6 +2091,7 @@ const proactiveEngine = createProactiveEngine({
       { text: input.text, agentId: null, at: new Date() },
       { id: `${input.runId}:input` },
     );
+    failStartedTaskForTesting(input);
     const result = await approvalContinuationRunner({
       ...scope,
       routineId: input.runId,
@@ -2102,6 +2107,7 @@ const proactiveEngine = createProactiveEngine({
         { text: result.replyText, agentId: scope.agentId, at: new Date() },
         { id: `${input.runId}:reply` },
       );
+    return { replyText: result.replyText };
   },
   catalogue: pluginStore,
   deniedToolNames: async (ownerUserId, agentId) => {

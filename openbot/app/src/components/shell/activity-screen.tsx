@@ -7,19 +7,19 @@ import type { ActivityItem, ActivityKind } from "@/lib/bot-lifecycle/queries";
 import { cn } from "@/lib/utils";
 
 /*
- * The rows Tasks draws for the product's own Bot's work: Working on, Coming up and Done, read from
- * the ledgers OpenBot already keeps. This was the Activity tab; its "Handled for you" list is Done
- * at the foot of Tasks now, without the approval receipts it had, and the tab is Pages.
+ * The rows Tasks draws for the product's own Bot's work: Working, Coming up and Resolved, read from
+ * the ledgers OpenBot already keeps. This was the Activity tab; its "Handled for you" list is
+ * folded under Resolved at the foot of Tasks now, without the approval receipts it had, and the tab
+ * is Pages.
  */
 
-/** One line of Working on, Coming up or Done on Tasks, from whichever ledger it came from. */
+/** One line of Working, Coming up or Resolved on Tasks, from whichever ledger it came from. */
 export type ActivityRow = {
   id: string;
   icon: DuetIconName;
   tone: TileTone;
   title: string;
-  /** The line under the title: plain words, or a status line Tasks draws for started work. */
-  detail: ReactNode;
+  detail: string;
   at: string;
   channelId: string | null;
   control?: ReactNode;
@@ -114,25 +114,73 @@ export function upcomingRow(item: ActivityItem): ActivityRow {
 }
 
 /**
- * What is finished for the person, newest first: the product's own Bot's routines, follow-ups and
- * delegated work from the ledgers OpenBot keeps, and any other finished rows Tasks adds. Tasks lists
- * them under Done. The actions the person answered are not among them: a receipt is not finished
- * work. The conversation still shows the action that ran.
+ * What the product's own Bot finished for the person, newest first: its routines, follow-ups and
+ * delegated work from the ledgers OpenBot keeps. Tasks lists them under Resolved. The actions the
+ * person answered are not among them: a receipt is not finished work, and the conversation shows
+ * the action that ran.
  */
 export function handledRows(
   completed: readonly ActivityItem[],
-  also: readonly ActivityRow[] = [],
   limit = 25,
 ): ActivityRow[] {
-  return [...completed.map(completedRow), ...also]
+  return completed
+    .map(completedRow)
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, limit);
 }
 
 /**
- * The film's "Handled for you" card, which Tasks uses for Working on, Coming up and Done: a heading,
- * then one row per thing, hairlines between. Each row carries its own time, since the things in one
- * card did not all happen at once.
+ * A Tasks section's heading: its name and how many are in it, separated by one space, in quiet grey
+ * so the rows lead. `children` sits at the heading's right.
+ */
+export function SectionHeading({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-6 items-center justify-between gap-2 px-1">
+      <h2 className="font-normal text-[15px] text-duet-ink-2 leading-5">
+        {title}
+        {count === undefined ? null : ` ${count}`}
+      </h2>
+      {children}
+    </div>
+  );
+}
+
+/** A section of Tasks: its heading and count, then its rows in one card, hairlines between. */
+export function TaskSection({
+  title,
+  items,
+}: {
+  title: string;
+  items: { key: string; node: ReactNode }[];
+}) {
+  return (
+    <section aria-label={title} className="flex flex-col gap-2">
+      <SectionHeading count={items.length} title={title} />
+      <DuetCard>
+        <ul>
+          {items.map((item, index) => (
+            <Fragment key={item.key}>
+              {index > 0 ? <Rule inset /> : null}
+              <li>{item.node}</li>
+            </Fragment>
+          ))}
+        </ul>
+      </DuetCard>
+    </section>
+  );
+}
+
+/**
+ * A section of the product's own Bot's work, from its ledgers: one row per thing, each with its own
+ * time, since the things in one section did not all happen at once.
  */
 export function ActivityCard({
   title,
@@ -144,27 +192,18 @@ export function ActivityCard({
   showTime?: boolean;
 }) {
   return (
-    <section aria-label={title}>
-      <DuetCard>
-        <div className="flex h-[54px] items-center gap-2 px-4">
-          <h2 className="type-row font-semibold">{title}</h2>
-        </div>
-        <ul>
-          {rows.map((row, index) => (
-            <Fragment key={row.id}>
-              {index > 0 ? <Rule inset /> : null}
-              <li>
-                <ActivityLine row={row} showTime={showTime} />
-              </li>
-            </Fragment>
-          ))}
-        </ul>
-      </DuetCard>
-    </section>
+    <TaskSection
+      items={rows.map((row) => ({
+        key: row.id,
+        node: <ActivityLine row={row} showTime={showTime} />,
+      }))}
+      title={title}
+    />
   );
 }
 
-function ActivityLine({
+/** One ledger row, opening its conversation when it has one, with its control or its time. */
+export function ActivityLine({
   row,
   showTime,
 }: {
