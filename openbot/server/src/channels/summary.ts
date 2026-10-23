@@ -11,6 +11,7 @@ import { and, asc, eq, isNull, notExists, sql } from "drizzle-orm";
 import { describeCheckIn, readCheckIn } from "@openbot/shared/check-in";
 import { readFirstDay } from "@openbot/shared/first-day";
 import { readFiring } from "@openbot/shared/routine-firing";
+import { readTaskBrief } from "@openbot/shared/task-brief";
 import type { Database } from "../db/client";
 import {
   channelMemberships,
@@ -304,13 +305,14 @@ async function openingOf(
   if (!rawAsked) return null;
   // A channel a routine opened has the firing frame wrapped around its first message, not a
   // person's words, and Chat's first day has the first-day frame around the request it sent for
-  // them. A check-in the Bot started has its own frame and what it found under it. Unwrapped before
-  // any of them can become the title, same as the transcript unwraps them before they can become
-  // what a person reads.
+  // them. A check-in the Bot started has its own frame and what it found under it, and a task's
+  // conversation has its frame around the person's ask. Unwrapped before any of them can become the
+  // title, same as the transcript unwraps them before they can become what a person reads.
   const checkIn = readCheckIn(rawAsked);
   const asked =
     readFirstDay(rawAsked) ??
     readFiring(rawAsked) ??
+    readTaskBrief(rawAsked) ??
     (checkIn ? describeCheckIn(checkIn) : rawAsked);
   const replied = answer ? textOf(answer.content) : "";
 

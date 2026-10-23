@@ -10,18 +10,23 @@ import {
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MANAGE_STORAGE_KEY, MenuSheet } from "@/components/shell/menu-sheet";
+import {
+  EARLIER_STORAGE_KEY,
+  MANAGE_STORAGE_KEY,
+  MenuSheet,
+} from "@/components/shell/menu-sheet";
 import { TabBar, tabForPath } from "@/components/shell/tab-bar";
 import { authKeys } from "@/lib/auth/queries";
 import { Route as ActivityRoute } from "@/routes/_authed/_app/activity";
 import { Route as InboxRoute } from "@/routes/_authed/_app/inbox";
-import { channelKeys } from "@/lib/channels/queries";
+import { type ChannelSummary, channelKeys } from "@/lib/channels/queries";
 import { deploymentKeys } from "@/lib/deployment/queries";
 import { settleReactWork } from "./settle-react-work";
 
 /**
  * The film's shell: the tab bar at the foot of Chat, Tasks and Pages, and the menu that opens on
- * Chat and the conversations, with every page OpenBot's sidebar listed under Manage and Settings.
+ * Chat, with every other conversation under Earlier conversations and every page OpenBot's sidebar
+ * listed under Manage and Settings.
  */
 
 beforeAll(() => GlobalRegistrator.register({ url: "http://localhost:3010" }));
@@ -98,9 +103,11 @@ test("the paths of the three tabs, and no tab for the pages the menu opens", () 
   expect(tabForPath("/tasks")).toBe("tasks");
   expect(tabForPath("/tasks/")).toBe("tasks");
   expect(tabForPath("/pages")).toBe("pages");
-  // A page open over the list is still the Pages tab.
+  // A page open over the list is still the Pages tab, and a task open over Tasks still Tasks.
   expect(tabForPath("/pages/page-1")).toBe("pages");
   expect(tabForPath("/pages/page-1/more")).toBeNull();
+  expect(tabForPath("/tasks/task-1")).toBe("tasks");
+  expect(tabForPath("/tasks/task-1/more")).toBeNull();
   expect(tabForPath("/activity")).toBeNull();
   expect(tabForPath("/bots")).toBeNull();
   // Any other conversation with a Bot is drawn as Chat is, in the column with the tab bar.
@@ -236,7 +243,7 @@ test("with nothing waiting Tasks carries no badge", async () => {
 });
 
 /** One conversation besides Chat, so the roster has a row to place. */
-const conversation = {
+const conversation: ChannelSummary = {
   id: "c1",
   name: "OpenDuet",
   agentIds: ["openduet"],
@@ -249,6 +256,19 @@ const conversation = {
   createdAt: "2026-10-21T09:00:00Z",
   pinned: false,
   lastReadAt: "2026-10-21T10:00:00Z",
+  taskId: null,
+};
+
+/** A task's own conversation, newer than the other: it belongs to Tasks, never to the menu. */
+const taskConversation: ChannelSummary = {
+  ...conversation,
+  id: "c-task",
+  threadId: "t-task",
+  lastMessageAt: "2026-10-21T11:00:00Z",
+  summary: "Draft a reply to Rosa",
+  lastMessage: "Here's the draft.",
+  createdAt: "2026-10-21T10:30:00Z",
+  taskId: "task-1",
 };
 
 function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
@@ -266,7 +286,7 @@ function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
       localEvaluation,
     });
     client.setQueryData(channelKeys.list(), {
-      pages: [{ channels: [conversation], nextCursor: null }],
+      pages: [{ channels: [taskConversation, conversation], nextCursor: null }],
       pageParams: [""],
     });
   };
@@ -275,7 +295,7 @@ function seedMenu(role: "admin" | "user", localEvaluation: boolean) {
 /** The menu's rows, top to bottom, as a keyboard reaches them. */
 function menuRows(dialog: HTMLElement) {
   const rows = ["link", "button", "textbox"].flatMap((role) =>
-    within(dialog).getAllByRole(role),
+    within(dialog).queryAllByRole(role),
   );
   rows.sort((a, b) =>
     a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
@@ -289,34 +309,84 @@ function manageToggle(dialog: HTMLElement) {
   return within(dialog).getByRole("button", { name: "Manage" });
 }
 
-test("the menu opens on Chat, a new conversation and the conversations, with Manage closed and Settings at the foot", async () => {
+function earlierToggle(dialog: HTMLElement) {
+  return within(dialog).getByRole("button", { name: "Earlier conversations" });
+}
+
+test("the menu opens on Chat, with Earlier conversations and Manage closed and Settings at the foot", async () => {
   serving();
   const view = draw(
     <MenuSheet onOpenChange={() => {}} open />,
     seedMenu("admin", false),
   );
   const dialog = await view.findByRole("dialog");
-  await within(dialog).findByRole("link", { name: /Ship date with Ana/ });
-  const rows = menuRows(dialog);
-  expect(rows[0]).toBe("Chat");
-  expect(rows[1]).toBe("New conversation");
-  expect(rows[2]).toBe("Search conversations");
-  expect(rows[3]).toContain("Ship date with Ana");
-  expect(rows.slice(4, 8)).toEqual(["Manage", "Settings", "Sign out", "Close"]);
+  // Chat is the one thread: nothing else is a row until Earlier conversations is opened.
+  expect(menuRows(dialog)).toEqual([
+    "Chat",
+    "Earlier conversations",
+    "Manage",
+    "Settings",
+    "Sign out",
+    "Close",
+  ]);
   expect(
     within(dialog).getByRole("link", { name: "Chat" }).getAttribute("href"),
   ).toBe("/");
+  expect(
+    within(dialog).getByRole("link", { name: "Settings" }).getAttribute("href"),
+  ).toBe("/settings");
+  expect(earlierToggle(dialog).getAttribute("aria-expanded")).toBe("false");
+  expect(manageToggle(dialog).getAttribute("aria-expanded")).toBe("false");
+  expect(
+    within(dialog).queryByRole("link", { name: "New conversation" }),
+  ).toBeNull();
+  expect(within(dialog).queryByRole("link", { name: "Bots" })).toBeNull();
+  expect(within(dialog).queryByRole("link", { name: "Admin" })).toBeNull();
+});
+
+test("Earlier conversations opens on a click, starts a new one, lists the rest without tasks' own, and is remembered", async () => {
+  serving();
+  const user = userEvent.setup({ document });
+  const first = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", false),
+  );
+  const dialog = await first.findByRole("dialog");
+  await user.click(earlierToggle(dialog));
+  expect(earlierToggle(dialog).getAttribute("aria-expanded")).toBe("true");
+  await within(dialog).findByRole("link", { name: /Ship date with Ana/ });
+  const rows = menuRows(dialog);
+  expect(rows.slice(0, 4)).toEqual([
+    "Chat",
+    "Earlier conversations",
+    "New conversation",
+    "Search conversations",
+  ]);
+  expect(rows[4]).toContain("Ship date with Ana");
+  expect(rows.slice(5)).toEqual(["Manage", "Settings", "Sign out", "Close"]);
+  // The task's conversation is newer, and still not here: it opens from Tasks.
+  expect(
+    within(dialog).queryByRole("link", { name: /Draft a reply to Rosa/ }),
+  ).toBeNull();
   expect(
     within(dialog)
       .getByRole("link", { name: "New conversation" })
       .getAttribute("href"),
   ).toBe("/start");
+  expect(window.localStorage.getItem(EARLIER_STORAGE_KEY)).toBe("open");
+
+  cleanup();
+  const again = draw(
+    <MenuSheet onOpenChange={() => {}} open />,
+    seedMenu("admin", false),
+  );
+  const reopened = await again.findByRole("dialog");
+  expect(earlierToggle(reopened).getAttribute("aria-expanded")).toBe("true");
+  await user.click(earlierToggle(reopened));
   expect(
-    within(dialog).getByRole("link", { name: "Settings" }).getAttribute("href"),
-  ).toBe("/settings");
-  expect(manageToggle(dialog).getAttribute("aria-expanded")).toBe("false");
-  expect(within(dialog).queryByRole("link", { name: "Bots" })).toBeNull();
-  expect(within(dialog).queryByRole("link", { name: "Admin" })).toBeNull();
+    within(reopened).queryByRole("link", { name: "New conversation" }),
+  ).toBeNull();
+  expect(window.localStorage.getItem(EARLIER_STORAGE_KEY)).toBe("closed");
 });
 
 test("the menu has one heading level", async () => {
@@ -334,7 +404,7 @@ test("the menu has one heading level", async () => {
   ]);
   expect(headings.map((heading) => heading.textContent)).toEqual([
     expect.any(String),
-    "Conversations",
+    "Earlier conversations",
     "Manage",
   ]);
 });

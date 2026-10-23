@@ -2,10 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import { approvalInboxOptions, waitingOnYou } from "@/lib/approvals";
-import {
-  needsInputCount,
-  startedSuggestionsQueryOptions,
-} from "@/lib/proactive";
 import { cn } from "@/lib/utils";
 
 export type ShellTab = "chat" | "tasks" | "pages";
@@ -31,24 +27,20 @@ export function tabForPath(pathname: string): ShellTab | null {
   const path = pathname.replace(/\/+$/, "") || "/";
   if (path === "/") return "chat";
   if (/^\/channel\/[^/]+$/.test(path) && path !== "/channel/new") return "chat";
-  if (path === "/tasks") return "tasks";
+  // A task opens over the Tasks list, so the list's tab stays current under it.
+  if (path === "/tasks" || /^\/tasks\/[^/]+$/.test(path)) return "tasks";
   if (path === "/pages" || /^\/pages\/[^/]+$/.test(path)) return "pages";
   return null;
 }
 
 /**
  * The floating pill at the foot of the app: Chat, Tasks and Pages, the current one on a grey
- * capsule. Tasks carries the number of things that need the person's input, counted the way its
- * "Needs input" heading counts them, so the badge and the screen never disagree: the tasks they
- * started that are waiting on them or failed, and the requests no such task is already waiting on.
+ * capsule. Tasks carries the number of things waiting on the person, counted from the same list its
+ * "Needs you" section shows, so the badge and the screen never disagree.
  */
 export function TabBar({ current }: { current: ShellTab }) {
   const inbox = useQuery(approvalInboxOptions());
-  const started = useQuery(startedSuggestionsQueryOptions());
-  const waiting = needsInputCount(
-    waitingOnYou(inbox.data),
-    started.data?.started,
-  );
+  const waiting = waitingOnYou(inbox.data).count;
   return (
     <nav
       aria-label="Main"

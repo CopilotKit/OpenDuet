@@ -1148,6 +1148,29 @@ describe("repliesLast", () => {
     ).toEqual(["check-in", "a2", "call-1", "call-2", "u2"]);
   });
 
+  test("draws the tasks the Bot started under its On it, in the order started", () => {
+    const start = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: { name: "start_task", arguments: "{}" },
+    });
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Reply to Rosa and prep Hearth." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          toolCalls: [start("call-1"), start("call-2")],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-1", content: "{}" },
+        { id: "t2", role: "tool", toolCallId: "call-2", content: "{}" },
+        { id: "a2", role: "assistant", content: "On it." },
+        { id: "u2", role: "user", content: "Thanks." },
+      ]),
+    ).toEqual(["u1", "a2", "call-1", "call-2", "u2"]);
+  });
+
   test("leaves out a call the server refused or the runtime rejected, and one not answered yet: none draws chips", () => {
     expect(
       ids([

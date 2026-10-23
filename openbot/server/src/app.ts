@@ -111,6 +111,7 @@ import {
 import { REFUSAL_MARKER, vendorAnswer } from "./plugins/tools";
 import { createPageRoutes, type PageStore } from "./openduet/pages";
 import { createSetupRoutes, type SetupSources } from "./openduet/setup";
+import { createTaskRoutes, type TaskStore } from "./openduet/task-store";
 import type { ProactiveEngine } from "./proactive/engine";
 import { createProactiveRoutes } from "./proactive/routes";
 import type { ProactiveStore } from "./proactive/store";
@@ -440,11 +441,12 @@ export function createApp(
     /** Pause, reset, Activity and attention for a person's own Bots. See agents/lifecycle.ts. */
     lifecycle?: BotLifecycleServices;
     /**
-     * What OpenDuet made for the person: the Pages tab and the viewer. See openduet/pages.ts. And
-     * the setup checklist onboarding ends on, read from this server's own configuration and state.
-     * See openduet/setup.ts. Absent, the checklist route is not mounted.
+     * What OpenDuet made for the person, and the tasks it is working on: the Pages tab and the viewer,
+     * and Chat's task cards, the task page and Tasks. See openduet/pages.ts and openduet/task-store.ts.
+     * And the setup checklist onboarding ends on, read from this server's own configuration and
+     * state. See openduet/setup.ts. Absent, the checklist route is not mounted.
      */
-    openduet?: { pages: PageStore; setup?: SetupSources };
+    openduet?: { pages: PageStore; setup?: SetupSources; tasks?: TaskStore };
   },
   /**
    * Whether to offer help self-hosting, which also hides it from a deployment that pays for
@@ -1677,6 +1679,15 @@ export function createApp(
     app.route(
       "/api/openduet/setup",
       createSetupRoutes(coworker.openduet.setup, requireUser),
+    );
+  if (coworker?.openduet?.tasks)
+    app.route(
+      "/api/openduet/tasks",
+      createTaskRoutes(
+        coworker.openduet.tasks,
+        requireUser,
+        coworker.proactive?.engine,
+      ),
     );
   if (coworker?.memory)
     app.route(

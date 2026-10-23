@@ -13,8 +13,14 @@
  * turn, in the person's own conversation, framed as a check-in it started (`shared/check-in.ts`) and
  * holding only `offer_task`, so it can say what it found and put each suggestion in the thread as a
  * card. It can still not act; the person starts a card or hides it.
+ *
+ * STARTED WORK IS A TASK. Start on a suggestion, and `start_task` from Chat, open a task: a
+ * conversation of its own with the Bot, and the record that names it (openduet/task-store.ts). The
+ * turn runs there, queued as `PROACTIVE_TASK_KIND` and picked up straight away, so Chat stays one
+ * thread with a card for each piece of work rather than splintering into it.
  */
 import { frameCheckIn } from "@openbot/shared/check-in";
+import { frameTaskBrief, frameTaskReply } from "@openbot/shared/task-brief";
 import { z } from "zod";
 import type { AuditInitiator } from "../audit";
 import type { MemoryStore } from "../memory/store";
@@ -53,6 +59,20 @@ export const PROACTIVE_TASK_KIND = "proactive.task";
  */
 export const TASK_ATTEMPTS = 2;
 const RUN_LEASE_MS = 10 * 60_000;
+/**
+ * How many times a task's turn runs: once, and once more when the first run threw or a restart cut
+ * it off. The queue's attempt cap for the kind, so a turn out of runs stays on the queue unfinished
+ * with its count and its reason, which is what reads as Failed (openduet/task-store.ts).
+ */
+export const TASK_RUNS = 2;
+/**
+ * A task's lease, shorter than research's so a turn a restart cut off is picked up again within
+ * minutes. Longer than the thread lock's two minutes (`TURN_LIMITS.lockTtlSeconds`), so the dead
+ * run's lock on the conversation has gone by the time the retry asks for it.
+ */
+const TASK_LEASE_MS = 3 * 60_000;
+/** How long a task's turn that threw waits before its one retry. */
+const TASK_RETRY_MS = 10_000;
 /** A person pressing "Run now" twice in a minute gets one run. */
 const RUN_NOW_GAP_MS = 10 * 60_000;
 /** How far back the first check-in looks, and any check-in after one that did not succeed. */
@@ -66,6 +86,49 @@ export type ProactiveScope = {
   channelId: string;
   agentId: string;
   threadId: string;
+};
+
+/** How a task began. Chat's ask is `asked`; a Start pressed on a check-in's card is `check_in`. */
+export type TaskOrigin = "asked" | "suggestion" | "check_in";
+
+/** A task as the engine needs it: which one, its conversation, and its title. */
+export type OpenedTask = { id: string; channelId: string; title: string };
+
+/** Where a task lives: opened with a conversation of its own, and found again to run its turn. */
+export type TaskThreads = {
+  /** A new conversation with this Bot, and the task record that names it. */
+  open(input: {
+    ownerUserId: string;
+    agentId: string;
+    title: string;
+    why: string | null;
+    origin: TaskOrigin;
+    suggestionId: string | null;
+    sourceApp: string | null;
+    sourceLink: string | null;
+  }): Promise<OpenedTask>;
+  /** The task's own conversation, or null once the person can no longer reach it or its Bot. */
+  scope(ownerUserId: string, taskId: string): Promise<ProactiveScope | null>;
+  /**
+   * What a failed task's turn was asked, and how many turns it has had. Throws unless the task is
+   * the person's and failed, or was marked done after failing, which it then no longer is.
+   */
+  failedTurn(
+    ownerUserId: string,
+    taskId: string,
+  ): Promise<{
+    ask: { text?: string; suggestionId?: string };
+    turns: number;
+  }>;
+};
+
+/** What `start_task` hands off from Chat: the ask in the person's words, and where it came from. */
+export type AskedTask = {
+  title: string;
+  instruction: string;
+  why?: string | undefined;
+  source?: string | undefined;
+  link?: string | undefined;
 };
 
 export type ProactiveEngineDeps = {
@@ -85,17 +148,16 @@ export type ProactiveEngineDeps = {
     scope: ProactiveScope,
     input: { id: string; text: string; kind: "reply" },
   ): Promise<void>;
+  /** Opens tasks and finds their conversations again. See `TaskThreads`. */
+  tasks: TaskThreads;
   /**
-   * A person-started turn in their channel with this text as their message. Returns the turn's
-   * reply, and whether it ended by offering reply chips: a choice put to the person, as
-   * much a question as one ending in "?".
+   * A person-started turn in a task's conversation with this text as their message. `final` is its
+   * last run: if it fails, the task has failed, and the Bot says so in the conversation.
    */
   startTask(
     scope: ProactiveScope,
-    input: { runId: string; text: string; signal: AbortSignal },
-  ): Promise<
-    { replyText?: string | null; offeredReplies?: boolean } | undefined
-  >;
+    input: { runId: string; text: string; signal: AbortSignal; final: boolean },
+  ): Promise<void>;
   /**
    * The Bot writing first: a turn in the person's channel with this framed check-in as its message,
    * under the check-in initiator, so it holds `offer_task` and nothing else. Absent, a run only
@@ -126,6 +188,8 @@ export type ProactiveEngineDeps = {
   ): Promise<string[]>;
   mintThreadId(): string;
   now?: () => Date;
+  /** How long a task's turn that threw waits for its retry. Tests pass 0. */
+  taskRetryMs?: number;
 };
 
 /** What one check-in reads: what is new since the window opened, and what is already suggested. */
@@ -217,6 +281,18 @@ export function suggestionNotice(
     ...(why ? [why] : []),
     ...(suggestion.sourceApp ? [`From ${suggestion.sourceApp}`] : []),
   ].join("\n");
+}
+
+/** The first paragraph of a suggestion's detail: why it matters, without the step after it. */
+function whyOf(detail: string): string | null {
+  return detail.split(/\n\s*\n/)[0]?.trim() || null;
+}
+
+/** What a started suggestion says to the Bot, as the person's ask: the title, the detail, the source. */
+function suggestionAsk(
+  suggestion: Pick<ProactiveSuggestion, "title" | "detail" | "sourceLink">,
+) {
+  return `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`;
 }
 
 export function createProactiveEngine(deps: ProactiveEngineDeps) {
@@ -481,24 +557,31 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     await checkIn(scope, runId, found, signal);
   }
 
+  /**
+   * Claim one queued item of this kind and run it. Research runs once: a background read is not
+   * worth repeating. A task's turn runs up to `TASK_RUNS` times (see `drainTask`).
+   */
   async function drain(
     kind: string,
     work: (
       payload: Record<string, unknown>,
       signal: AbortSignal,
+      attempt: number,
     ) => Promise<void>,
     options: {
-      maxAttempts?: number;
-      /** Instead of releasing the item for another go, end it here with the reason. */
-      giveUp?: (key: string, reason: string) => Promise<void>;
-    } = {},
+      leaseMs: number;
+      maxAttempts: number;
+      retryMs: number;
+      /** Told when a run failed and the item has another run left. */
+      onRetry?: () => void;
+    } = { leaseMs: RUN_LEASE_MS, maxAttempts: 1, retryMs: 60_000 },
   ) {
     const [item] = await deps.queue.claim({
       kind,
       owner: deps.owner,
-      leaseMs: RUN_LEASE_MS,
+      leaseMs: options.leaseMs,
       limit: 1,
-      maxAttempts: options.maxAttempts ?? 1,
+      maxAttempts: options.maxAttempts,
     });
     if (!item) return false;
     const controller = new AbortController();
@@ -508,7 +591,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           kind,
           key: item.key,
           owner: deps.owner,
-          leaseMs: RUN_LEASE_MS,
+          leaseMs: options.leaseMs,
         })
         .then(
           (kept) => {
@@ -516,23 +599,21 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           },
           () => controller.abort(),
         );
-    }, RUN_LEASE_MS / 3);
+    }, options.leaseMs / 3);
     renew.unref?.();
     try {
-      await work(item.payload, controller.signal);
+      await work(item.payload, controller.signal, item.attempts);
       await deps.queue.finish({ kind, key: item.key, owner: deps.owner });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      if (options.giveUp) await options.giveUp(item.key, reason);
-      // One attempt only: a background run is not worth repeating a partial read for.
-      else
-        await deps.queue.release({
-          kind,
-          key: item.key,
-          owner: deps.owner,
-          delayMs: 60_000,
-          reason,
-        });
+      // The reason stays on the row: at its last attempt, that row is the failure.
+      const released = await deps.queue.release({
+        kind,
+        key: item.key,
+        owner: deps.owner,
+        delayMs: options.retryMs,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      if (released && item.attempts < options.maxAttempts) options.onRetry?.();
       throw error;
     } finally {
       clearInterval(renew);
@@ -544,10 +625,142 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     settingId: z.string().min(1),
     runId: z.string().min(1),
   });
+  /*
+   * A task's turn. A suggestion's carries its id, and the ask is read from it when the turn runs; an
+   * asked one carries the ask. One queued before tasks existed has no `taskId`, and gets its task
+   * when it runs, so started work never lands in Chat again.
+   */
   const taskSchema = z.object({
     ownerUserId: z.string().min(1),
-    suggestionId: z.string().min(1),
+    taskId: z.string().min(1).optional(),
+    suggestionId: z.string().min(1).optional(),
+    text: z.string().min(1).optional(),
+    /** Queued by Try again, beside the turn that failed. */
+    again: z.boolean().optional(),
+    /** What the person said with Try again: a reply typed on the failed task. */
+    reply: z.string().min(1).optional(),
+    /** The id the person's reply was drawn under; its first run records the message with it. */
+    messageId: z.string().min(1).optional(),
+    /**
+     * How many runs this turn was queued with. A turn queued without it is from before retries,
+     * when one failure was final, so it is never run a second time.
+     */
+    runs: z.number().int().positive().optional(),
   });
+
+  /** Opens the task a started suggestion becomes, in its own conversation with the suggesting Bot. */
+  function openFor(
+    ownerUserId: string,
+    suggestion: ProactiveSuggestion,
+    origin: TaskOrigin,
+  ) {
+    return deps.tasks.open({
+      ownerUserId,
+      agentId: suggestion.agentId,
+      title: suggestion.title,
+      why: whyOf(suggestion.detail),
+      origin,
+      suggestionId: suggestion.id,
+      sourceApp: suggestion.sourceApp,
+      sourceLink: suggestion.sourceLink,
+    });
+  }
+
+  /**
+   * Runs one queued task's turn in its own conversation, as the person's message. A rerun, whether
+   * the retry or Try again, is a new run with its own id, so it never collides with what the one
+   * before left in the conversation, and it says the ask again.
+   */
+  async function runTask(
+    payload: Record<string, unknown>,
+    signal: AbortSignal,
+    attempt: number,
+  ) {
+    const work = taskSchema.parse(payload);
+    /*
+     * A turn from before retries failed once and was left, as final then. Run again now, it would
+     * act weeks late on whatever it was asked; refused instead, before anything is opened for it,
+     * so it stays failed with Try again where it has a task and opens none where it has not.
+     */
+    if (attempt > 1 && work.runs === undefined)
+      throw new ProactiveRefusedError(
+        "This turn failed before it could be tried again.",
+      );
+    let ask = work.text;
+    let taskId = work.taskId;
+    if (work.suggestionId) {
+      const suggestion = await deps.store.suggestion(
+        work.ownerUserId,
+        work.suggestionId,
+      );
+      ask = suggestionAsk(suggestion);
+      taskId ??= (await openFor(work.ownerUserId, suggestion, "suggestion")).id;
+    }
+    if (!taskId || !ask)
+      throw new ProactiveRefusedError("This task has nothing to start.");
+    const scope = await deps.tasks.scope(work.ownerUserId, taskId);
+    if (!scope)
+      throw new ProactiveRefusedError(
+        "This Bot or its channel is no longer available to you.",
+      );
+    const rerun = work.again || attempt > 1;
+    /*
+     * A turn that stops on a request only the person can answer (an approval, a question) has
+     * ended where it should, not failed: finished, never retried. A retry would ask, or send,
+     * again. The task reads as needing input from that request (openduet/task-store.ts).
+     */
+    try {
+      await deps.startTask(scope, {
+      runId:
+        work.messageId && attempt === 1
+          ? work.messageId
+          : rerun
+            ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
+            : `task-${taskId}`,
+      // A reply is the person's own message; the ask goes with it for the model, not in their bubble.
+      text: work.reply ? frameTaskReply(ask, work.reply) : frameTaskBrief(ask),
+      signal,
+      final: attempt >= TASK_RUNS,
+    });
+    } catch (error) {
+      if (!(error instanceof HeadlessToolSuspension)) throw error;
+    }
+  }
+
+  /** One queued task's turn, run up to `TASK_RUNS` times, the retry kicked off after its wait. */
+  function drainTask() {
+    const retryMs = deps.taskRetryMs ?? TASK_RETRY_MS;
+    return drain(PROACTIVE_TASK_KIND, runTask, {
+      leaseMs: TASK_LEASE_MS,
+      maxAttempts: TASK_RUNS,
+      retryMs,
+      onRetry: () => track(Bun.sleep(retryMs).then(startSoon)),
+    });
+  }
+
+  /*
+   * A task starts now, not at the next sweep a minute away: the person was just told "On it". Each
+   * start claims one queued turn, so tasks started together run side by side, one per start, and
+   * the sweep stays the backstop for any a crash left behind.
+   */
+  const kicked = new Set<Promise<unknown>>();
+  function track(work: Promise<unknown>) {
+    const tracked = work.finally(() => kicked.delete(tracked));
+    kicked.add(tracked);
+  }
+  function startSoon() {
+    track(
+      drainTask().catch((error: unknown) => {
+        console.error(
+          JSON.stringify({
+            type: "proactive-task-error",
+            error: error instanceof Error ? error.name : "UnknownError",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      }),
+    );
+  }
 
   return {
     researchInstruction,
@@ -633,31 +846,14 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       );
     },
     /**
-     * Try a started suggestion's turn again, after it failed. Only a failed one: a turn still queued,
-     * running, waiting to be retried after a lost lease, or finished is refused. A suggestion whose
-     * turn was never queued is queued now.
+     * The person chose to act on it: a task of its own, opened now, with a person-started turn in its
+     * conversation. `from` is where Start was pressed, so a check-in's card opens a `check_in` task.
      */
-    async retry(ownerUserId: string, suggestionId: string) {
-      const suggestion = await deps.store.suggestion(ownerUserId, suggestionId);
-      if (suggestion.status !== "started")
-        throw new ProactiveRefusedError(
-          "Only a started task can be tried again.",
-        );
-      const reset = await deps.store.resetTask(suggestionId, TASK_ATTEMPTS);
-      if (reset === "busy")
-        throw new ProactiveRefusedError(
-          "This task is still running or already finished.",
-        );
-      if (reset === "missing")
-        await deps.queue.offer({
-          kind: PROACTIVE_TASK_KIND,
-          key: suggestionId,
-          payload: { ownerUserId, suggestionId },
-        });
-      return { retried: true };
-    },
-    /** The person chose to act on it: a normal, person-started turn in their channel. */
-    async start(ownerUserId: string, suggestionId: string) {
+    async start(
+      ownerUserId: string,
+      suggestionId: string,
+      from: "suggestion" | "check_in" = "suggestion",
+    ): Promise<{ suggestion: ProactiveSuggestion; task: OpenedTask }> {
       const suggestion = await deps.store.suggestion(ownerUserId, suggestionId);
       const setting = await deps.store.get(ownerUserId, suggestion.settingId);
       if (
@@ -670,17 +866,97 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         throw new ProactiveRefusedError(
           "This Bot or its channel is no longer available to you.",
         );
+      // Only one Start wins: the suggestion moves from open to started once.
       const started = await deps.store.resolveSuggestion(
         ownerUserId,
         suggestionId,
         "started",
       );
+      const task = await openFor(ownerUserId, started, from);
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: suggestionId,
-        payload: { ownerUserId, suggestionId },
+        payload: {
+          ownerUserId,
+          suggestionId,
+          taskId: task.id,
+          runs: TASK_RUNS,
+        },
       });
-      return started;
+      startSoon();
+      return { suggestion: started, task };
+    },
+    /**
+     * `start_task`: work asked for in Chat, opened as a task with its own conversation and started
+     * there. No cap on how many a person has.
+     */
+    async startAsked(
+      ownerUserId: string,
+      agentId: string,
+      input: AskedTask,
+    ): Promise<OpenedTask> {
+      const task = await deps.tasks.open({
+        ownerUserId,
+        agentId,
+        title: input.title,
+        why: input.why ?? null,
+        origin: "asked",
+        suggestionId: null,
+        sourceApp: input.source ?? null,
+        sourceLink: input.link ?? null,
+      });
+      await deps.queue.offer({
+        kind: PROACTIVE_TASK_KIND,
+        key: `task:${task.id}`,
+        payload: {
+          ownerUserId,
+          taskId: task.id,
+          text: input.instruction,
+          runs: TASK_RUNS,
+        },
+      });
+      startSoon();
+      return task;
+    },
+    /**
+     * Try again: a task whose turn couldn't finish runs it once more, in the same conversation, as a
+     * turn of its own beside the one that failed. Keyed on how many turns the task has had, so two
+     * at once run once and the second is refused. A reply the person typed on the failed task is
+     * their own message in the conversation, with the ask beside it for the model, so the run has
+     * the task and their words both.
+     */
+    async again(
+      ownerUserId: string,
+      taskId: string,
+      input: { reply?: string; messageId?: string } = {},
+    ): Promise<void> {
+      const { ask, turns } = await deps.tasks.failedTurn(ownerUserId, taskId);
+      const queued = await deps.queue.offer({
+        kind: PROACTIVE_TASK_KIND,
+        key: `task:${taskId}:again:${turns}`,
+        payload: {
+          ownerUserId,
+          taskId,
+          ...ask,
+          ...(input.reply ? { reply: input.reply } : {}),
+          ...(input.messageId ? { messageId: input.messageId } : {}),
+          again: true,
+          runs: TASK_RUNS,
+        },
+      });
+      /*
+       * Two at once: the other got there first. Said, not answered as done, so a reply that lost
+       * the race goes back to the person rather than vanishing.
+       */
+      if (queued !== "queued")
+        throw new ProactiveRefusedError(
+          "OpenDuet is already running this again.",
+        );
+      startSoon();
+    },
+    /** Settles once every task started straight away has finished its turn. For tests and shutdown. */
+    async idle() {
+      while (kicked.size > 0) await Promise.allSettled([...kicked]);
     },
     /** One scheduling pass: offer what is due, then run at most one research turn and one task. */
     async sweep() {
@@ -692,60 +968,19 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           payload: { settingId: setting.id, runId },
         });
       }
-      await drain(PROACTIVE_RUN_KIND, async (payload, signal) => {
-        const { settingId, runId } = payloadSchema.parse(payload);
-        await run(settingId, runId, signal);
-      });
-      await drain(
-        PROACTIVE_TASK_KIND,
-        async (payload, signal) => {
-          const { ownerUserId, suggestionId } = taskSchema.parse(payload);
-          const suggestion = await deps.store.suggestion(
-            ownerUserId,
-            suggestionId,
-          );
-          const setting = await deps.store.get(
-            ownerUserId,
-            suggestion.settingId,
-          );
-          const scope = await deps.resolveScope(
-            ownerUserId,
-            setting.channelId,
-            suggestion.agentId,
-          );
-          if (!scope)
-            throw new ProactiveRefusedError(
-              "This Bot or its channel is no longer available to you.",
-            );
-          // What it ended on, kept for Tasks: the reply's last sentence, or the request it stopped on.
-          try {
-            const result = await deps.startTask(scope, {
-              runId: `suggestion-${suggestion.id}`,
-              text: `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`,
-              signal,
-            });
-            const ending = replyEnding(result?.replyText);
-            await deps.store.recordTaskOutcome(suggestion.id, {
-              reply: ending.tail,
-              asks: ending.asks || Boolean(result?.offeredReplies),
-            });
-          } catch (error) {
-            // Stopped on a request only the person can answer. That is where it ended, not a failure.
-            if (!(error instanceof HeadlessToolSuspension)) throw error;
-            await deps.store.recordTaskOutcome(suggestion.id, {
-              waiting: {
-                kind: error.waiting.kind,
-                id: error.waiting.requestId ?? null,
-              },
-            });
-          }
-        },
-        {
-          maxAttempts: TASK_ATTEMPTS,
-          giveUp: (key, reason) =>
-            deps.store.giveUpTask(key, deps.owner, reason, TASK_ATTEMPTS),
-        },
-      );
+      /*
+       * Side by side, so a research run that throws or takes its ten minutes never holds back a
+       * task's turn, which is the only path a turn cut off by a restart is retried by.
+       */
+      const [research, task] = await Promise.allSettled([
+        drain(PROACTIVE_RUN_KIND, async (payload, signal) => {
+          const { settingId, runId } = payloadSchema.parse(payload);
+          await run(settingId, runId, signal);
+        }),
+        drainTask(),
+      ]);
+      for (const outcome of [research, task])
+        if (outcome.status === "rejected") throw outcome.reason;
     },
   };
 }

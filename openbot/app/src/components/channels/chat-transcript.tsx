@@ -54,6 +54,7 @@ import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
 import { readFirstDay } from "@/lib/channels/first-day";
+import { readTaskBrief } from "@/lib/channels/task-brief";
 import {
   type CheckIn,
   CheckInArrivalContext,
@@ -896,9 +897,11 @@ const TranscriptMessage = memo(function TranscriptMessage({
     );
   }
   const align = isUser ? "end" : "start";
+  // A task's first message is the person's ask under a frame the model reads. They see their ask.
+  const asked = (isUser ? readTaskBrief(text) : null) ?? text;
   // Slack/Teams turns carry a model-facing participant line; show a marker instead of the line.
-  const origin = isUser ? splitChatOrigin(text) : null;
-  const said = origin ? origin.text : text;
+  const origin = isUser ? splitChatOrigin(asked) : null;
+  const said = origin ? origin.text : asked;
   const invoked = isUser ? splitSkillChip(said, commandNames) : null;
 
   return (

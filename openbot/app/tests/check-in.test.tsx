@@ -107,14 +107,19 @@ function checkedIn(offered: unknown): Message[] {
  * Answers the one suggestion with `status`, the open list with what is still open, and records
  * each start or dismiss.
  */
+/** What each start or dismiss sent, in order. */
+const bodies: unknown[] = [];
+
 function serve(initial: "open" | "started" | "dismissed") {
   let status = initial;
   const calls: string[] = [];
+  bodies.length = 0;
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input).replace(/^.*\/api/, "/api");
       if (init?.method === "POST") {
         calls.push(`POST ${path}`);
+        bodies.push(init.body ? JSON.parse(String(init.body)) : undefined);
         status = path.endsWith("/start") ? "started" : "dismissed";
         return Response.json({ suggestion: { ...PRIYA, status } });
       }
@@ -222,6 +227,8 @@ describe("a check-in in Chat", () => {
         `POST /api/proactive/suggestions/${PRIYA.id}/start`,
       ]),
     );
+    // It opens as a task that began at this check-in.
+    expect(bodies).toEqual([{ from: "check_in" }]);
     await waitFor(() => expect(view.getByText("Started")).toBeTruthy());
     // The same card, with its title, and the line where its buttons were.
     const answered = view.getByRole("region", {

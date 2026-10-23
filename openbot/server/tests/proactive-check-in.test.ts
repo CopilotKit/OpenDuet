@@ -11,6 +11,7 @@ import {
   type ProactiveScope,
   researchInstruction,
   suggestionNotice,
+  type TaskThreads,
 } from "../src/proactive/engine";
 import {
   checkInInitiator,
@@ -29,6 +30,17 @@ import {
   proactiveSettingInputSchema,
 } from "../src/proactive/types";
 import type { WorkQueue } from "../src/work/queue";
+
+/** These engines never start a task; one that tried would fail the test loudly. */
+const NO_TASKS: TaskThreads = {
+  open: async () => {
+    throw new Error("This test never opens a task.");
+  },
+  scope: async () => null,
+  failedTurn: async () => {
+    throw new Error("This test never retries a task.");
+  },
+};
 
 /**
  * Background research as check-ins: each reads only what is new, most end silently, and one that
@@ -190,6 +202,7 @@ async function checkIn(options: {
     notify: async (scope, input) => {
       notified.push({ scope, text: input.text });
     },
+    tasks: NO_TASKS,
     startTask: async () => {
       throw new Error("A check-in never starts a task.");
     },
@@ -537,6 +550,7 @@ describe("what a check-in may call", () => {
       runTurn: async () => ({ replyText: "" }),
       resolveScope: async () => null,
       notify: async () => undefined,
+      tasks: NO_TASKS,
       startTask: async () => undefined,
       catalogue: { listServers: async () => [] },
       deniedToolNames: async (_owner, _agent, initiator) => {

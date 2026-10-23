@@ -10,7 +10,12 @@ import { buildMorningBrief, type CallTool, openduetTools } from "./brief";
 import { offerTools } from "./offers";
 import { createPageStore, type PageStore, pageTools } from "./pages";
 import { replyTools } from "./replies";
-import { type TaskSink, taskDetail, taskTools } from "./tasks";
+import {
+  type TaskSink,
+  type TaskStarter,
+  taskDetail,
+  taskTools,
+} from "./tasks";
 import type { Complete } from "./triage";
 
 /**
@@ -31,6 +36,11 @@ export function createOpenDuetTools(deps: {
   ) => Promise<{ id: string; threadId: string }>;
   /** Where `make_page` saves. The same store answers /api/openduet/pages. */
   pages?: PageStore;
+  /**
+   * Where `start_task` opens a task and starts it: the proactive engine's `startAsked`, which runs
+   * started suggestions too. Absent, the tool is not held.
+   */
+  startTask?: TaskStarter;
 }): (
   actorId: string,
   botId: string,
@@ -106,7 +116,7 @@ export function createOpenDuetTools(deps: {
         ),
     }),
     ...replyTools({ initiator }),
-    ...taskTools({ actorId, botId, initiator, save }),
+    ...taskTools({ actorId, botId, initiator, save, start: deps.startTask }),
     ...offerTools({
       actorId,
       initiator,

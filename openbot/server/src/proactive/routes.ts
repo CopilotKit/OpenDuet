@@ -71,37 +71,6 @@ export function createProactiveRoutes(
       suggestions: await store.suggestions(context.var.actor.id),
     }),
   );
-  // What the person started from a suggestion, and where each one stands, for Tasks.
-  routes.get("/started", async (context) => {
-    const asked = Number.parseInt(context.req.query("resolved") ?? "", 10);
-    const resolvedLimit = Number.isFinite(asked)
-      ? Math.min(Math.max(asked, 0), 500)
-      : 20;
-    return context.json(
-      await store.started(context.var.actor.id, resolvedLimit),
-    );
-  });
-  routes.post("/started/:id/resolve", async (context) => {
-    await store.resolveTask(
-      context.var.actor.id,
-      context.req.param("id"),
-      true,
-    );
-    return context.json({ resolved: true });
-  });
-  routes.post("/started/:id/reopen", async (context) => {
-    await store.resolveTask(
-      context.var.actor.id,
-      context.req.param("id"),
-      false,
-    );
-    return context.json({ resolved: false });
-  });
-  routes.post("/started/:id/retry", async (context) =>
-    context.json(
-      await engine.retry(context.var.actor.id, context.req.param("id")),
-    ),
-  );
   // One of the person's suggestions, whatever its status: how a card in Chat says Started or Hidden.
   routes.get("/suggestions/:id", async (context) =>
     context.json({
@@ -111,13 +80,20 @@ export function createProactiveRoutes(
       ),
     }),
   );
+  /*
+   * Starting one opens it as a task, in a conversation of its own (engine.ts). A check-in's card says
+   * so with `{ "from": "check_in" }`; every other Start sends nothing.
+   */
   routes.post("/suggestions/:id/start", async (context) =>
-    context.json({
-      suggestion: await engine.start(
+    context.json(
+      await engine.start(
         context.var.actor.id,
         context.req.param("id"),
+        (await optionalBody(context.req.raw))?.from === "check_in"
+          ? "check_in"
+          : "suggestion",
       ),
-    }),
+    ),
   );
   routes.post("/suggestions/:id/dismiss", async (context) =>
     context.json({
@@ -137,4 +113,16 @@ async function body(request: Request): Promise<unknown> {
   } catch {
     throw new ProactiveRefusedError("The settings could not be read.");
   }
+}
+
+/** A body that may be absent. Present, it has to be JSON. */
+async function optionalBody(
+  request: Request,
+): Promise<Record<string, unknown> | null> {
+  if (!request.headers.get("content-type")?.includes("application/json"))
+    return null;
+  const value = await body(request);
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
