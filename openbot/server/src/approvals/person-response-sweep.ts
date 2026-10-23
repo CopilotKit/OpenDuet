@@ -1,3 +1,4 @@
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import { z } from "zod";
 import type { RunAssertion } from "../agents/callback-token";
@@ -76,15 +77,32 @@ export function createPersonResponseTick(deps: {
             "The saved question owner does not match.",
           );
         await authoriseQuestion(payload.question);
-        const outcome = await resumePersonQuestion({
-          ownerUserId: payload.ownerUserId,
-          question: payload.question,
-          response: payload.response,
-          messageId: `person-response:${item.key}`,
-          runTurn: approvalContinuationRunner,
-          responsibilities: responsibilityStore,
-          responsibilityTurn: responsibilityAnswerTurn,
-        });
+        let outcome: { replyText: string };
+        try {
+          outcome = await resumePersonQuestion({
+            ownerUserId: payload.ownerUserId,
+            question: payload.question,
+            response: payload.response,
+            messageId: `person-response:${item.key}`,
+            runTurn: approvalContinuationRunner,
+            responsibilities: responsibilityStore,
+            responsibilityTurn: responsibilityAnswerTurn,
+          });
+        } catch (error) {
+          /*
+           * Carried on with the answer, then stopped on a decision only the person can make: the
+           * conversation now waits on that, and this answer is done. Thrown, the answer was
+           * recorded as failed and the conversation was left waiting on nothing anybody could see.
+           * (Builder C's fix on #37, carried here.)
+           */
+          if (!(error instanceof HeadlessToolSuspension)) throw error;
+          await approvalQueue.finish({
+            kind: item.kind,
+            key: item.key,
+            owner: personResponseOwner,
+          });
+          return;
+        }
         const source = await sourceForCoordinationRun({
           ...payload.question,
           botId: questionConversationBot(payload.question),

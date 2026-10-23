@@ -495,6 +495,8 @@ describe("private information sharing check", () => {
       store: {
         rules: async () => rules as never,
         list: async () => [],
+        // The answer this send spends; a fake that always has one to spend.
+        consume: async () => true,
         open: async (action: never) => {
           opened.push(action);
           return { id: "approval-1", status } as ApprovalRecord;

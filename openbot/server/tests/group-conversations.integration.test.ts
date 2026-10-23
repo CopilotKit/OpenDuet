@@ -534,6 +534,7 @@ describe("group conversations in PostgreSQL", () => {
         },
         list: async () => [],
         rules: async () => [],
+        consume: async () => true,
       },
     });
     const { conversations } = service({
@@ -596,6 +597,7 @@ describe("group conversations in PostgreSQL", () => {
           ({ id: `${prefix}-held-relay`, status: decision }) as never,
         list: async () => [],
         rules: async () => [],
+        consume: async () => true,
       },
     });
     const { conversations, audit } = service({
@@ -647,6 +649,7 @@ describe("group conversations in PostgreSQL", () => {
           ({ id: `${prefix}-stream-share`, status: "pending" }) as never,
         list: async () => [],
         rules: async () => [],
+        consume: async () => true,
       },
     });
     let channelId = "";
@@ -704,6 +707,7 @@ describe("group conversations in PostgreSQL", () => {
           ({ id: `${prefix}-handed-share`, status: "pending" }) as never,
         list: async () => [],
         rules: async () => [],
+        consume: async () => true,
       },
     });
     let channelId = "";
