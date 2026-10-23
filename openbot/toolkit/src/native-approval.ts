@@ -63,7 +63,14 @@ export async function executeNativeApprovalTool<T>(
   try {
     return await withApprovalContext(continuation, execute);
   } catch (error) {
-    if (error instanceof HeadlessToolSuspension) {
+    /*
+     * The run stops on the first decision. Another call the same step made can still stop on a
+     * decision of its own while this one is ending the run: that decision stands, is drawn as its
+     * own card, and is carried on with the first in one continuation once both are answered
+     * (`server/src/approvals/service.ts`, `carryOn`). It must not replace the decision the run
+     * already ended on.
+     */
+    if (error instanceof HeadlessToolSuspension && !run.waiting) {
       run.waiting = error;
       run.suspend(error);
     }
