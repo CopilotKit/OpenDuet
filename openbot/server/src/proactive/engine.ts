@@ -11,9 +11,13 @@
 import { z } from "zod";
 import type { AuditInitiator } from "../audit";
 import type { MemoryStore } from "../memory/store";
+import { REPLIES_TOOL } from "../openduet/replies";
 import { REFUSAL_MARKER } from "../plugins/tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
-import type { HeadlessTool } from "@openbot/toolkit/headless-tools";
+import {
+  type HeadlessTool,
+  HeadlessToolSuspension,
+} from "@openbot/toolkit/headless-tools";
 import type { WorkQueue } from "../work/queue";
 import {
   proactiveInitiator,
@@ -32,6 +36,12 @@ import {
 
 export const PROACTIVE_RUN_KIND = "proactive.run";
 export const PROACTIVE_TASK_KIND = "proactive.task";
+/**
+ * How many times a started suggestion's turn is handed out: once, and once more only when its
+ * replica died mid-run. An error is final on the first try (`giveUpTask`), because the turn may
+ * already have done part of the work, and the person decides whether to try again.
+ */
+export const TASK_ATTEMPTS = 2;
 const RUN_LEASE_MS = 10 * 60_000;
 /** A person pressing "Run now" twice in a minute gets one run. */
 const RUN_NOW_GAP_MS = 10 * 60_000;
@@ -60,11 +70,17 @@ export type ProactiveEngineDeps = {
     scope: ProactiveScope,
     input: { id: string; text: string; kind: "reply" },
   ): Promise<void>;
-  /** A person-started turn in their channel with this text as their message. */
+  /**
+   * A person-started turn in their channel with this text as their message. Returns the turn's
+   * reply, and whether it ended by offering reply chips: a choice put to the person, as
+   * much a question as one ending in "?".
+   */
   startTask(
     scope: ProactiveScope,
     input: { runId: string; text: string; signal: AbortSignal },
-  ): Promise<void>;
+  ): Promise<
+    { replyText?: string | null; offeredReplies?: boolean } | undefined
+  >;
   catalogue: {
     listServers(): Promise<
       { id: string; title: string; tools: { ref: string }[] }[]
@@ -278,13 +294,18 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       payload: Record<string, unknown>,
       signal: AbortSignal,
     ) => Promise<void>,
+    options: {
+      maxAttempts?: number;
+      /** Instead of releasing the item for another go, end it here with the reason. */
+      giveUp?: (key: string, reason: string) => Promise<void>;
+    } = {},
   ) {
     const [item] = await deps.queue.claim({
       kind,
       owner: deps.owner,
       leaseMs: RUN_LEASE_MS,
       limit: 1,
-      maxAttempts: 1,
+      maxAttempts: options.maxAttempts ?? 1,
     });
     if (!item) return false;
     const controller = new AbortController();
@@ -308,14 +329,17 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       await work(item.payload, controller.signal);
       await deps.queue.finish({ kind, key: item.key, owner: deps.owner });
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (options.giveUp) await options.giveUp(item.key, reason);
       // One attempt only: a background run is not worth repeating a partial read for.
-      await deps.queue.release({
-        kind,
-        key: item.key,
-        owner: deps.owner,
-        delayMs: 60_000,
-        reason: error instanceof Error ? error.message : String(error),
-      });
+      else
+        await deps.queue.release({
+          kind,
+          key: item.key,
+          owner: deps.owner,
+          delayMs: 60_000,
+          reason,
+        });
       throw error;
     } finally {
       clearInterval(renew);
@@ -400,6 +424,30 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         "dismissed",
       );
     },
+    /**
+     * Try a started suggestion's turn again, after it failed. Only a failed one: a turn still queued,
+     * running, waiting to be retried after a lost lease, or finished is refused. A suggestion whose
+     * turn was never queued is queued now.
+     */
+    async retry(ownerUserId: string, suggestionId: string) {
+      const suggestion = await deps.store.suggestion(ownerUserId, suggestionId);
+      if (suggestion.status !== "started")
+        throw new ProactiveRefusedError(
+          "Only a started task can be tried again.",
+        );
+      const reset = await deps.store.resetTask(suggestionId, TASK_ATTEMPTS);
+      if (reset === "busy")
+        throw new ProactiveRefusedError(
+          "This task is still running or already finished.",
+        );
+      if (reset === "missing")
+        await deps.queue.offer({
+          kind: PROACTIVE_TASK_KIND,
+          key: suggestionId,
+          payload: { ownerUserId, suggestionId },
+        });
+      return { retried: true };
+    },
     /** The person chose to act on it: a normal, person-started turn in their channel. */
     async start(ownerUserId: string, suggestionId: string) {
       const suggestion = await deps.store.suggestion(ownerUserId, suggestionId);
@@ -440,29 +488,183 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         const { settingId, runId } = payloadSchema.parse(payload);
         await run(settingId, runId, signal);
       });
-      await drain(PROACTIVE_TASK_KIND, async (payload, signal) => {
-        const { ownerUserId, suggestionId } = taskSchema.parse(payload);
-        const suggestion = await deps.store.suggestion(
-          ownerUserId,
-          suggestionId,
-        );
-        const setting = await deps.store.get(ownerUserId, suggestion.settingId);
-        const scope = await deps.resolveScope(
-          ownerUserId,
-          setting.channelId,
-          suggestion.agentId,
-        );
-        if (!scope)
-          throw new ProactiveRefusedError(
-            "This Bot or its channel is no longer available to you.",
+      await drain(
+        PROACTIVE_TASK_KIND,
+        async (payload, signal) => {
+          const { ownerUserId, suggestionId } = taskSchema.parse(payload);
+          const suggestion = await deps.store.suggestion(
+            ownerUserId,
+            suggestionId,
           );
-        await deps.startTask(scope, {
-          runId: `suggestion-${suggestion.id}`,
-          text: `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`,
-          signal,
-        });
-      });
+          const setting = await deps.store.get(
+            ownerUserId,
+            suggestion.settingId,
+          );
+          const scope = await deps.resolveScope(
+            ownerUserId,
+            setting.channelId,
+            suggestion.agentId,
+          );
+          if (!scope)
+            throw new ProactiveRefusedError(
+              "This Bot or its channel is no longer available to you.",
+            );
+          // What it ended on, kept for Tasks: the reply's last sentence, or the request it stopped on.
+          try {
+            const result = await deps.startTask(scope, {
+              runId: `suggestion-${suggestion.id}`,
+              text: `${suggestion.title}\n\n${suggestion.detail}${suggestion.sourceLink ? `\n\nSource: ${suggestion.sourceLink}` : ""}`,
+              signal,
+            });
+            const ending = replyEnding(result?.replyText);
+            await deps.store.recordTaskOutcome(suggestion.id, {
+              reply: ending.tail,
+              asks: ending.asks || Boolean(result?.offeredReplies),
+            });
+          } catch (error) {
+            // Stopped on a request only the person can answer. That is where it ended, not a failure.
+            if (!(error instanceof HeadlessToolSuspension)) throw error;
+            await deps.store.recordTaskOutcome(suggestion.id, {
+              waiting: {
+                kind: error.waiting.kind,
+                id: error.waiting.requestId ?? null,
+              },
+            });
+          }
+        },
+        {
+          maxAttempts: TASK_ATTEMPTS,
+          giveUp: (key, reason) =>
+            deps.store.giveUpTask(key, deps.owner, reason, TASK_ATTEMPTS),
+        },
+      );
     },
   };
 }
 export type ProactiveEngine = ReturnType<typeof createProactiveEngine>;
+
+/**
+ * Development only: fail the first try of each started task whose text contains the marker in
+ * `OPENDUET_TEST_FAIL_STARTED_TASK`, the way a turn that ran out of time fails, so a failed task
+ * and Try again can be seen without breaking anything real. Off when the variable is unset, and
+ * never in production.
+ */
+export function startedTaskTestFailure(
+  environment: Readonly<Record<string, string | undefined>>,
+) {
+  const marker =
+    environment.NODE_ENV?.trim() === "production"
+      ? ""
+      : (environment.OPENDUET_TEST_FAIL_STARTED_TASK?.trim() ?? "");
+  const failed = new Set<string>();
+  return (input: { runId: string; text: string }) => {
+    if (!marker || !input.text.includes(marker) || failed.has(input.runId))
+      return;
+    failed.add(input.runId);
+    throw new Error("The routine's turn was stopped after 180s.");
+  };
+}
+
+/**
+ * Whether the turn that answered `messageId` ended by offering reply chips: an assistant message
+ * after it, in the thread's history, called the chips tool. A choice put to the person, as much a
+ * question as one ending in "?".
+ */
+export function endedOnReplies(
+  messages: readonly {
+    id: string;
+    role: string;
+    toolCalls?: { name: string }[];
+  }[],
+  messageId: string,
+): boolean {
+  const asked = messages.findLastIndex((message) => message.id === messageId);
+  if (asked < 0) return false;
+  return messages
+    .slice(asked + 1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        (message.toolCalls ?? []).some((call) => call.name === REPLIES_TOOL),
+    );
+}
+
+/** How long a kept reply tail may be. A next step is one line on Tasks. */
+const REPLY_TAIL_MAX = 240;
+/** A last sentence shorter than this is kept with the one before it. */
+const SHORT_SENTENCE = 20;
+
+/** A paragraph that is a list: every line of it is an item. */
+const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/;
+/** A paragraph that is something the Bot drafted for the person, not what it says to them. */
+const DRAFT =
+  /^\s*(?:>|```|["“'‘]|\*{0,2}_{0,2}(?:draft|subject|to|dear|hi|hello)\b[^\n]{0,40}?:)/i;
+/** What can trail a question and still leave it one: closing quotes, brackets, emoji, spaces. */
+const TRAILING = /(?:[\s"”'’)\]}»\p{Extended_Pictographic}]|\uFE0F|\u200D)+$/u;
+
+/** Whether a sentence asks something, once what trails its question mark is set aside. */
+const asksIn = (sentence: string) =>
+  sentence.replace(TRAILING, "").endsWith("?");
+
+const plain = (line: string) =>
+  line
+    .replace(/^\s*(?:[-*+>•]|#{1,6}|\d+[.)])\s+/, "")
+    .replace(/[*_`]+/g, "")
+    .trim();
+
+/**
+ * How a reply ends, for Tasks: the sentence to show as the next step, and whether it asks the
+ * person something.
+ *
+ * A Bot ends a turn on what comes next, in the last paragraph it writes to the person. Lists and
+ * drafts that close a reply are what it prepared, not what it says, so they are set aside. Within
+ * that last paragraph its last question is the next step, even with a remark after it; without
+ * one, its last sentence is. A short closing sentence keeps the one before it, so "Do you want me
+ * to?" never stands alone. Null when there is nothing to say.
+ */
+export function replyEnding(reply: string | null | undefined): {
+  tail: string | null;
+  asks: boolean;
+} {
+  const paragraphs = (reply ?? "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => /[\p{L}\p{N}]/u.test(paragraph));
+  const spoken = paragraphs.filter((paragraph) => {
+    const lines = paragraph.split("\n").filter((line) => line.trim());
+    return !(
+      lines.every((line) => LIST_ITEM.test(line)) || DRAFT.test(paragraph)
+    );
+  });
+  const kept = spoken.length ? spoken : paragraphs.slice(-1);
+  const sentencesOf = (paragraph: string | undefined) =>
+    (paragraph ?? "")
+      .split("\n")
+      .map(plain)
+      .flatMap((line) => line.split(/(?<=[.!?][\s"”'’)\]]*)\s+(?=\S)/))
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => /[\p{L}\p{N}]/u.test(sentence));
+  const sentences = sentencesOf(kept.at(-1));
+  const question = sentences.findLastIndex(asksIn);
+  const at = question >= 0 ? question : sentences.length - 1;
+  const chosen = sentences[at];
+  if (!chosen) return { tail: null, asks: false };
+  // A paragraph of its own still leans on the paragraph before it.
+  const before = sentences[at - 1] ?? sentencesOf(kept.at(-2)).at(-1);
+  const sentence =
+    chosen.length < SHORT_SENTENCE && before ? `${before} ${chosen}` : chosen;
+  return {
+    tail:
+      sentence.length > REPLY_TAIL_MAX
+        ? `${Array.from(sentence)
+            .slice(0, REPLY_TAIL_MAX - 1)
+            .join("")}…`
+        : sentence,
+    asks: question >= 0,
+  };
+}
+
+/** The sentence `replyEnding` would show, alone. */
+export function replyTail(reply: string | null | undefined): string | null {
+  return replyEnding(reply).tail;
+}

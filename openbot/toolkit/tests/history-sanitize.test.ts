@@ -167,6 +167,117 @@ describe("sanitizeSeededHistory", () => {
     ]);
   });
 
+  test("a result that lands after the assistant has spoken again answers nothing", () => {
+    // Anthropic: "tool_use ids were found without tool_result blocks immediately after".
+    const sanitized = sanitizeSeededHistory(
+      history([
+        { id: "u1", role: "user", content: "Reply to Sam twice." },
+        {
+          id: "a1",
+          role: "assistant",
+          toolCalls: [call("send_boxes"), call("send_friday")],
+        },
+        {
+          id: "t1",
+          role: "tool",
+          content: "allowed",
+          toolCallId: "send_boxes",
+        },
+        { id: "a2", role: "assistant", content: "Sent the boxes reply." },
+        {
+          id: "t2",
+          role: "tool",
+          content: "declined",
+          toolCallId: "send_friday",
+        },
+        { id: "u2", role: "user", content: "Thanks." },
+      ]),
+    );
+
+    expect(sanitized.map((message) => message.id)).toEqual([
+      "u1",
+      "a1",
+      "t1",
+      "a2",
+      "u2",
+    ]);
+    expect(sanitized[1]).toMatchObject({ toolCalls: [call("send_boxes")] });
+  });
+
+  test("a thread an approval's continuations forked is sent with every call answered right after it", () => {
+    /*
+     * The shape of the conversation that answered every message with a red API error: one step
+     * made two sends, its continuation ran again and again from an older point, and the append-only
+     * thread holds each run's answers after later turns. Reasoning and system rows are dropped
+     * before the model sees them, so they sit inside the answer's window.
+     */
+    const rows = history([
+      {
+        id: "u1",
+        role: "user",
+        content: "Reply to Sam: boxes, and Friday off.",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        toolCalls: [call("read"), call("send_a"), call("send_b")],
+      },
+      { id: "t1", role: "tool", content: "mail", toolCallId: "read" },
+      { id: "r1", role: "reasoning", content: "" },
+      { id: "t2", role: "tool", content: "allowed", toolCallId: "send_a" },
+      {
+        id: "a2",
+        role: "assistant",
+        toolCalls: [call("send_a2"), call("send_b2")],
+      },
+      {
+        id: "a3",
+        role: "assistant",
+        toolCalls: [call("send_a3"), call("send_b3")],
+      },
+      { id: "t3", role: "tool", content: "sent", toolCallId: "send_a3" },
+      { id: "s1", role: "system", content: "Memory." },
+      { id: "t4", role: "tool", content: "declined", toolCallId: "send_b3" },
+      { id: "a4", role: "assistant", content: "Sent the boxes reply." },
+      { id: "t5", role: "tool", content: "declined", toolCallId: "send_b2" },
+      { id: "a5", role: "assistant", content: "Done." },
+      { id: "t6", role: "tool", content: "declined", toolCallId: "send_b" },
+      { id: "u2", role: "user", content: "Search my email for Leah." },
+    ]);
+
+    const sanitized = sanitizeSeededHistory(rows);
+
+    expect(sanitized.map((message) => message.id)).toEqual([
+      "u1",
+      "a1",
+      "t1",
+      "r1",
+      "t2",
+      "a3",
+      "t3",
+      "s1",
+      "t4",
+      "a4",
+      "a5",
+      "u2",
+    ]);
+    // Every call that is kept has its answer before the assistant or the person speaks again.
+    for (const [index, message] of sanitized.entries()) {
+      const calls = (message as { toolCalls?: { id: string }[] }).toolCalls;
+      for (const kept of calls ?? []) {
+        const answer = sanitized.findIndex(
+          (row) => (row as { toolCallId?: string }).toolCallId === kept.id,
+        );
+        expect(answer).toBeGreaterThan(index);
+        expect(
+          sanitized
+            .slice(index + 1, answer)
+            .some((row) => row.role === "assistant" || row.role === "user"),
+        ).toBe(false);
+      }
+    }
+  });
+
   test("a result ahead of its call is dropped even when a real answer follows", () => {
     // The trailing result answers the call, so the call and that result survive. The leading one
     // answers nothing where it sits, and a `tool` row ahead of any call is a shape a provider

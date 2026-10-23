@@ -21,8 +21,15 @@ import {
   transcriptMessages,
 } from "@/components/channels/transcript-messages";
 import { agentListQueryOptions } from "@/lib/agents/queries";
+import { type ApprovalInboxData, approvalInboxOptions } from "@/lib/approvals";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { readFirstDay } from "@/lib/channels/first-day";
+import {
+  followTurn,
+  freshConnectionAfterStop,
+  joinOrFollow,
+  liveRun,
+} from "@/lib/channels/follow-turn";
 import {
   recordChannelActivityMutationOptions,
   setChannelBusy,
@@ -32,9 +39,24 @@ import {
   type ChannelSummary,
   channelKeys,
 } from "@/lib/channels/queries";
+import {
+  claimSeed,
+  interruptsToAnswer,
+  isApprovalWaitingResult,
+  isThreadBusyError,
+  isThreadLocked,
+  sayableReason,
+  seedStillNeeded,
+  staleApprovalWaits,
+  ThreadBusyError,
+  waitingToolCalls,
+  withApprovalWaits,
+  withoutMessages,
+  withoutUnansweredCalls,
+} from "@/lib/channels/run-lifecycle";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { ConversationProvider } from "@/lib/copilot/conversation";
-import { afterMs, joinWithin } from "@/lib/copilot/join-thread";
+import { afterMs } from "@/lib/copilot/join-thread";
 import { repairUnansweredToolCalls } from "@/lib/copilot/repair-history";
 import { stoppedReason } from "@/lib/copilot/stopped-turn";
 import { readThreadMessages } from "@/lib/copilot/thread-messages";
@@ -77,6 +99,23 @@ const CATCH_UP_DELAYS_MS = [0, 750, 1500];
  * a slower store.
  */
 const SETTLE_DELAYS_MS = [750, 1500, 3000];
+
+/**
+ * Following a turn this tab did not start; see `lib/channels/follow-turn.ts`.
+ *
+ * The retry is how soon an idle thread is joined again while the turn has not started yet. The
+ * longest wait is for a continuation after Allow once that never comes: past it the conversation is
+ * given back. The silence is how long a followed join may go without a single event before it is
+ * taken for stalled and ended; a Bot's own stall guard ends a quiet turn well before that.
+ */
+const FOLLOW_RETRY_MS = 1000;
+const FOLLOW_MAX_MS = 90_000;
+const FOLLOW_SILENCE_MS = 180_000;
+const FOLLOW_QUIET_MS = 30_000;
+/** How long the stored transcript may take to read when it stands in for a replay. */
+const STAND_IN_READ_MS = 6000;
+
+const NOTHING: readonly Message[] = [];
 
 type ChannelActivitySignature = {
   agentId: string;
@@ -331,6 +370,56 @@ export function ChannelChat({
   useEffect(() => observeApprovalAgent(agent), [agent]);
 
   /**
+   * A turn this tab did not start is going, and this tab is following it: one already running when
+   * Chat opened, one the server runs after Allow once, one another tab or device started. While it
+   * is true the conversation is busy exactly as for a turn sent from here: the pill and Stop show,
+   * and anything typed is Queued until it ends. See `follow` below.
+   */
+  const [following, setFollowing] = useState(false);
+  const followingRef = useRef(false);
+  /** The follow in progress, for a seed that has to wait for it. */
+  const followDone = useRef<Promise<void>>(Promise.resolve());
+  const follow = useRef<
+    (options?: {
+      first?: Promise<unknown>;
+      done?: (runs: { finished: number }) => boolean;
+    }) => Promise<void>
+  >(() => Promise.resolve());
+  /** Every run this screen's agent has seen start, live or replayed; see `follow`. */
+  const knownRuns = useRef(new Set<string>());
+  useEffect(() => {
+    const subscription = agent.subscribe({
+      onRunStartedEvent: ({ event }) => {
+        knownRuns.current.add(event.runId);
+      },
+    });
+    return () => subscription.unsubscribe();
+  }, [agent]);
+  /** A followed turn has gone quiet for {@link FOLLOW_QUIET_MS}; see `follow`. */
+  const [followQuiet, setFollowQuiet] = useState(false);
+  /**
+   * A follow asked for while this tab's own turn holds the thread, started when that turn ends: a
+   * join now would detach the turn it is waiting behind.
+   */
+  const followAfterTurn = useRef<{
+    done?: (runs: { finished: number }) => boolean;
+  } | null>(null);
+  /**
+   * The stored transcript, drawn in place of the agent's while a join replays the thread up to a
+   * live run; see the join effect. Null the rest of the time.
+   */
+  const [standIn, setStandIn] = useState<readonly Message[] | null>(null);
+  /** Read the store again; see the activity effect. Settles what a follow streamed. */
+  const pullRef = useRef<() => void>(() => {});
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  /**
    * First-message seed from the compose screen. It is taken once per mount and retained until the
    * agent has its own messages because joining a fresh thread can temporarily empty the agent.
    */
@@ -411,26 +500,141 @@ export function ChannelChat({
     const version = ++historyReadVersion.current;
 
     void (async () => {
+      /*
+       * WHETHER A TURN IS GOING, asked of the runtime the moment Chat opens, beside the join
+       * (`liveRun`). Its answer is the live run's id. Where it cannot say, what the replay shows is
+       * the fallback at the deadline: a run that has started and not finished, since replayed runs
+       * open and close as they go by and only a live one is left open.
+       */
+      const asking = liveRun({
+        agentId: runtimeAgentId,
+        threadId: channel.threadId,
+      });
+      // The stored transcript, asked for at once too: a long thread takes a moment to read.
+      const reading = readThreadMessages(channel.threadId, runtimeAgentId);
+      let runOpen = false;
+      let runId: string | null | undefined;
+      /** The join has replayed up to the live run's own start: what it draws now is current. */
+      let reachedLive = false;
+      /** Set while the stored transcript stands in for the replay; see below. */
+      let release: (() => void) | null = null;
+      const watch = agent.subscribe({
+        onRunStartedEvent: ({ event }) => {
+          runOpen = true;
+          if (runId && event.runId === runId) reachedLive = true;
+          release?.();
+        },
+        onRunFinishedEvent: () => {
+          runOpen = false;
+        },
+        onRunErrorEvent: () => {
+          runOpen = false;
+        },
+      });
+      const connect = copilotkit.connectAgent({ agent });
+      const joined = connect.then(
+        () => undefined,
+        () => undefined,
+      );
+      let live: Promise<void> | null = null;
+      let followed = false;
       try {
-        // Bounded, and finished when it returns; `join-thread.ts` has why that matters.
-        await joinWithin({
-          connect: copilotkit.connectAgent({ agent }),
-          deadline: afterMs(JOIN_DEADLINE_MS),
-          detach: () => agent.detachActiveRun(),
-        });
+        const first = await Promise.race([
+          asking,
+          joined.then(() => "joined" as const),
+        ]);
+        if (first !== "joined") runId = first;
+        if (typeof runId === "string") {
+          live = joined;
+        } else {
+          // Bounded unless a turn is going; `follow-turn.ts` has why, `join-thread.ts` why bounded.
+          ({ live } = await joinOrFollow({
+            connect,
+            deadline: afterMs(JOIN_DEADLINE_MS),
+            detach: () => agent.detachActiveRun(),
+            // A run seen open at the deadline may have started since the first answer: ask again.
+            runOpen: async () => {
+              if (!runOpen) return false;
+              const again = await liveRun({
+                agentId: runtimeAgentId,
+                threadId: channel.threadId,
+              });
+              return again === undefined ? true : again !== null;
+            },
+          }));
+        }
+
+        /*
+         * A TURN IS GOING: show it going, and stay with it to the end. Following starts at once, so
+         * the pill and Stop show and what is typed is Queued; the gate opens so nothing waits on it
+         * (a seed meets the busy thread and waits its turn).
+         *
+         * THE STORED TRANSCRIPT STANDS IN WHILE THE JOIN REPLAYS. On a fresh page the join replays
+         * the whole thread before it reaches the live run, which on a long thread takes seconds, and
+         * drawing the replay meant old history on screen and the pill walking every earlier turn's
+         * steps. So the store's copy is drawn as soon as it is read, and the replay takes over when
+         * it reaches the live run's own start, from where everything it draws is current. Calls the
+         * store holds no result for (a stopped run's) are left out of the stand-in: the pill would
+         * otherwise name one of them as the step under way. History is read again when the turn is
+         * over, by the follow, when a read cannot race the stream for the same messages.
+         */
+        if (live && current) {
+          const following = follow.current({ first: live });
+          openJoinGate.current();
+          if (typeof runId === "string") {
+            // Nothing is drawn until there is a whole transcript to draw: the stand-in, or the
+            // replay once it has reached the live run. Drawn piecemeal, the transcript scrolled
+            // through old turns as they came; drawn whole, it opens at the latest message.
+            let ended = false;
+            const show = () => {
+              if (current) setRestoring(false);
+            };
+            release = () => {
+              if (!reachedLive) return;
+              release = null;
+              setStandIn(null);
+              show();
+            };
+            release();
+            void (async () => {
+              let stored = await reading;
+              // The store answers slowly while the replay floods the page: give it longer here.
+              if (stored.availability !== "ready" && !reachedLive && !ended)
+                stored = await readThreadMessages(
+                  channel.threadId,
+                  runtimeAgentId,
+                  { deadlineMs: STAND_IN_READ_MS },
+                );
+              if (ended || reachedLive || stored.availability !== "ready")
+                return;
+              setStandIn(withoutUnansweredCalls(stored.messages));
+              show();
+            })();
+            await following;
+            ended = true;
+          } else {
+            if (current) setRestoring(false);
+            await following;
+          }
+          release = null;
+          setStandIn(null);
+          // The follow read the store as it ended, with retries and its own notice rules; a second,
+          // single-shot read here could only fail on a slow store and claim history was lost.
+          followed = true;
+        }
       } catch {
         /*
          * A join that throws is a join that is over. It must not take the gate with it: everything
          * typed afterwards waits on that gate, so a throw here would silence the conversation
          * rather than degrade it. History is restored below either way.
          */
+      } finally {
+        watch.unsubscribe();
       }
 
       try {
-        const stored = await readThreadMessages(
-          channel.threadId,
-          runtimeAgentId,
-        );
+        if (followed) return;
+        const stored = await reading;
         const isCurrent = current && version === historyReadVersion.current;
         if (isCurrent) {
           // The gateway snapshot can lag the store. Keep its valid local rows even when the
@@ -521,6 +725,9 @@ export function ChannelChat({
     let cancelled = false;
 
     const pull = () => {
+      // A followed turn is streaming the same messages; reading the store now would add them twice.
+      // The follow reads once it is over.
+      if (followingRef.current) return;
       const version = ++historyReadVersion.current;
       const isCurrent = () =>
         !cancelled && version === historyReadVersion.current;
@@ -576,7 +783,31 @@ export function ChannelChat({
       })();
     };
 
+    pullRef.current = pull;
+
+    /*
+     * ANOTHER TAB OR DEVICE STARTED A TURN HERE. The roster's busy flag says so (`busy` on the row,
+     * patched by the activity socket), and this tab follows it: the run streams in, and what is
+     * typed meanwhile is Queued rather than refused by the lock. Its own turns raise the same flag,
+     * so one is ignored while this tab has a turn of its own.
+     */
+    const channelBusy = (): boolean => {
+      const cache = queryClient.getQueryData<{
+        pages: { channels: ChannelSummary[] }[];
+      }>(channelKeys.list());
+      return (
+        cache?.pages
+          .flatMap((page) => page.channels)
+          .find((row) => row.id === channel.id)?.busy === true
+      );
+    };
+    let wasBusy = channelBusy();
+
     const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+      const busy = channelBusy();
+      if (busy && !wasBusy && turnsRef.current === 0 && !followingRef.current)
+        void follow.current({ done: () => !channelBusy() });
+      wasBusy = busy;
       const activity = authoredActivity();
       if (activity && !sameActivity(activity, lastSeen)) {
         lastSeen = activity;
@@ -646,6 +877,12 @@ export function ChannelChat({
    * handle that `copilotkit.runAgent` does not hand back.
    */
   const turnFailure = useRef<string | null>(null);
+  /**
+   * The run was refused because another run holds the thread. Not a failure: the turn this send
+   * wanted is waiting behind one already going. Kept beside `turnFailure` for the same reason: the
+   * subscriber knows, and `deliver` has to act on it.
+   */
+  const turnLocked = useRef(false);
   const assistantMessagesBeforeRun = useRef<Set<string>>(new Set());
 
   /*
@@ -708,6 +945,7 @@ export function ChannelChat({
     trimmed: string,
     skillInstructions: string[],
     attachments: Attachment[],
+    skipIf?: () => boolean,
   ) => {
     // Wait briefly for the runtime agent instance before adding the message.
     if (!isReadyRef.current) {
@@ -726,6 +964,9 @@ export function ChannelChat({
     if (isReadyRef.current) {
       await joinGatePromise;
     }
+
+    // A send that only makes sense against the thread as it now stands; see the seed below.
+    if (skipIf?.()) return "";
 
     // Every wait is behind us, so this is the agent the screen is actually rendering. Read once and
     // used throughout, so the message, the repair and the run cannot land on two different agents.
@@ -755,6 +996,7 @@ export function ChannelChat({
 
     setRunError(null);
     turnFailure.current = null;
+    turnLocked.current = false;
     assistantMessagesBeforeRun.current = new Set(
       target.messages
         .filter((message) => message.role === "assistant")
@@ -774,10 +1016,14 @@ export function ChannelChat({
      * `transcriptMessages` draws user and assistant turns, so this never appears on screen — the
      * chip is what says a skill was used, and it stays visible in the message they sent.
      */
+    // What this turn adds, so a turn that never reaches the server can take it back off screen.
+    const added = new Set<string>();
     for (const instruction of skillInstructions) {
+      const id = newId();
+      added.add(id);
       target.addMessage({
         content: instruction,
-        id: newId(),
+        id,
         role: "system",
       });
     }
@@ -794,9 +1040,11 @@ export function ChannelChat({
         ),
       );
 
+    const userMessageId = newId();
+    added.add(userMessageId);
     target.addMessage({
       content: toMessageContent(trimmed, attachments),
-      id: newId(),
+      id: userMessageId,
       role: "user",
     });
     // The roster previews what was asked. Chat's first day sends a request nobody typed, framed for
@@ -806,19 +1054,139 @@ export function ChannelChat({
       null,
     );
 
+    /*
+     * AN APPROVAL'S WAIT IS NOT THIS RUN'S TO ANSWER. A turn that asked before acting ended on an
+     * interrupt, and the SDK refuses every later run until one answers it with `resume`, before any
+     * request is made. OpenBot never answers it that way: the person decides in the approval card
+     * or on Tasks, and the server carries out the action and continues the conversation itself. So
+     * those waits are dropped here, and what the person typed is sent. See `isAnsweredByInbox`.
+     *
+     * AND THE BOT IS TOLD THE TRUTH ABOUT THE CALL. A call still waiting in a card has no result,
+     * which no provider accepts, and the generic repair below would answer it "interrupted … do not
+     * assume it succeeded": the Bot then said the email was not sent while Allow once could still
+     * send it. Each waiting call gets `APPROVAL_WAITING_RESULT` instead, and once the action's real
+     * result has come in, it takes the placeholder's place. Waiting means the interrupts this run
+     * would otherwise trip on, and the cards the inbox still shows pending in this thread.
+     */
+    const waiting = waitingToolCalls(target.pendingInterrupts);
+    const inbox = queryClient.getQueryData<ApprovalInboxData>(
+      approvalInboxOptions().queryKey,
+    );
+    // An inbox not yet read cannot say a card was decided, so every placeholder still counts.
+    if (!inbox) {
+      for (const message of target.messages)
+        if (isApprovalWaitingResult(message) && "toolCallId" in message)
+          waiting.add(message.toolCallId);
+    }
+    for (const request of inbox?.requests ?? []) {
+      if (
+        request.status === "pending" &&
+        request.action.threadId === channel.threadId &&
+        request.action.toolCallId
+      )
+        waiting.add(request.action.toolCallId);
+    }
+    const toAnswer = interruptsToAnswer(target.pendingInterrupts);
+    if (toAnswer !== target.pendingInterrupts) {
+      target.pendingInterrupts = [...toAnswer];
+    }
+    /*
+     * A placeholder whose card has since been decided is out of date, and the action's real result
+     * may be in the store before it reaches this tab: the server's continuation records it there,
+     * and a join does not always carry a result for a call it did not start. Read once, so it can
+     * take the placeholder's place.
+     */
+    if (staleApprovalWaits(target.messages, waiting)) {
+      const stored = await readThreadMessages(
+        channel.threadId,
+        runtimeAgentId,
+      ).catch(() => null);
+      if (stored?.availability === "ready") {
+        const merged = mergeStoredMessages(
+          target.messages,
+          stored.messages,
+          fromStore.current,
+        );
+        if (merged !== target.messages) {
+          rememberFromStore(fromStore.current, target.messages, merged);
+          target.setMessages(merged);
+        }
+      }
+    }
+    const settled = withApprovalWaits(target.messages, waiting, newId);
+    if (settled !== target.messages) {
+      const before = new Set(target.messages.map((message) => message.id));
+      for (const message of settled)
+        if (!before.has(message.id)) added.add(message.id);
+      target.setMessages([...settled]);
+    }
+
     // Providers reject later turns if prior tool calls have no result; repair before sending.
     const repaired = repairUnansweredToolCalls(target.messages);
     if (repaired !== target.messages) {
       target.setMessages(repaired as typeof target.messages);
     }
 
+    /*
+     * WHETHER THE RUN STARTED AT ALL. `runAgent` resolves the same for a run that finished and for
+     * one refused before it began (an interrupt nothing answers, say), and only the first reaches
+     * `onRunFailed`. A turn that never started is a failed send, never a sent one.
+     */
+    let started = false;
+    /*
+     * And whether the server's run did. A send that never reached it (the network dropped, the
+     * request was refused with a 500) failed before anything was stored, so the same rule applies:
+     * its bubble comes off screen and the words go back in the box. Left drawn, it read as sent,
+     * and sending the words again drew a second copy beside it.
+     */
+    let serverStarted = false;
+    const startWatch = target.subscribe({
+      onRunInitialized: () => {
+        started = true;
+      },
+      onRunStartedEvent: () => {
+        serverStarted = true;
+      },
+    });
     setRunsInFlight((count) => count + 1);
     try {
       await withVoiceContext(copilotkit, target.agentId, voiceHistory, () =>
         copilotkit.runAgent({ agent: target }),
       );
     } finally {
+      startWatch.unsubscribe();
       setRunsInFlight((count) => count - 1);
+    }
+
+    /*
+     * ANOTHER RUN HAD THE THREAD: the server continuing after Allow once, another tab, another
+     * device on the same first day. Nothing this turn added was stored, so it comes off screen; this
+     * tab follows the run that is going, and the words are handed back as busy, which the queue
+     * parks as Queued and sends when that run ends. Following starts before the throw, so the
+     * conversation never reads as idle in between and drains the queue into the same lock.
+     */
+    if (turnLocked.current) {
+      turnLocked.current = false;
+      awaitingReply.current = false;
+      const kept = withoutMessages(target.messages, added);
+      if (kept !== target.messages) target.setMessages([...kept]);
+      void follow.current();
+      throw new ThreadBusyError();
+    }
+
+    if (turnFailure.current !== null && !serverStarted) {
+      const kept = withoutMessages(target.messages, added);
+      if (kept !== target.messages) target.setMessages([...kept]);
+      throw new Error(turnFailure.current);
+    }
+
+    if (!started && turnFailure.current === null) {
+      awaitingReply.current = false;
+      const kept = withoutMessages(target.messages, added);
+      if (kept !== target.messages) target.setMessages([...kept]);
+      const message = "Couldn't send your message. Try again.";
+      setRunError(message);
+      throw new Error(message);
     }
 
     /*
@@ -866,6 +1234,7 @@ export function ChannelChat({
     text: string,
     skillInstructions: string[] = [],
     attachments: Attachment[] = [],
+    { skipIf }: { skipIf?: () => boolean } = {},
   ) => {
     const trimmed = text.trim();
     // A pasted screenshot with no caption is still a message to send: `canSendDraft` already
@@ -874,10 +1243,14 @@ export function ChannelChat({
     if (!trimmed && attachments.length === 0) return "";
 
     // Voice and typed requests share this turn boundary, including gaps between frontend tools.
-    if (turnsRef.current > 0 || agentRef.current.isRunning) {
+    if (turnsRef.current > 0) {
       throw new Error(
         "This Bot is still working on something. Wait for it, or stop it first.",
       );
+    }
+    // A turn this tab did not start is going: not a refusal, a wait. The queue parks the words.
+    if (followingRef.current || agentRef.current.isRunning) {
+      throw new ThreadBusyError();
     }
 
     turnsRef.current += 1;
@@ -886,7 +1259,7 @@ export function ChannelChat({
       void setChannelBusy({ channelId: channel.id, busy: true });
     }
     try {
-      return await deliver(trimmed, skillInstructions, attachments);
+      return await deliver(trimmed, skillInstructions, attachments, skipIf);
     } finally {
       turnsRef.current -= 1;
       setTurnsInFlight(turnsRef.current);
@@ -894,24 +1267,34 @@ export function ChannelChat({
       // does not, and the last turn out is what takes the roster's working indicator down.
       if (turnsRef.current === 0) {
         void setChannelBusy({ channelId: channel.id, busy: false });
+        const waiting = followAfterTurn.current;
+        followAfterTurn.current = null;
+        if (waiting) void follow.current(waiting);
       }
     }
   };
 
   useEffect(() => {
-    const fail = (message: string) => {
+    const fail = (reported: unknown) => {
       if (!awaitingReply.current) return;
       awaitingReply.current = false;
+      const message = stoppedReason(reported);
+      // Another run holds the thread: a wait, not a failure, and never a sentence naming a thread.
+      if (isThreadLocked(reported) || isThreadLocked(new Error(message))) {
+        turnLocked.current = true;
+        return;
+      }
       // Both halves of one fact: the sentence the transcript shows, and the reason `deliver` throws
       // so the draft behind the turn is restored rather than counted as sent. See `turnFailure`.
-      turnFailure.current = message;
-      setRunError(message);
+      const said = sayableReason(message);
+      turnFailure.current = said;
+      setRunError(said);
     };
     const subscription = agent.subscribe?.({
       // Both surfaces fall back to the same sentence, from the same place, so a person who uses
       // both is not told two different things about the same silence.
-      onRunErrorEvent: ({ event }) => fail(stoppedReason(event?.message)),
-      onRunFailed: ({ error }) => fail(stoppedReason(error)),
+      onRunErrorEvent: ({ event }) => fail(event?.message),
+      onRunFailed: ({ error }) => fail(error),
       onRunFinishedEvent: () => {
         const wasOurs = awaitingReply.current;
         awaitingReply.current = false;
@@ -950,7 +1333,10 @@ export function ChannelChat({
     askAgent: async (request, signal) => {
       const started = stopEpoch.current;
       const answer = await askChannelAgent(request, signal, {
-        busy: () => turnsRef.current > 0 || agentRef.current.isRunning,
+        busy: () =>
+          turnsRef.current > 0 ||
+          followingRef.current ||
+          agentRef.current.isRunning,
         send: (text) => sayRef.current(text),
       });
       if (started !== stopEpoch.current)
@@ -962,7 +1348,135 @@ export function ChannelChat({
     awaitingReply.current = false;
     stopEpoch.current++;
     copilotkit.stopAgent({ agent });
+    freshConnectionAfterStop(agent);
   };
+
+  /**
+   * Follow a turn this tab did not start until it lands. See `lib/channels/follow-turn.ts`.
+   *
+   * One at a time: a second ask while one is going waits on the same one. Stop ends it (the stop
+   * reaches the followed run, whose join then ends), as does leaving the screen. A followed join
+   * that goes quiet for {@link FOLLOW_SILENCE_MS} is ended as stalled, and one quiet for
+   * {@link FOLLOW_QUIET_MS} says so above the composer when something is waiting behind it. When it
+   * is over, the store is read once, which settles whatever streamed and is what drains the queue.
+   *
+   * `done` is handed how many runs this follow has seen start and finish, which is how a follow
+   * that waits for the server's continuation knows it has actually come and gone.
+   */
+  follow.current = ({ first, done } = {}) => {
+    if (followingRef.current) return followDone.current;
+    followingRef.current = true;
+    setFollowing(true);
+    // Reads already in flight would race the stream for the same messages.
+    historyReadVersion.current++;
+    const epoch = stopEpoch.current;
+    /*
+     * Runs counted are the ones this tab had not seen before the follow began. A join replays what
+     * the tab has not seen, which on a transport without a cursor is the thread's old runs too, and
+     * those must not pass for the turn being waited on.
+     */
+    const seenBefore = new Set(knownRuns.current);
+    const runs = { started: false, finished: 0 };
+    const counting = agentRef.current.subscribe({
+      onRunStartedEvent: ({ event }) => {
+        runs.started = !seenBefore.has(event.runId);
+      },
+      onRunFinishedEvent: () => {
+        if (runs.started) runs.finished += 1;
+        runs.started = false;
+      },
+    });
+    const watched = (joining: Promise<unknown>) => {
+      const target = agentRef.current;
+      let stall: ReturnType<typeof setTimeout> | undefined;
+      let quietTimer: ReturnType<typeof setTimeout> | undefined;
+      const heard = () => {
+        clearTimeout(stall);
+        clearTimeout(quietTimer);
+        setFollowQuiet(false);
+        stall = setTimeout(
+          () => void target.detachActiveRun(),
+          FOLLOW_SILENCE_MS,
+        );
+        quietTimer = setTimeout(() => setFollowQuiet(true), FOLLOW_QUIET_MS);
+      };
+      heard();
+      const listening = target.subscribe({ onEvent: heard });
+      return joining.finally(() => {
+        clearTimeout(stall);
+        clearTimeout(quietTimer);
+        listening.unsubscribe();
+      });
+    };
+    followDone.current = (async () => {
+      try {
+        await followTurn({
+          ...(first ? { first: watched(first) } : {}),
+          connect: () =>
+            watched(copilotkit.connectAgent({ agent: agentRef.current })),
+          ...(done ? { done: () => done(runs) } : {}),
+          stopped: () => !alive.current || epoch !== stopEpoch.current,
+          wait: afterMs,
+          retryMs: FOLLOW_RETRY_MS,
+          maxMs: FOLLOW_MAX_MS,
+        });
+      } finally {
+        counting.unsubscribe();
+        followingRef.current = false;
+        setFollowing(false);
+        setFollowQuiet(false);
+        if (alive.current) pullRef.current();
+      }
+    })();
+    return followDone.current;
+  };
+
+  /*
+   * ALLOW ONCE HANDS THE TURN TO THE SERVER. Deciding an approval (in its card, on Tasks, in another
+   * tab) queues the action; the server carries it out and continues this conversation on its own,
+   * a second or two later. Until that continuation has landed the conversation is busy: what is
+   * typed meanwhile is Queued and answered after it, and the continuation streams into this tab.
+   * Without this the conversation read as idle, a message sent in that gap raced the server for the
+   * thread, and the reply came in only when a later read happened to find it.
+   *
+   * Watched in the approvals inbox the card itself reads, so a decision made anywhere counts.
+   */
+  useEffect(() => {
+    const seen = new Map<string, string>();
+    const check = () => {
+      const inbox = queryClient.getQueryData<ApprovalInboxData>(
+        approvalInboxOptions().queryKey,
+      );
+      for (const request of inbox?.requests ?? []) {
+        const before = seen.get(request.id);
+        seen.set(request.id, request.status);
+        if (before !== "pending" || request.status === "pending") continue;
+        const toolCallId = request.action.toolCallId;
+        const ours =
+          request.action.threadId === channel.threadId ||
+          (toolCallId !== undefined &&
+            agentRef.current.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.toolCalls?.some((call) => call.id === toolCallId),
+            ));
+        if (!ours) continue;
+        const wait = {
+          /*
+           * Landed once the continuation's own run has been seen to start and finish. Not once the
+           * call has a result: a message sent while the card waited gave the call a placeholder (see
+           * `APPROVAL_WAITING_RESULT`), and treating that as the result ended the follow before the
+           * continuation began, so the next message raced it for the thread.
+           */
+          done: (runs: { finished: number }) => runs.finished > 0,
+        };
+        if (turnsRef.current > 0) followAfterTurn.current = wait;
+        else void follow.current(wait);
+      }
+    };
+    check();
+    return queryClient.getQueryCache().subscribe(check);
+  }, [channel.threadId]);
 
   /**
    * Component buttons speak as user turns without forcing every transcript card to re-render.
@@ -981,21 +1495,42 @@ export function ChannelChat({
   /**
    * Send the create-channel seed once. No waiting of its own: `say` owns that for every turn, and a
    * second copy of the ordering here was the one that could disagree with it.
+   *
+   * ONCE PER CHANNEL IN THIS PAGE, BY CONSTRUCTION. `claimSeed` is module-level, so StrictMode
+   * running this twice, a remount, or a greeting stashed twice for the same channel all send it
+   * once. ONCE PER THREAD ACROSS DEVICES, by the lock: a second device opening the same first day
+   * meets the first one's run, follows it, and sends its own request only if the thread does not
+   * already hold one. See `seedStillNeeded`.
    */
   useEffect(() => {
     const pending = seedRef.current;
     if (!pending) return;
     seedRef.current = null;
+    if (!claimSeed(channel.id)) return;
+    const text = typeof pending.content === "string" ? pending.content : "";
 
     // Swallowed for the reason `askFromComponent` above records: `say` throws on a failed turn, and
     // the seed has no box to go back into — it was typed on a screen that has already navigated
     // away. The transcript keeps the seeded message and the notice under it says what happened.
-    void sayRef
-      .current(typeof pending.content === "string" ? pending.content : "")
-      .catch(() => undefined);
+    // Decided against the thread as `say` finds it once joined, which is where another device's
+    // greeting shows up.
+    const skipIf = () => !seedStillNeeded(text, agentRef.current.messages);
+    void (async () => {
+      // A busy thread is waited out, a few times at most: each wait is a whole turn.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await sayRef.current(text, [], [], { skipIf });
+          return;
+        } catch (error) {
+          if (!isThreadBusyError(error)) return;
+          await Promise.all([followDone.current, afterMs(FOLLOW_RETRY_MS)]);
+          if (!alive.current) return;
+        }
+      }
+    })();
 
     // Keep `seed` in state; transcriptMessages gives it up once the agent holds a user turn.
-  }, []);
+  }, [channel.id]);
 
   const botName =
     agentProfiles?.find((profile) => profile.id === runtimeAgentId)?.name ??
@@ -1024,6 +1559,11 @@ export function ChannelChat({
             inShell={inShell}
             lead={topic ? <Topic>{topic}</Topic> : null}
             placeholder={`Message ${botName}`}
+            queuedNotice={
+              following && followQuiet
+                ? `${botName} is still finishing something. I'll send this next.`
+                : undefined
+            }
             voiceCall={
               call.available
                 ? {
@@ -1040,13 +1580,23 @@ export function ChannelChat({
              * and `agent.isRunning` alone leaves that gap unmarked — which is the one moment the
              * "Thinking" line exists for. Same value as `pending`, deliberately.
              */
-            busy={agent.isRunning || turnsInFlight > 0}
+            busy={agent.isRunning || turnsInFlight > 0 || following}
             // The `/` menu exposes only skills granted to this Bot.
             commands={skillCommands}
             // Readiness is handled by `say`; deletion is the only disabled-chat state.
             disabled={!channel.active}
+            /*
+             * NOTHING WHILE HISTORY IS RESTORING, then all of it at once. A join replays the thread
+             * turn by turn, and the transcript scrolls each new turn to the top as it lands: on a
+             * long thread, drawing the replay as it came left the screen parked on an old turn. The
+             * restoring rows stand in until the whole transcript is here, and it then opens at the
+             * latest message.
+             */
             messages={withVoiceChats(
-              transcriptMessages(agent.messages, seed),
+              transcriptMessages(
+                restoring ? NOTHING : (standIn ?? agent.messages),
+                seed,
+              ),
               voiceArchive.entries,
             )}
             notice={
@@ -1131,7 +1681,7 @@ export function ChannelChat({
              * middle of an answer: a second turn racing the first on one thread, with a fabricated
              * result stitched over a tool call that is still executing.
              */
-            pending={agent.isRunning || turnsInFlight > 0}
+            pending={agent.isRunning || turnsInFlight > 0 || following}
             /*
              * A channel outlives its turns, so it is the screen where waiting is worth offering. A
              * correction typed mid-answer is held here, in this tab, and runs as one follow-up turn the
@@ -1145,7 +1695,7 @@ export function ChannelChat({
              * controller does not exist until `say` has finished waiting for the runtime agent — so
              * this is the one place the narrower fact is the honest one to draw a button from.
              */
-            stoppable={agent.isRunning || runsInFlight > 0}
+            stoppable={agent.isRunning || runsInFlight > 0 || following}
             /*
              * At the END OF THE TRANSCRIPT rather than above the composer, which is where this used to
              * be. A turn that ends without an answer leaves a gap exactly where the reply was going to

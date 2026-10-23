@@ -9,17 +9,27 @@ import type { Database } from "../db/client";
 import { openduetPages } from "../db/schema/openduet";
 import { REFUSAL_MARKER } from "../plugins/tools";
 import {
+  closed,
+  ENFORCED,
+  FIX_SILENTLY,
+  type Limits,
+  layOutDeck,
+  line,
   MAX_BLOCKS,
+  MAX_SLIDE_BLOCKS,
   MAX_SLIDES,
   MAX_SUMMARY,
   MAX_TITLE,
+  many,
+  ownTitle,
   PAGE_KINDS,
   type PageBlock,
   type PageContent,
   type PageKind,
   type PageSlide,
-  pageBlockSchema,
-  pageSlideSchema,
+  pageBlockSchemaWith,
+  pageSlideSchemaWith,
+  STATED,
 } from "./page-content";
 
 /*
@@ -64,13 +74,10 @@ export class PageNotFoundError extends Error {
   }
 }
 
-const inputSchema = z
-  .object({
-    id: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
+/** What `make_page` takes, with `limits` enforced (the parser) or only stated (the schema offered). */
+function inputSchemaWith(limits: Limits) {
+  const input = closed(limits, {
+    id: line(limits, 64)
       .optional()
       .describe(
         "To revise a page you already made, its id from that call's result. Leave it out to make a new one.",
@@ -80,38 +87,25 @@ const inputSchema = z
       .describe(
         '"page" for something to read or keep, "slides" for a deck to present.',
       ),
-    title: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_TITLE)
-      .describe(`A short name, at most ${MAX_TITLE} characters.`),
-    summary: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_SUMMARY)
+    title: line(limits, MAX_TITLE).describe(
+      `A short name, at most ${MAX_TITLE} characters.`,
+    ),
+    summary: line(limits, MAX_SUMMARY)
       .optional()
       .describe(
         `One line on what it is, at most ${MAX_SUMMARY} characters. Shown under the title in the Pages list.`,
       ),
-    blocks: z
-      .array(pageBlockSchema)
-      .min(1)
-      .max(MAX_BLOCKS)
+    blocks: many(limits, pageBlockSchemaWith(limits), MAX_BLOCKS)
       .optional()
       .describe(`A page's content, in order. Required for "page".`),
-    slides: z
-      .array(pageSlideSchema)
-      .min(1)
-      .max(MAX_SLIDES)
+    slides: many(limits, pageSlideSchemaWith(limits), MAX_SLIDES)
       .optional()
       .describe(
-        `A deck's slides, in order, each a title and at most three blocks. Required for "slides".`,
+        `A deck's slides, in order, each a title and its blocks. A slide with more than a phone shows continues onto the next slide when it is saved. Required for "slides".`,
       ),
-  })
-  .strict()
-  .superRefine((value, context) => {
+  });
+  if (!limits.enforce) return input;
+  return input.superRefine((value, context) => {
     if (value.kind === "page" && !value.blocks)
       context.addIssue({
         code: "custom",
@@ -137,25 +131,131 @@ const inputSchema = z
         message: 'A "slides" deck takes slides, not blocks.',
       });
   });
-export type PageInput = z.infer<typeof inputSchema>;
+}
+/** What `make_page` takes, every limit enforced: the parser `execute` runs. */
+export const pageInputSchema = inputSchemaWith(ENFORCED);
+export type PageInput = z.infer<typeof pageInputSchema>;
 
 /**
- * Why the input was refused, in a line the model can act on: where, and what was wrong there.
- * The first issue is enough. A model fixes one thing at a time, and a list of ten reads as noise.
+ * The schema the model is offered, and the one the AI SDK checks a call against before the tool
+ * runs. The same as `pageInputSchema` written out as JSON Schema, limits and all, but it checks only the
+ * shape: a call over a limit reaches `execute`, so the refusal the model reads is `refusalFor`'s.
  */
-function refusalFor(error: z.ZodError): string {
-  const issue = error.issues[0];
-  const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
-  return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${where}${issue?.message ?? "Invalid arguments."} Fix it and call ${PAGE_TOOL} again.`;
+export const offeredInputSchema = inputSchemaWith(STATED);
+
+/** How many of a refusal's issues it names. A deck's slides fail apart, so it names more than one. */
+const MOST_ISSUES = 6;
+
+/**
+ * Why the input was refused, in lines the model can act on: where, and what was wrong there. Every
+ * slide that does not fit is named, so a deck is fixed in one retry rather than one per slide.
+ *
+ * The retry is between the model and the tool, which is why it ends on `FIX_SILENTLY`. The slide
+ * refusals carry that line themselves; it is said once here.
+ */
+function refusalFor(
+  issues: readonly { path: PropertyKey[]; message: string }[],
+): string {
+  const lines = issues.slice(0, MOST_ISSUES).map((issue) => {
+    const where = issue.path.length ? `${issue.path.join(".")}: ` : "";
+    return `${where}${issue.message.replace(FIX_SILENTLY, "").trim()}`;
+  });
+  return `${REFUSAL_MARKER} ${PAGE_TOOL} could not save this. ${lines.join(" ") || "Invalid arguments."} Fix it and call ${PAGE_TOOL} again. ${FIX_SILENTLY}`;
 }
 
+/**
+ * The input checked, and a deck laid out for a phone (`layOutDeck`): a slide with more than one
+ * slide shows continues onto new slides, so a deck is refused only for its shape. `continued` says
+ * how many slides the model wrote when that differs from how many were saved.
+ */
 export function parsePageInput(
   input: unknown,
-): { ok: true; value: PageInput } | { ok: false; refusal: string } {
-  const parsed = inputSchema.safeParse(input ?? {});
-  return parsed.success
-    ? { ok: true, value: parsed.data }
-    : { ok: false, refusal: refusalFor(parsed.error) };
+):
+  | { ok: true; value: PageInput; continued?: { from: number; to: number } }
+  | { ok: false; refusal: string } {
+  const parsed = pageInputSchema.safeParse(withoutBlankOptionals(input ?? {}));
+  if (!parsed.success)
+    return { ok: false, refusal: refusalFor(parsed.error.issues) };
+  const value = parsed.data;
+  if (!value.slides) return { ok: true, value };
+  const laid = layOutDeck(value.slides);
+  if (laid.issues.length > 0)
+    return { ok: false, refusal: refusalFor(laid.issues) };
+  const from = value.slides.length;
+  const to = laid.slides.length;
+  return {
+    ok: true,
+    value: { ...value, slides: laid.slides },
+    ...(to !== from ? { continued: { from, to } } : {}),
+  };
+}
+
+/** An optional string left blank says nothing; it is dropped rather than refused, which would cost a retry. */
+function blank(value: unknown): boolean {
+  return typeof value === "string" && value.trim() === "";
+}
+function omitBlank(record: Record<string, unknown>, keys: readonly string[]) {
+  return Object.fromEntries(
+    Object.entries(record).filter(
+      ([key, value]) => !(keys.includes(key) && blank(value)),
+    ),
+  );
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The input with its blank optional strings dropped: the page's `id` and `summary`, a list's
+ * `title`, a chart's `label` and an item's `note`. A model writes `note: ""` for a row with nothing
+ * to add, and that is the same as no note. Required strings are left for the parser to refuse.
+ */
+function withoutBlankOptionals(input: unknown): unknown {
+  if (!isRecord(input)) return input;
+  const block = (value: unknown) => {
+    if (!isRecord(value)) return value;
+    const kept = omitBlank(
+      value,
+      value.type === "list"
+        ? ["title"]
+        : value.type === "bars"
+          ? ["label"]
+          : [],
+    );
+    return Array.isArray(kept.items)
+      ? {
+          ...kept,
+          items: kept.items.map((item) =>
+            isRecord(item) ? omitBlank(item, ["note"]) : item,
+          ),
+        }
+      : kept;
+  };
+  const blocks = (value: unknown) =>
+    Array.isArray(value) ? value.map(block) : value;
+  const page = omitBlank(input, ["id", "summary"]);
+  return {
+    ...page,
+    ...(page.blocks !== undefined ? { blocks: blocks(page.blocks) } : {}),
+    ...(Array.isArray(page.slides)
+      ? {
+          slides: page.slides.map((slide) =>
+            isRecord(slide)
+              ? { ...slide, blocks: blocks(slide.blocks) }
+              : slide,
+          ),
+        }
+      : {}),
+  };
+}
+
+/**
+ * What the tool says back about a deck it carried onto more slides than the model wrote. The person
+ * should hear how long the deck is, never why: told only the count, a model explained it ("the
+ * chart didn't fit on one").
+ */
+export function continuedNote(continued: { to: number }): string {
+  return `Saved as ${continued.to} slides: what ran past a phone screen continued onto the next slide. Tell the person only how many slides it has, such as "It's ${continued.to} slides.", and never why.`;
 }
 
 type Row = typeof openduetPages.$inferSelect;
@@ -173,7 +273,10 @@ export function previewOf(content: PageContent): PageSummary["preview"] {
     content.slides.find((slide) =>
       slide.blocks.some((block) => block.type === "bars"),
     ) ?? content.slides[0];
-  return shown ? { title: shown.title, blocks: shown.blocks } : { blocks: [] };
+  // A thumbnail is the deck's face: a continuation slide shows under its own title.
+  return shown
+    ? { title: ownTitle(shown.title), blocks: shown.blocks }
+    : { blocks: [] };
 }
 
 function summaryOf(row: Row): PageSummary {
@@ -284,17 +387,22 @@ export function pageTools(options: {
         'Use kind "page" with blocks for anything to read, and kind "slides" with slides for a deck to present.',
         "A dashboard is a page that starts with a text block holding one short headline sentence (under 90 characters), then a metrics block of up to 8 tiles, then anything else, such as a list block of what to look at next.",
         "Blocks: heading, text, bullets, metrics (label, value, optional note), bars (a bar chart of labelled numbers) and list (rows worth a closer look).",
+        `A slide is read on a phone, in full: about ${MAX_SLIDE_BLOCKS} blocks and 12 lines of text. Write each slide with everything that belongs on it, and keep figures short. When a slide holds more than a phone shows, make_page carries the rest onto the next slide by itself, so never leave anything out or call again to make it fit; its result says how many slides were saved.`,
+        'Say only how many slides a deck has, such as "It\'s 3 slides.", never why, and never mention a limit, a split, a cut or what fits on a slide. If a call is refused, fix what it names and call make_page again, silently: write nothing to the person until it is saved, and never switch to a page or to another tool instead of the deck they asked for.',
         "The app shows it as a card under your message, and the person opens it from there. So never paste its content into the chat: write one or two sentences about it, such as what it covers and how long it takes to read.",
         "To change one you already made, call it again with that page's id and the whole new content.",
       ].join(" "),
-      parameters: inputSchema,
+      parameters: offeredInputSchema,
       initiator: options.initiator,
       async execute(args) {
         const parsed = parsePageInput(args);
         if (!parsed.ok) return parsed.refusal;
         try {
+          const saved = summaryOfRecord(await options.save(parsed.value));
           return JSON.stringify(
-            summaryOfRecord(await options.save(parsed.value)),
+            parsed.continued
+              ? { ...saved, note: continuedNote(parsed.continued) }
+              : saved,
           );
         } catch (error) {
           if (error instanceof PageNotFoundError)

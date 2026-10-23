@@ -1,4 +1,22 @@
-import { Fragment, type ReactNode } from "react";
+import {
+  BAR_PLOT,
+  barFigure,
+  barsLayout,
+  LEAST_SCALE,
+  metricColumns,
+  ROW_GAP,
+  rowLabelWidth,
+  SLIDE_PADDING,
+  SLIDE_WIDTH,
+  TAP_TARGET,
+} from "@openbot/shared/slide-fit";
+import {
+  Fragment,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { PageBlock, PageSlide } from "@/lib/pages/queries";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
@@ -299,9 +317,40 @@ export function formatValue(value: number): string {
   }).format(value);
 }
 
+/*
+ * A slide, drawn for a phone. Every block on it is laid out whole: words wrap, figures sit in tiles
+ * that grow to fit them, a chart's bars lie in rows when their labels need the room, and nothing is
+ * cut off, clamped or left out. What keeps a slide from running long is the tool, not the slide:
+ * `make_page` refuses, at save, a slide that would not fit its frame, and tells the model to split it.
+ *
+ * The slide is laid out at one width, 330px, and the whole card scaled to the width the deck gives
+ * it, so it wraps in the same places on every phone and the save-time measure holds on all of them
+ * (shared/slide-fit.ts). The sizes here are that measure's, in px so the root size never moves them:
+ * an 18/22 title, 15/20 text, 18/22 figures, 13/16 captions, 12px between blocks, 16px of padding.
+ * Change one here and change it there.
+ */
+
+/** A slide's height at the design width, before it is scaled: its content, or 16:9 if that is taller. */
+function cardHeight(content: number): number {
+  return Math.max(content + 2 * SLIDE_PADDING, (SLIDE_WIDTH * 9) / 16);
+}
+
+/** The width an element's parent gives it: its content box. */
+function widthGiven(element: HTMLElement): number {
+  const parent = element.parentElement;
+  if (!parent) return 0;
+  const style = getComputedStyle(parent);
+  return (
+    parent.clientWidth -
+    Number.parseFloat(style.paddingLeft || "0") -
+    Number.parseFloat(style.paddingRight || "0")
+  );
+}
+
 /**
- * One slide on a 16:9 card. A slide holds at most three blocks, drawn small; a chart takes whatever
- * height the others leave it.
+ * One slide of a deck: its title, then its blocks. It is at least 16:9 and grows to show everything
+ * it holds. In a deck every slide fills its place, which is as tall as the tallest slide, so the
+ * frame doesn't jump as the slides turn.
  */
 export function SlideCard({
   slide,
@@ -312,33 +361,111 @@ export function SlideCard({
   onListItem?: OnListItem;
   className?: string;
 }) {
-  // A chart needs the height. Beside one, the words get fewer lines so the bars stay readable.
-  const tight = slide.blocks.some((block) => block.type === "bars");
+  const frame = useRef<HTMLDivElement>(null);
+  const words = useRef<HTMLDivElement>(null);
+  /*
+   * The width the slide is given, its scale, the height the deck gave it, and its content's height
+   * at the design width. Unmeasured (before layout, or where there is none, as in tests) the card
+   * is drawn in place at the width it is given.
+   */
+  const [fit, setFit] = useState<{
+    given: number;
+    scale: number;
+    height: number;
+    content: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const outer = frame.current;
+    const inner = words.current;
+    if (!outer || !inner) return;
+    const measure = () => {
+      const given = widthGiven(outer);
+      if (given <= 0) return;
+      const next = {
+        given,
+        scale: Math.max(given / SLIDE_WIDTH, LEAST_SCALE),
+        height: outer.clientHeight,
+        // offsetHeight is the laid-out height, before the transform scales it.
+        content: inner.offsetHeight,
+      };
+      setFit((previous) =>
+        previous &&
+        previous.given === next.given &&
+        previous.scale === next.scale &&
+        previous.height === next.height &&
+        previous.content === next.content
+          ? previous
+          : next,
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(outer);
+    observer.observe(inner);
+    if (outer.parentElement) observer.observe(outer.parentElement);
+    return () => observer.disconnect();
+  }, []);
+  const height = fit ? cardHeight(fit.content) : 0;
+  const width = fit ? SLIDE_WIDTH * fit.scale : 0;
   return (
     <div
-      className={cn(
-        "flex aspect-video w-full flex-col overflow-hidden rounded-[18px] bg-duet-card p-4 text-duet-ink shadow-duet-raised",
-        className,
-      )}
+      className={cn("relative h-full", fit ? null : "w-full", className)}
+      ref={frame}
+      style={
+        fit
+          ? {
+              width,
+              // Past the least scale the card is wider than its place, and reaches out evenly both sides.
+              marginInline: (fit.given - width) / 2,
+              minHeight: height * fit.scale,
+            }
+          : undefined
+      }
     >
-      <h3
+      <div
         className={cn(
-          "font-semibold text-[19px] leading-[23px] tracking-[-0.015em]",
-          tight ? "line-clamp-1" : "line-clamp-2",
+          "grid grid-cols-1 rounded-[18px] bg-duet-card p-[16px] text-duet-ink shadow-duet-raised",
+          fit ? "absolute top-0 left-0 origin-top-left" : "h-full w-full",
         )}
+        style={
+          fit
+            ? {
+                width: SLIDE_WIDTH,
+                height: Math.max(fit.height / fit.scale, height),
+                transform: `scale(${fit.scale})`,
+              }
+            : undefined
+        }
       >
-        {slide.title}
-      </h3>
-      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
-        {slide.blocks.map((block, index) => (
-          <SlideBlock
-            block={block}
-            // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
-            key={index}
-            onListItem={onListItem}
-            tight={tight}
-          />
-        ))}
+        {/*
+         * The 16:9 floor before the slide is measured: a spacer in the same cell as the content, so
+         * the card is the taller of the two. 31:16 inside 16px of padding is 16:9 outside it.
+         */}
+        {fit ? null : (
+          <div aria-hidden className="col-start-1 row-start-1 aspect-[31/16]" />
+        )}
+        <div
+          className="col-start-1 row-start-1 flex min-w-0 flex-col self-start"
+          ref={words}
+        >
+          <h3 className="font-semibold text-[18px] leading-[22px] tracking-[-0.01em] [overflow-wrap:anywhere]">
+            {slide.title}
+          </h3>
+          {slide.blocks.length > 0 ? (
+            <div className="mt-[12px] flex flex-col gap-[12px]">
+              {slide.blocks.map((block, index) => (
+                <SlideBlock
+                  block={block}
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
+                  key={index}
+                  onListItem={onListItem}
+                  scale={fit?.scale ?? 1}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -347,99 +474,273 @@ export function SlideCard({
 function SlideBlock({
   block,
   onListItem,
-  tight,
+  scale,
 }: {
   block: PageBlock;
   onListItem?: OnListItem | undefined;
-  tight: boolean;
+  /** How much the slide is scaled on screen, so a row can stay a 44px target there. */
+  scale: number;
 }): ReactNode {
-  const lines = tight ? 2 : 4;
   switch (block.type) {
     case "heading":
       return (
-        <p className="font-semibold text-[14px] text-duet-ink leading-[18px]">
+        <p className="font-semibold text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
           {block.text}
         </p>
       );
     case "text":
       return (
-        <p
-          className={cn(
-            "shrink-0 text-[14px] text-duet-ink-2 leading-[19px]",
-            tight ? "line-clamp-2" : "line-clamp-3",
-          )}
-        >
+        <p className="whitespace-pre-line text-[15px] text-duet-ink-2 leading-[20px] [overflow-wrap:anywhere]">
           {block.text}
         </p>
       );
     case "bullets":
       return (
-        <ul className="flex flex-col gap-0.5">
-          {block.items.slice(0, lines).map((item, index) => (
+        <ul className="flex flex-col gap-[4px]">
+          {block.items.map((item, index) => (
             <li
-              className="flex gap-2 text-[14px] text-duet-ink-2 leading-[19px]"
+              className="flex gap-[8px] text-[15px] text-duet-ink-2 leading-[20px]"
               // biome-ignore lint/suspicious/noArrayIndexKey: two bullets may say the same thing.
               key={index}
             >
               <span
                 aria-hidden
-                className="mt-[8px] size-1 shrink-0 rounded-full bg-duet-ink-3"
+                className="mt-[8px] size-[4px] shrink-0 rounded-full bg-duet-ink-3"
               />
-              <span className="line-clamp-1 min-w-0">{item}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{item}</span>
             </li>
           ))}
         </ul>
       );
     case "metrics":
       return (
-        <ul className="grid grid-cols-3 gap-1.5">
-          {block.items.slice(0, 3).map((metric, index) => (
+        <ul
+          className={cn(
+            "grid gap-[8px]",
+            metricColumns(block) === 2 ? "grid-cols-2" : "grid-cols-1",
+          )}
+        >
+          {block.items.map((metric, index) => (
             <li
-              className="min-w-0 rounded-[10px] bg-duet-tile px-2 py-1.5"
+              className="flex min-w-0 flex-col rounded-[10px] bg-duet-tile px-[10px] py-[8px]"
               // biome-ignore lint/suspicious/noArrayIndexKey: two tiles may share a label.
               key={index}
             >
-              <span className="block truncate font-semibold text-[16px] tabular-nums leading-5">
+              <span className="font-semibold text-[18px] leading-[22px] tracking-[-0.01em] tabular-nums [overflow-wrap:anywhere]">
                 {metric.value}
               </span>
-              <span className="block truncate text-[11px] text-duet-ink-2 leading-[14px]">
+              <span className="font-medium text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
                 {metric.label}
               </span>
+              {metric.note ? (
+                <span className="mt-[2px] text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+                  {metric.note}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>
       );
     case "bars":
-      return <BarChart compact items={block.items} label={block.label} />;
+      return <SlideBars block={block} />;
     case "list":
       return (
-        <ul className="flex flex-col">
-          {block.items.slice(0, tight ? 2 : 3).map((item, index) => (
-            <li
-              className="flex items-center gap-1 text-[14px] leading-[19px]"
-              // biome-ignore lint/suspicious/noArrayIndexKey: rows may repeat a line.
-              key={index}
-            >
-              {onListItem ? (
-                <button
-                  className="flex min-w-0 flex-1 items-center gap-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-duet-violet/40"
-                  onClick={() => onListItem(item.text)}
-                  type="button"
-                >
-                  <span className="min-w-0 flex-1 truncate">{item.text}</span>
-                  <DuetIcon
-                    className="text-duet-ink-3"
-                    name="chevronRight"
-                    size={14}
-                    stroke={2.2}
-                  />
-                </button>
-              ) : (
-                <span className="min-w-0 flex-1 truncate">{item.text}</span>
-              )}
-            </li>
-          ))}
-        </ul>
+        <div>
+          {block.title ? (
+            <p className="mb-[4px] font-semibold text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
+              {block.title}
+            </p>
+          ) : null}
+          <ul aria-label={block.title ?? undefined} className="flex flex-col">
+            {block.items.map((item, index) => (
+              <li
+                className={index > 0 ? "border-duet-hair border-t" : undefined}
+                // biome-ignore lint/suspicious/noArrayIndexKey: rows may repeat a line.
+                key={index}
+              >
+                <SlideRow
+                  note={item.note}
+                  onPress={onListItem ? () => onListItem(item.text) : undefined}
+                  scale={scale}
+                  text={item.text}
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
       );
   }
+}
+
+/**
+ * A row on a slide: its note under it, a chevron when it can be pressed, and at least a 44px target
+ * on screen whatever the slide's scale (52px laid out at the least scale, which the measure counts).
+ */
+function SlideRow({
+  text,
+  note,
+  onPress,
+  scale,
+}: {
+  text: string;
+  note?: string | undefined;
+  onPress?: (() => void) | undefined;
+  scale: number;
+}) {
+  const minHeight = TAP_TARGET / scale;
+  const body = (
+    <>
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
+          {text}
+        </span>
+        {note ? (
+          <span className="block text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+            {note}
+          </span>
+        ) : null}
+      </span>
+      {onPress ? (
+        <DuetIcon
+          className="shrink-0 text-duet-ink-3"
+          name="chevronRight"
+          size={16}
+          stroke={2.2}
+        />
+      ) : null}
+    </>
+  );
+  const row = "flex w-full items-center gap-[8px] py-[4px] text-left";
+  return onPress ? (
+    <button
+      className={cn(
+        row,
+        "rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-duet-violet/40 active:bg-duet-hair-2",
+      )}
+      onClick={onPress}
+      style={{ minHeight }}
+      type="button"
+    >
+      {body}
+    </button>
+  ) : (
+    <div className={row} style={{ minHeight }}>
+      {body}
+    </div>
+  );
+}
+
+/**
+ * A chart on a slide, the last bar in violet. Standing in columns, figure over and label under, when
+ * every figure and label word fits its column; lying in rows (label, bar, figure) when one doesn't,
+ * so "Wednesday" under a seventh of the slide is laid out rather than broken. The server measured
+ * the same choice (`barsLayout`). The figures are read out as a list, since a screen reader cannot
+ * see the bars.
+ */
+function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
+  const { items, label } = block;
+  // A part of a chart continued across slides draws against the whole chart's largest value.
+  const max = block.scale ?? Math.max(...items.map((item) => item.value), 0);
+  const described = items.map((item) => `${item.label} ${item.value}`);
+  const name = [label, described.join(", ")].filter(Boolean).join(": ");
+  const tone = (index: number) =>
+    index === items.length - 1 ? "violet" : "grey";
+  const share = (value: number) => (max > 0 ? value / max : 0);
+  const rows = barsLayout(block) === "rows";
+  // In rows, the label column takes the widest label, as the measure does (`rowLabelWidth`).
+  const labelWidth = rows ? rowLabelWidth(block) : 0;
+  return (
+    <figure className="flex flex-col">
+      {label ? (
+        <figcaption className="mb-[6px] font-semibold text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+          {label}
+        </figcaption>
+      ) : null}
+      {rows ? (
+        <div
+          aria-label={name}
+          className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_max-content] items-center gap-x-[8px]"
+          data-layout="rows"
+          role="img"
+          style={{ rowGap: ROW_GAP }}
+        >
+          {items.map((item, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: two bars may share a label.
+            <Fragment key={index}>
+              <span
+                className="text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]"
+                style={{ maxWidth: labelWidth }}
+              >
+                {item.label}
+              </span>
+              <div className="h-[12px] w-full">
+                <div
+                  className={cn(
+                    "h-full rounded-[4px]",
+                    tone(index) === "violet"
+                      ? "bg-duet-violet"
+                      : "bg-duet-ink-2/70",
+                  )}
+                  style={{ width: `${Math.max(share(item.value) * 100, 2)}%` }}
+                />
+              </div>
+              <span
+                className={cn(
+                  "text-right font-medium text-[13px] leading-[16px] tabular-nums",
+                  tone(index) === "violet"
+                    ? "text-duet-violet"
+                    : "text-duet-ink-2",
+                )}
+              >
+                {barFigure(item.value)}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      ) : (
+        <div
+          aria-label={name}
+          className="flex gap-[6px]"
+          data-layout="columns"
+          role="img"
+        >
+          {items.map((item, index) => (
+            <div
+              className="flex min-w-0 flex-1 basis-0 flex-col items-center"
+              // biome-ignore lint/suspicious/noArrayIndexKey: two bars may share a label.
+              key={index}
+            >
+              <span
+                className={cn(
+                  "font-medium text-[13px] leading-[16px] tabular-nums",
+                  tone(index) === "violet"
+                    ? "text-duet-violet"
+                    : "text-duet-ink-2",
+                )}
+              >
+                {barFigure(item.value)}
+              </span>
+              <div
+                className="mt-[2px] flex w-full items-end"
+                style={{ height: BAR_PLOT }}
+              >
+                <div
+                  className={cn(
+                    "w-full rounded-[6px]",
+                    tone(index) === "violet"
+                      ? "bg-duet-violet"
+                      : "bg-duet-ink-2/70",
+                  )}
+                  style={{ height: `${Math.max(share(item.value) * 100, 3)}%` }}
+                />
+              </div>
+              <span className="mt-[4px] w-full text-center text-[13px] text-duet-ink-2 leading-[16px] [overflow-wrap:anywhere]">
+                {item.label}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </figure>
+  );
 }

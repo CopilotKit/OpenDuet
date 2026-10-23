@@ -90,8 +90,15 @@ export function createApprovedActionExecutor(deps: ApprovedActionDependencies) {
       throw new ApprovalRefusedError(
         "That conversation is no longer available to this Bot and person.",
       );
-    // A private-information share the person allowed: the approval is the whole action, and the Bot
-    // is told to send again, which the share check then passes. Gated so re-entry validation sees it.
+    /*
+     * A private-information share the person allowed: the approval is the whole action, and the Bot
+     * is told to make the call, which the share check then passes. Gated so re-entry validation sees
+     * it.
+     *
+     * NOTHING WENT OUT BEFORE THIS, and the words have to say so. They used to read "Send it again",
+     * and a Bot that sent one email told the person it had sent it "a second time": "again" read as
+     * a first send that never happened.
+     */
     if (action.toolRef === deps.privateShareToolRef) {
       await deps.gate({
         actorId: action.actorId,
@@ -103,7 +110,7 @@ export function createApprovedActionExecutor(deps: ApprovedActionDependencies) {
         target: action.target,
         continuation: snapshot,
       });
-      return "The person allowed this share. Send it again now, unchanged.";
+      return "The person allowed this. Nothing has been sent yet: make the same call now, unchanged, and it goes out once.";
     }
     const computer = await deps.computerTools(
       action.actorId,

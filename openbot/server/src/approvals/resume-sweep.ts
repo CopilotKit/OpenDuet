@@ -1,5 +1,6 @@
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { headlessTurnRefusal } from "../admin/controls";
 import type { AgentActor } from "../agents/profile-types";
@@ -13,6 +14,8 @@ import {
   routineRuns,
 } from "../db/schema";
 import type { DeliveryScope } from "../delivery/types";
+import { PRIVATE_SHARE_TOOL_REF } from "../proactive/private-share";
+import { recordTaskContinuation } from "../proactive/store";
 import type { ResponsibilityStore } from "../responsibilities/types";
 import { DEFAULT_MAX_ATTEMPTS, type WorkQueue } from "../work/queue";
 import type { ApprovalResumeDependencies, ApprovalService } from "./service";
@@ -83,19 +86,25 @@ export function createApprovalResumeTick(deps: {
               executeApprovedAction(action),
             ),
           execute: executeApprovedAction,
+          carriedOutByContinuation: (action) =>
+            action.toolRef === PRIVATE_SHARE_TOOL_REF,
           continue: async ({
             continuation: snapshot,
             result,
             messageId,
             approvalId,
+            answered = [{ approvalId, result }],
           }) => {
+            // The run waits on the first decision its step stopped on, which need not be this one.
+            const decided = answered.map((entry) => entry.approvalId);
+            const waitingOn = sql<string>`${responsibilityRuns.waiting}->>'approvalId'`;
             const [waitingRun] = await database
-              .select({ id: responsibilityRuns.id })
+              .select({ id: responsibilityRuns.id, approvalId: waitingOn })
               .from(responsibilityRuns)
               .where(
                 and(
                   eq(responsibilityRuns.status, "waiting"),
-                  sql`${responsibilityRuns.waiting}->>'approvalId' = ${approvalId}`,
+                  inArray(waitingOn, decided),
                 ),
               )
               .limit(1);
@@ -103,27 +112,15 @@ export function createApprovalResumeTick(deps: {
               await responsibilityStore.resumeWaiting(
                 input.ownerUserId,
                 waitingRun.id,
-                result,
+                answered.find(
+                  (entry) => entry.approvalId === waitingRun.approvalId,
+                )?.result ?? result,
               );
               return;
             }
             const request = await approvalService.store.get(
               input.ownerUserId,
               approvalId,
-            );
-            // A group turn's approval also writes the resumed reply into the shared transcript.
-            const outcome = await groupConversations.continueWaiting(
-              approvalId,
-              () =>
-                approvalContinuationRunner({
-                  ownerUserId: input.ownerUserId,
-                  routineId: "approval",
-                  agentId: request.action.botId,
-                  threadId: snapshot.threadId,
-                  instruction: "",
-                  initiator: snapshot.initiator ?? PERSON_INITIATOR,
-                  continuation: { snapshot, result, messageId },
-                }),
             );
             const [source] = await database
               .select({ channelId: intelligenceChannelMappings.channelId })
@@ -135,6 +132,85 @@ export function createApprovalResumeTick(deps: {
                 ),
               )
               .limit(1);
+            const routineWaitingOn = sql<string>`${routineRuns.waiting}->>'approvalId'`;
+            /*
+             * A started task waiting on a decision this continuation answers takes the reply as where
+             * it now stands (proactive/store.ts). A task waits on the first decision its step stopped
+             * on, which need not be the one decided last, so every decision answered is offered. The
+             * fallback by conversation (a task whose question led here) is used only for a step of one
+             * decision, where it cannot match the wrong task. Never thrown: the conversation has
+             * already continued, and a retry here would carry the decision out twice.
+             */
+            const recordTask = async (
+              replyText: string | null,
+              stoppedOn?: { kind: string; id: string },
+            ) => {
+              for (const id of decided)
+                await recordTaskContinuation(database, {
+                  ownerUserId: input.ownerUserId,
+                  approvalId: id,
+                  channelId:
+                    decided.length === 1 ? (source?.channelId ?? null) : null,
+                  askedAt: request.createdAt,
+                  replyText,
+                  ...(stoppedOn ? { stoppedOn } : {}),
+                }).catch((failure: unknown) =>
+                  console.error(
+                    JSON.stringify({
+                      type: "started-task-continuation-error",
+                      error:
+                        failure instanceof Error
+                          ? failure.name
+                          : "UnknownError",
+                      timestamp: new Date().toISOString(),
+                    }),
+                  ),
+                );
+            };
+            // A group turn's approval also writes the resumed reply into the shared transcript.
+            let outcome: { replyText: string };
+            try {
+              outcome = await groupConversations.continueWaiting(
+                approvalId,
+                () =>
+                  approvalContinuationRunner({
+                    ownerUserId: input.ownerUserId,
+                    routineId: "approval",
+                    agentId: request.action.botId,
+                    threadId: snapshot.threadId,
+                    instruction: "",
+                    initiator: snapshot.initiator ?? PERSON_INITIATOR,
+                    continuation: { snapshot, result, messageId },
+                  }),
+              );
+            } catch (error) {
+              /*
+               * Carried on, then stopped on another decision only the person can make: the
+               * conversation now waits on that one, as a routine's does. This decision is done.
+               * Thrown, it was retried, and every retry carried the turn on again from here,
+               * repeating what it had already done before it stopped: the same email to Sam,
+               * twelve times. (Found and fixed the same way by builder C on #37.)
+               */
+              if (!(error instanceof HeadlessToolSuspension)) throw error;
+              // A routine run waiting on this decision now waits on the next one.
+              await database
+                .update(routineRuns)
+                .set({ waiting: error.waiting })
+                .where(
+                  and(
+                    eq(routineRuns.status, "waiting"),
+                    inArray(routineWaitingOn, decided),
+                  ),
+                );
+              await recordTask(
+                null,
+                error.waiting.requestId
+                  ? { kind: error.waiting.kind, id: error.waiting.requestId }
+                  : undefined,
+              );
+              return;
+            }
+            await recordTask(outcome.replyText);
             if (source && outcome.replyText)
               await channelStore.recordActivity(
                 await actorFor(input.ownerUserId),
@@ -168,7 +244,7 @@ export function createApprovalResumeTick(deps: {
               .where(
                 and(
                   eq(routineRuns.status, "waiting"),
-                  sql`${routineRuns.waiting}->>'approvalId' = ${approvalId}`,
+                  inArray(routineWaitingOn, decided),
                 ),
               );
           },

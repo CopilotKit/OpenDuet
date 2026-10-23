@@ -1,6 +1,9 @@
+import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import { z } from "zod";
 import type { RunAssertion } from "../agents/callback-token";
+import type { Database } from "../db/client";
+import { recordQuestionContinuation } from "../proactive/store";
 import type { AgentActor } from "../agents/profile-types";
 import type { ChannelStore } from "../channels/routes";
 import type { DeliveryScope } from "../delivery/types";
@@ -40,8 +43,11 @@ export function createPersonResponseTick(deps: {
     scope: DeliveryScope,
     input: { id: string; text: string; kind: "reply" },
   ) => Promise<void>;
+  /** For the started task that asked: it takes the reply (proactive/store.ts). */
+  database: Database;
 }): () => Promise<void> {
   const {
+    database,
     approvalQueue,
     personResponseOwner,
     authoriseQuestion,
@@ -76,15 +82,55 @@ export function createPersonResponseTick(deps: {
             "The saved question owner does not match.",
           );
         await authoriseQuestion(payload.question);
-        const outcome = await resumePersonQuestion({
+        let outcome: { replyText: string };
+        try {
+          outcome = await resumePersonQuestion({
+            ownerUserId: payload.ownerUserId,
+            question: payload.question,
+            response: payload.response,
+            messageId: `person-response:${item.key}`,
+            runTurn: approvalContinuationRunner,
+            responsibilities: responsibilityStore,
+            responsibilityTurn: responsibilityAnswerTurn,
+          });
+        } catch (error) {
+          /*
+           * Carried on with the answer, then stopped on a decision only the person can make: the
+           * conversation now waits on that, and this answer is done. Thrown, the answer was
+           * recorded as failed and the conversation was left waiting on nothing anybody could see.
+           * (Builder C's fix on #37, carried here.)
+           */
+          if (!(error instanceof HeadlessToolSuspension)) throw error;
+          await recordQuestionContinuation(database, {
+            ownerUserId: payload.ownerUserId,
+            questionKey: item.key,
+            replyText: null,
+            stoppedOn: error.waiting.requestId
+              ? { kind: error.waiting.kind, id: error.waiting.requestId }
+              : undefined,
+          }).catch(() => undefined);
+          await approvalQueue.finish({
+            kind: item.kind,
+            key: item.key,
+            owner: personResponseOwner,
+          });
+          return;
+        }
+        // A started task that asked this takes the reply as where it now stands. Never thrown:
+        // the conversation has already continued.
+        await recordQuestionContinuation(database, {
           ownerUserId: payload.ownerUserId,
-          question: payload.question,
-          response: payload.response,
-          messageId: `person-response:${item.key}`,
-          runTurn: approvalContinuationRunner,
-          responsibilities: responsibilityStore,
-          responsibilityTurn: responsibilityAnswerTurn,
-        });
+          questionKey: item.key,
+          replyText: outcome.replyText,
+        }).catch((error: unknown) =>
+          console.error(
+            JSON.stringify({
+              type: "started-task-continuation-error",
+              error: error instanceof Error ? error.name : "UnknownError",
+              timestamp: new Date().toISOString(),
+            }),
+          ),
+        );
         const source = await sourceForCoordinationRun({
           ...payload.question,
           botId: questionConversationBot(payload.question),

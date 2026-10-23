@@ -59,6 +59,14 @@ import {
   type LoadPersonalMemory,
   PersonalMemoryMiddleware,
 } from "./memory/tools";
+import { REPLIES_TOOL } from "./openduet/replies";
+import {
+  answerReplies,
+  endingTurns,
+  noteToolStep,
+  type ToolExecution,
+  watchReplyTurn,
+} from "./openduet/reply-turn";
 import type { SelectableSkill, Selection } from "./plugins/selection";
 import {
   latestUserText,
@@ -417,7 +425,18 @@ export function builtInAgentConfiguration(
   ];
 
   return {
-    model: planModel ?? `${model.provider}/${model.defaultModel}`,
+    /*
+     * Wrapped only when the Bot holds tools, which is when there is a step loop to end: once a turn's
+     * reply chips are shown under its question, the next step is answered "stop" without reaching the
+     * model. See `endingTurns` in openduet/reply-turn.ts.
+     */
+    model:
+      allTools.length > 0
+        ? endingTurns(
+            planModel ?? `${model.provider}/${model.defaultModel}`,
+            apiKey ?? undefined,
+          )
+        : (planModel ?? `${model.provider}/${model.defaultModel}`),
     /*
      * The package's role, then the person's own standing instructions, then what this Bot actually
      * holds, then the computer.
@@ -463,14 +482,25 @@ export function builtInAgentConfiguration(
       ? {
           tools: allTools.map((tool) => ({
             ...tool,
-            execute: (args: unknown, execution?: { toolCallId?: string }) =>
-              executeNativeApprovalTool(
+            /*
+             * Every call is noted against its step, with its execution, as it starts, so a
+             * `suggest_replies` call can tell whether it shares that step with a read and wait for a
+             * send beside it to reach its approval. See openduet/reply-turn.ts.
+             */
+            execute: (args: unknown, execution?: ToolExecution) => {
+              const settled = executeNativeApprovalTool(
                 tool.name,
                 args,
                 execution?.toolCallId,
                 tools.find((granted) => granted.name === tool.name)?.initiator,
-                () => tool.execute(args),
-              ),
+                () =>
+                  tool.name === REPLIES_TOOL
+                    ? answerReplies(execution, () => tool.execute(args))
+                    : tool.execute(args),
+              );
+              noteToolStep(tool.name, execution, settled);
+              return settled;
+            },
           })),
           maxSteps: TOOL_STEPS,
         }
@@ -999,7 +1029,8 @@ async function buildAgent(
         learnedSkills,
       ),
       {
-        observe: observeModelConnection,
+        // The run's own events also tell the reply-chips guard what was written before each call.
+        observe: (run) => observeModelConnection(watchReplyTurn(run)),
         ...(loadAttachment
           ? {
               inline: (messages: AgentRunInput["messages"], threadId: string) =>

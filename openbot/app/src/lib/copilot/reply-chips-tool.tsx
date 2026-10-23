@@ -1,9 +1,9 @@
 import { useRenderTool } from "@copilotkit/react-core/v2";
 import { useState } from "react";
 import { z } from "zod";
+import { repliesShown } from "@/components/channels/chat-messages";
 import { useConversationSend } from "@/components/channels/conversation-send";
 import { DuetIcon } from "@/components/duet/icons";
-import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import { cn } from "@/lib/utils";
 
 /*
@@ -23,15 +23,15 @@ export const REPLIES_TOOL = "suggest_replies";
 const parameters = z.object({ replies: z.array(z.string()).optional() });
 
 /**
- * The replies to draw, or null while the call is still running or when the server refused them.
- * The server is what decides a set of replies is good; this only takes what it accepted.
+ * The replies to draw, or null while the call is still running, when the server refused them, or
+ * when the runtime rejected them before the tool ran (`repliesShown`). The server is what decides a
+ * set of replies is good; this only takes what it accepted.
  */
 export function readReplies(
   args: { replies?: unknown } | undefined,
   result: unknown,
 ): string[] | null {
-  if (typeof result !== "string") return null;
-  if (asText(result).startsWith(REFUSAL_MARKER)) return null;
+  if (typeof result !== "string" || !repliesShown(result)) return null;
   const replies = Array.isArray(args?.replies)
     ? args.replies
         .filter((reply): reply is string => typeof reply === "string")

@@ -112,14 +112,105 @@ export type ApprovalResumeDependencies = {
   /** Resolve the target again and recheck current policy/grants; never trust approval as authority. */
   validate(action: ApprovalAction): Promise<ApprovalAction>;
   execute(action: ApprovalAction): Promise<unknown>;
+  /**
+   * Whether the approved action is carried out by the continuation rather than here: a private
+   * share, which the Bot sends again. Such a request is not consumed here. The send consumes it
+   * (`proactive/private-share.ts`), so a continuation that runs twice cannot send it twice.
+   */
+  carriedOutByContinuation?(action: ApprovalAction): boolean;
   /** Persist this deterministic tool result and resume its canonical conversation. */
   continue(input: {
     approvalId: string;
     messageId: string;
     continuation: ApprovalContinuation;
     result: { content: string; error?: string };
+    /**
+     * Every decision this continuation answers, this one included: the other calls the same step
+     * of the run made and stopped on. A waiting routine or responsibility run is found by any of
+     * them.
+     */
+    answered?: {
+      approvalId: string;
+      result: { content: string; error?: string };
+    }[];
   }): Promise<void>;
 };
+/** What the runner of a step's last decision does while an earlier one is still being carried out. */
+export const STEP_STILL_RUNNING =
+  "Another decision in the same step is still being carried out.";
+/** An earlier decision in a step that was still being carried out when the step had to go on. */
+const OUTCOME_UNKNOWN_IN_STEP =
+  "This action's outcome is unknown: it was still being carried out when the conversation went on. It was not repeated. Check whether it happened before asking the person again.";
+type Answered = ApprovalRecord & {
+  result: { content: string; error?: string };
+};
+/** The tool calls the step that made this call made, by id. */
+function stepCalls(
+  snapshot: ApprovalContinuation | undefined,
+  toolCallId: string,
+): Set<string> {
+  const step = snapshot?.messages.find(
+    (message) =>
+      message.role === "assistant" &&
+      message.toolCalls?.some((call) => call.id === toolCallId),
+  );
+  return new Set(
+    step && step.role === "assistant"
+      ? (step.toolCalls ?? []).map((call) => call.id)
+      : [],
+  );
+}
+/** Decided last, so the one whose work carries the step on. Ties go to the larger id. */
+function decidedLast(requests: ApprovalRecord[]): ApprovalRecord | undefined {
+  return [...requests].sort(
+    (left, right) =>
+      (right.decidedAt?.getTime() ?? 0) - (left.decidedAt?.getTime() ?? 0) ||
+      right.id.localeCompare(left.id),
+  )[0];
+}
+/**
+ * One continuation for a step that stopped on several decisions: the fullest snapshot of the step,
+ * with the other decisions' results answered right after it and this one's left for the runner.
+ */
+function stepContinuation(
+  own: ApprovalContinuation,
+  others: Answered[],
+): ApprovalContinuation {
+  let base = own;
+  const width = (snapshot: ApprovalContinuation) =>
+    stepCalls(snapshot, own.toolCallId).size;
+  for (const other of others) {
+    const snapshot = other.action.continuation;
+    if (snapshot && width(snapshot) > width(base)) base = snapshot;
+  }
+  const calls = stepCalls(base, own.toolCallId);
+  const answered = new Set(
+    base.messages.flatMap((message) =>
+      message.role === "tool" ? [message.toolCallId] : [],
+    ),
+  );
+  const results: ApprovalContinuation["messages"] = others
+    .filter(
+      (other) =>
+        calls.has(other.action.toolCallId) &&
+        !answered.has(other.action.toolCallId),
+    )
+    .map((other) => ({
+      id: `approval:${other.id}`,
+      role: "tool" as const,
+      toolCallId: other.action.toolCallId,
+      content: other.result.content,
+      ...(other.result.error ? { error: other.result.error } : {}),
+    }));
+  return {
+    ...base,
+    toolCallId: own.toolCallId,
+    toolName: own.toolName,
+    args: own.args,
+    ...(own.initiator ? { initiator: own.initiator } : {}),
+    messages: [...base.messages, ...results],
+  };
+}
 export type ApprovalService = ReturnType<typeof createApprovalService>;
 
 export function createApprovalService(
@@ -150,6 +241,77 @@ export function createApprovalService(
           action.policy.source === "personal_rule") &&
         ruleMatches(rule, action),
     );
+  }
+  /** The other approvals the same step of the same run stopped on: calls the model made together. */
+  async function decidedTogether(
+    ownerUserId: string,
+    request: ApprovalRecord,
+  ): Promise<ApprovalRecord[]> {
+    const { runId, toolCallId } = request.action;
+    const inRun = store.forRun
+      ? await store.forRun(ownerUserId, runId)
+      : (await store.list(ownerUserId)).filter(
+          (other) => other.action.runId === runId,
+        );
+    const mine = stepCalls(request.action.continuation, toolCallId);
+    return inRun.filter(
+      (other) =>
+        other.id !== request.id &&
+        (mine.has(other.action.toolCallId) ||
+          stepCalls(other.action.continuation, other.action.toolCallId).has(
+            toolCallId,
+          )),
+    );
+  }
+  /**
+   * Carry the run on after this decision, once per step. A step that made two calls the person had
+   * to decide on waits for both: each decision is carried out on its own, and the last one decided
+   * runs one continuation that answers them all. Before, each ran its own continuation from its own
+   * snapshot, so the first was left with a call nobody had answered, made it again, and stopped on
+   * a new question every time it was retried.
+   *
+   * `final` is the last try: an earlier decision still being carried out is answered as unknown
+   * rather than waited for.
+   */
+  async function carryOn(
+    ownerUserId: string,
+    request: Answered,
+    dependencies: Pick<ApprovalResumeDependencies, "continue">,
+    final: boolean,
+  ): Promise<void> {
+    const continuation = request.action.continuation;
+    const together = await decidedTogether(ownerUserId, request);
+    if (together.some((other) => other.status === "pending")) return;
+    if (decidedLast([request, ...together])?.id !== request.id) return;
+    const others: Answered[] = [];
+    for (const other of together) {
+      if (other.result) {
+        others.push({ ...other, result: other.result });
+        continue;
+      }
+      if (!final) throw new Error(STEP_STILL_RUNNING);
+      const unknown = {
+        content: OUTCOME_UNKNOWN_IN_STEP,
+        error: OUTCOME_UNKNOWN_IN_STEP,
+      };
+      await store.saveResult(ownerUserId, other.id, unknown);
+      const saved = await store.get(ownerUserId, other.id);
+      others.push({ ...saved, result: saved.result ?? unknown });
+    }
+    if (continuation)
+      await dependencies.continue({
+        approvalId: request.id,
+        messageId: `approval:${request.id}`,
+        continuation: stepContinuation(continuation, others),
+        result: request.result,
+        answered: [request, ...others].map((answered) => ({
+          approvalId: answered.id,
+          result: answered.result,
+        })),
+      });
+    for (const answered of [request, ...others])
+      if (answered.status !== "completed")
+        await store.finish(ownerUserId, answered.id);
   }
   /** Safety, rules, auto-review and the person's default, settled once per action and audited. */
   async function evaluate(
@@ -571,7 +733,11 @@ export function createApprovalService(
               throw new ApprovalRefusedError(
                 "The approved action or resolved target has changed.",
               );
-            if (!(await store.consume(ownerUserId, id, current.actionDigest))) {
+            // A share is consumed by the send that carries it out, in the continuation.
+            if (
+              !dependencies.carriedOutByContinuation?.(current) &&
+              !(await store.consume(ownerUserId, id, current.actionDigest))
+            ) {
               // Still `approved`: an "Always allow" whose rule was revoked before it ran. Anything
               // else means another replica took the request, and it continues the conversation.
               if ((await store.get(ownerUserId, id)).status !== "approved")
@@ -620,13 +786,7 @@ export function createApprovalService(
         // Saved by one process only: whichever saves the answer is the one that continues.
         if (!(await store.saveResult(ownerUserId, id, result))) return;
       }
-      await dependencies.continue({
-        approvalId: id,
-        messageId: `approval:${id}`,
-        continuation,
-        result,
-      });
-      await store.finish(ownerUserId, id);
+      await carryOn(ownerUserId, { ...request, result }, dependencies, false);
     },
     /**
      * The work item carrying this resume ran out of tries. Left alone, the request stayed approved
@@ -642,7 +802,6 @@ export function createApprovalService(
       const request = await store.get(ownerUserId, id);
       if (request.status === "completed" || request.status === "pending")
         return;
-      const continuation = request.action.continuation;
       let result = request.result;
       if (!result) {
         const text = `Not done: this action could not be carried out (${reason.slice(0, 300)}). Check whether it happened before asking the person again.`;
@@ -655,14 +814,7 @@ export function createApprovalService(
           return;
         result = { content: text, error: text };
       }
-      if (continuation)
-        await dependencies.continue({
-          approvalId: id,
-          messageId: `approval:${id}`,
-          continuation,
-          result,
-        });
-      await store.finish(ownerUserId, id);
+      await carryOn(ownerUserId, { ...request, result }, dependencies, true);
     },
   };
 }

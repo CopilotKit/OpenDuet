@@ -1,5 +1,6 @@
 import type { ActivityMessage, Message, ToolCall } from "@ag-ui/core";
 import { classifyAttachment } from "@/lib/channels/attachments";
+import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -573,6 +574,40 @@ const SUGGEST_REPLIES = "suggest_replies";
 const MAKE_PAGE = "make_page";
 
 /**
+ * How the runtime answers for a tool when it rejected the call's arguments before the tool ran, such
+ * as a reply too long for a chip. Not encoded, unlike a tool's own text.
+ */
+const RUNTIME_TOOL_ERROR = "Error:";
+
+/**
+ * Whether a `suggest_replies` call drew its chips: the server has answered it, and neither refused
+ * it (`REFUSAL_MARKER`: a second set in one turn, or replies it would not take) nor failed it. One
+ * test for the transcript and the chips' renderer both, so a call is never a row with no chips.
+ *
+ * A call the server held, because it came before the answer, is drawn once the answer is written:
+ * see `repliesHeld`.
+ */
+export function repliesShown(result: string | undefined): boolean {
+  if (result === undefined) return false;
+  const answer = asText(result);
+  return (
+    !answer.startsWith(REFUSAL_MARKER) && !answer.startsWith(RUNTIME_TOOL_ERROR)
+  );
+}
+
+/** How the server answers a call it held for an answer still to come (server/src/openduet/replies.ts). */
+const HELD_MARKER = "The buttons are held";
+
+/**
+ * Whether the server held this call's chips: the Bot called for them beside a read, or before it
+ * had written its answer, and was told to write it now. They belong under that answer, so
+ * `repliesLast` draws nothing for them until the Bot's words follow the call in its turn.
+ */
+export function repliesHeld(result: string | undefined): boolean {
+  return result !== undefined && asText(result).startsWith(HELD_MARKER);
+}
+
+/**
  * Page cards and reply chips moved to the end of their turn, under the Bot's last words in it:
  * the cards first, then the chips.
  *
@@ -581,35 +616,91 @@ const MAKE_PAGE = "make_page";
  * as common, and drawn where the call sits its chips would land above the question they answer. A
  * page is the same: the Bot makes it, then says a line about it, and the card belongs under the
  * line. A turn ends where the person next sends something, so both go just before that.
+ *
+ * AND ONLY CHIPS THE SERVER ACCEPTED (`repliesShown`). Any other call has no chips to draw, and kept
+ * as an item it would still take a row of the transcript's gap: an empty stripe where the chips
+ * would have been.
+ *
+ * A HELD SET WAITS FOR WORDS (`repliesHeld`). Drawn as soon as it was answered, it sat live under
+ * "Thinking it through…" for seconds before the answer it belongs to existed: the person's message,
+ * a tool line and three choices, which is the very picture of an answer collapsed to its question.
+ * A tap there answered a question nobody had been shown. So it is drawn once the Bot's words follow
+ * the call in its turn.
+ *
+ * ONE SET PER TURN, THE LAST. The server refuses a second set, but a run resumed after Allow once
+ * starts from the moment the send waited, and the step it repeats can call for chips again. Two
+ * identical rows were drawn; the last set stands for the turn.
+ *
+ * A page the tool refused is left out altogether. It draws no card, and kept as an empty row it
+ * still took the thread's gap, so every retry pushed the card further from the Bot's line. So is
+ * whatever the Bot said between a refused call and its retry ("Two slides it is."): that is the Bot
+ * talking about the retry, which the person never sees. Said after a refusal it never retried, it
+ * stays.
  */
 export function repliesLast(
   items: readonly VisibleChatItem[],
 ): VisibleChatItem[] {
-  const ordered: VisibleChatItem[] = [];
+  /** A finished call whose answer is not a page: a refusal, or the runtime's own error. */
+  const refused = (result: string | undefined) => {
+    if (result === undefined) return false;
+    try {
+      let value: unknown = JSON.parse(result);
+      // A server tool's text can arrive JSON-encoded once more on the way through the runtime.
+      if (typeof value === "string") value = JSON.parse(value);
+      return !(value && typeof value === "object");
+    } catch {
+      return true;
+    }
+  };
+  let ordered: VisibleChatItem[] = [];
   let pages: VisibleChatItem[] = [];
-  let replies: VisibleChatItem[] = [];
+  let replies: { item: VisibleChatItem; ready: boolean }[] = [];
+  /** The Bot's words since a refused call in this turn, dropped if it calls again. */
+  let sinceRefusal: Set<VisibleChatItem> | null = null;
+  const close = () => {
+    const last = replies.filter((reply) => reply.ready).at(-1);
+    ordered.push(...pages, ...(last ? [last.item] : []));
+    pages = [];
+    replies = [];
+    sinceRefusal = null;
+  };
   for (const item of items) {
     if (item.kind === "tool" && item.toolCall.function.name === MAKE_PAGE) {
+      if (sinceRefusal) {
+        const retried = sinceRefusal;
+        ordered = ordered.filter((said) => !retried.has(said));
+      }
+      if (refused(item.result)) {
+        sinceRefusal = new Set();
+        continue;
+      }
+      sinceRefusal = null;
       pages.push(item);
       continue;
     }
+    if (item.kind === "text" && item.role === "assistant")
+      sinceRefusal?.add(item);
     if (
       item.kind === "tool" &&
       item.toolCall.function.name === SUGGEST_REPLIES
     ) {
-      replies.push(item);
+      if (repliesShown(item.result))
+        replies.push({ item, ready: !repliesHeld(item.result) });
       continue;
     }
     if (
       item.kind === "attachments" ||
       (item.kind === "text" && item.role === "user")
-    ) {
-      ordered.push(...pages, ...replies);
-      pages = [];
-      replies = [];
-    }
+    )
+      close();
+    else if (
+      item.kind === "text" &&
+      item.role === "assistant" &&
+      item.text.trim()
+    )
+      for (const reply of replies) reply.ready = true;
     ordered.push(item);
   }
-  ordered.push(...pages, ...replies);
+  close();
   return ordered;
 }

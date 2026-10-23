@@ -26,6 +26,42 @@ export const MAX_REPLY_LENGTH = 24;
 
 const REFUSAL = `Refused. ${REPLIES_TOOL} takes two or three different replies, each at most ${MAX_REPLY_LENGTH} characters.`;
 
+/*
+ * What a built-in run answers instead, once it knows the turn (reply-turn.ts). The answer above
+ * cannot know whether the question was asked yet, so it asks the model to work that out; told
+ * "otherwise stop here", it asked a second time anyway.
+ */
+
+/** How every answer that drew the buttons begins, this tool's own included. */
+export const REPLIES_DRAWN_PREFIX = "The buttons are";
+/**
+ * Called beside a read, or before the answer was written: drawn, but under the answer still to come.
+ *
+ * The answer that collapsed a reply told the model the buttons were on screen and to ask "in one
+ * short sentence", and it did exactly that. This one says what the person can actually see, which
+ * is nothing yet, and asks for the answer it would write with no buttons at all.
+ */
+export const REPLIES_HELD = `${REPLIES_DRAWN_PREFIX} held: they appear under the last thing you write this turn. Nothing is on the person's screen yet, not even what you read. Write your full answer now, as you would with no buttons: what you found, what you recommend, and a short question that doesn't list the choices. Don't call ${REPLIES_TOOL} again, and don't mention the buttons.`;
+/** Called while the turn waits on the person's approval: the next choice comes after that answer. */
+export const REPLIES_AFTER_APPROVAL =
+  "Refused. Ask after the person answers the approval, in your reply once the action is done.";
+/** The first day's own replies are drawn by the app (`FirstDayReplies`), under its answer. */
+export const REPLIES_FIRST_DAY = `Refused. Not on the first day: the app draws this turn's own replies under your answer. Don't call ${REPLIES_TOOL} in this turn.`;
+/**
+ * A second set while the first is held for an answer still to come: this one is not drawn, and the
+ * answer is still owed. Told "end your turn" here instead, beside the held answer, the model wrote
+ * "Nothing more to add for now." in place of its answer.
+ */
+export const REPLIES_ALREADY_HELD =
+  "Refused. One set of buttons is already held for this turn. Write your full answer now, as you would with no buttons, and don't mention the buttons.";
+/** A second set in one turn: the first is still on screen, so this one is not drawn. */
+export const REPLIES_ALREADY_SHOWN =
+  "Refused. The buttons are already on screen. End your turn now and write nothing more.";
+/** Drawn under a question already asked in words. */
+export const REPLIES_SHOWN = `${REPLIES_DRAWN_PREFIX} on screen, under your question. End your turn now and write nothing more.`;
+/** Drawn under words that asked nothing yet. */
+export const REPLIES_SHOWN_ASK = `${REPLIES_DRAWN_PREFIX} on screen. Ask your question now in one short sentence, without listing the replies, then end your turn.`;
+
 /** Held by every Bot, like the brief. It reads nothing and writes nothing. */
 export function replyTools(options: {
   initiator: AuditInitiator;

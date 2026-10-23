@@ -215,7 +215,11 @@ import {
   REFUSAL_MARKER,
   vendorAnswer,
 } from "./plugins/tools";
-import { createProactiveEngine } from "./proactive/engine";
+import {
+  createProactiveEngine,
+  endedOnReplies,
+  startedTaskTestFailure,
+} from "./proactive/engine";
 import {
   createPrivateShareCheck,
   PRIVATE_SHARE_TOOL_REF,
@@ -437,11 +441,24 @@ const baseChannelStore = createChannelStore(
  * a conversation with one Bot switches on that Bot's research and memory sources for this person.
  */
 let personSpoke: ((ownerUserId: string, channelId: string) => void) | undefined;
+/**
+ * Something said in a conversation by the person, or by a turn their browser ran: activity with no
+ * source, which a turn this server ran always carries. Bound once background research exists, so a
+ * started task waiting on an answer there hears it (proactive/store.ts `noteConversation`).
+ */
+let conversationSaid:
+  | ((
+      ownerUserId: string,
+      channelId: string,
+      activity: { text: string; agentId: string | null; at: Date },
+    ) => void)
+  | undefined;
 const channelStore: ChannelStore = {
   ...baseChannelStore,
   async recordActivity(actor, channelId, activity, source) {
     await baseChannelStore.recordActivity(actor, channelId, activity, source);
     if (activity.agentId === null) personSpoke?.(actor.id, channelId);
+    if (!source) conversationSaid?.(actor.id, channelId, activity);
   },
 };
 const channelEvents = createChannelEventHub();
@@ -2084,6 +2101,20 @@ deliveryNotifications = (scope, input) => deliveryRouter.notify(scope, input);
  * work queue as routines. Suggestions go to the web inbox and the owner's delivery routing.
  */
 const proactiveStore = createProactiveStore(database);
+const failStartedTaskForTesting = startedTaskTestFailure(process.env);
+conversationSaid = (ownerUserId, channelId, activity) => {
+  void proactiveStore
+    .noteConversation(ownerUserId, channelId, activity)
+    .catch((error: unknown) =>
+      console.error(
+        JSON.stringify({
+          type: "started-task-conversation-error",
+          error: error instanceof Error ? error.name : "UnknownError",
+          timestamp: new Date().toISOString(),
+        }),
+      ),
+    );
+};
 const proactiveEngine = createProactiveEngine({
   store: proactiveStore,
   memory: personalMemoryStore,
@@ -2111,6 +2142,7 @@ const proactiveEngine = createProactiveEngine({
       { text: input.text, agentId: null, at: new Date() },
       { id: `${input.runId}:input` },
     );
+    failStartedTaskForTesting(input);
     const result = await approvalContinuationRunner({
       ...scope,
       routineId: input.runId,
@@ -2126,6 +2158,15 @@ const proactiveEngine = createProactiveEngine({
         { text: result.replyText, agentId: scope.agentId, at: new Date() },
         { id: `${input.runId}:reply` },
       );
+    // Chips are a tool call, not words, so the thread says whether the turn ended offering them.
+    const offeredReplies = await routineIntelligence
+      .getThreadMessages({
+        threadId: scope.threadId,
+        userId: scope.ownerUserId,
+      })
+      .then(({ messages }) => endedOnReplies(messages, input.runId))
+      .catch(() => false);
+    return { replyText: result.replyText, offeredReplies };
   },
   catalogue: pluginStore,
   deniedToolNames: async (ownerUserId, agentId) => {
@@ -2242,6 +2283,7 @@ const groupSweep = repeatAfterEach(async () => {
 const personResponseSweep = repeatAfterEach(
   createPersonResponseTick({
     approvalQueue,
+    database,
     personResponseOwner,
     authoriseQuestion,
     approvalContinuationRunner,
