@@ -164,6 +164,15 @@ test("a summary never says a send happened before it did, or after it was refuse
   const refused = [read, send("Refused. The person said no.")].map(stepDetails);
   expect(summarise(refused)).toBe("Read your email");
   expect(refused[1]?.label).toBe("Send your email");
+  // Declined on its card by the person: not sent, and not named as sent.
+  const declined = [
+    read,
+    send(
+      "The person declined this action when you asked for their approval, so it was not done.",
+    ),
+  ].map(stepDetails);
+  expect(declined[1]?.refused).toBe(true);
+  expect(summarise(declined)).toBe("Read your email");
   // A search that failed is not "searched".
   const failed = [
     call(

@@ -59,11 +59,13 @@ import {
 import { ReplyChips } from "@/lib/copilot/reply-chips-tool";
 import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
-import { readToolName } from "@/lib/plugins/tool-name";
+import { approvalInboxOptions } from "@/lib/approvals";
+import { personToolLabel, readToolName } from "@/lib/plugins/tool-name";
 import {
   asText,
   forDisplay,
   REFUSAL_MARKER,
+  toolResultDeclined,
   toolResultFailed,
 } from "@/lib/plugins/tool-result";
 import { readTeamBotConsent } from "@/lib/team-bots";
@@ -1552,6 +1554,12 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
   result?: string;
 }) {
   const renderToolCall = useRenderToolCall();
+  // Held on its approval card: the same inbox the card under it reads.
+  const inbox = useQuery(approvalInboxOptions());
+  const waitingOnPerson = (inbox.data?.requests ?? []).some(
+    (request) =>
+      request.status === "pending" && request.action.toolCallId === toolCallId,
+  );
   const toolCall = useMemo(
     () => ({
       id: toolCallId,
@@ -1594,7 +1602,11 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
          */}
         {drawn ?? (
           <>
-            <ServerToolLine name={name} result={result} />
+            <ServerToolLine
+              name={name}
+              result={result}
+              waiting={waitingOnPerson}
+            />
             <PendingApprovals toolCallIds={[toolCallId]} />
           </>
         )}
@@ -1614,11 +1626,16 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
 export function ServerToolLine({
   name,
   result,
+  waiting = false,
 }: {
   name: string;
   result?: string;
+  /** Held on its approval card for the person's answer, so it is not running yet. */
+  waiting?: boolean;
 }) {
-  const running = result === undefined;
+  const running = result === undefined && !waiting;
+  // Said no on its card: nothing was done, and the line says so rather than naming it as done.
+  const declined = toolResultDeclined(result);
   /*
    * A refusal is not a result, and must not read like one.
    *
@@ -1628,12 +1645,18 @@ export function ServerToolLine({
    */
   const answer = result === undefined ? undefined : asText(result);
   const refused = answer?.startsWith(REFUSAL_MARKER) ?? false;
-  const failed = !refused && toolResultFailed(result);
-  // A refused or failed call is named plainly ("Send your email"), never as though it happened.
-  const { label, detail } = readToolName(
+  const failed = !refused && !declined && toolResultFailed(result);
+  // A refused, declined or failed call is named plainly ("Send your email"), never as done; one
+  // waiting on its card says that it waits ("Waiting for your OK to send your email").
+  const named = readToolName(
     name,
-    refused || failed ? "plain" : running,
+    refused || failed || declined ? "plain" : running,
   );
+  const label =
+    waiting && result === undefined
+      ? (personToolLabel(name, "waiting") ?? named.label)
+      : named.label;
+  const detail = named.detail;
   /*
    * The marker is for this component, not for the reader. Left in, a refusal reads "Blocked" in the
    * label and then "Refused." again in the first two words of the body, which is the same fact three
@@ -1669,6 +1692,7 @@ export function ServerToolLine({
       label={label}
       refused={refused}
       failed={failed}
+      declined={declined}
       running={running}
     >
       {shown ? (

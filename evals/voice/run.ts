@@ -88,13 +88,21 @@ async function ask(question: string): Promise<Reply> {
   await page.keyboard.type(question);
   await page.getByRole("button", { name: "Send message" }).click();
   const started = Date.now();
-  await page.waitForTimeout(4000);
-  while (Date.now() - started < 120_000) {
-    await page.waitForTimeout(800);
-    if (!(await page.locator('[aria-busy="true"]').count())) break;
+  // Settled: nothing running, at least one reply bubble, and no new bubble for three seconds.
+  let last = -1;
+  let stableSince = Date.now();
+  while (Date.now() - started < 150_000) {
+    await page.waitForTimeout(1000);
     if (await page.getByRole("button", { name: "Allow once" }).count()) break;
+    const busy = await page.locator('[aria-busy="true"]').count();
+    const count = await page.locator('[data-slot="bubble-content"]').count();
+    if (count !== last || busy) {
+      last = count;
+      stableSince = Date.now();
+      continue;
+    }
+    if (count > 1 && Date.now() - stableSince > 3000) break;
   }
-  await page.waitForTimeout(1500);
   return page.evaluate((ask) => {
     const bubbles = [
       ...document.querySelectorAll('[data-slot="bubble-content"]'),

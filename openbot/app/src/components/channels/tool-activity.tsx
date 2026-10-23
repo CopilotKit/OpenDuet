@@ -14,6 +14,7 @@ import {
   asText,
   forDisplay,
   REFUSAL_MARKER,
+  toolResultDeclined,
   toolResultFailed,
 } from "@/lib/plugins/tool-result";
 import { readTeamBotConsent } from "@/lib/team-bots";
@@ -154,6 +155,8 @@ export type StepDetails = {
   connector?: string;
   /** What it did to the person's own things, done: "Searched your email". Named in a summary. */
   person?: string;
+  /** What it is, while it waits on the person's answer: "Waiting for your OK to send your email". */
+  waiting?: string;
   inputs: [string, string][];
   output?: string;
 };
@@ -236,7 +239,10 @@ export function stepDetails(step: ToolItem): StepDetails {
 
   const name = step.toolCall.function.name;
   const answer = step.result === undefined ? undefined : asText(step.result);
-  const refused = answer?.startsWith(REFUSAL_MARKER) ?? false;
+  // The person declining on the card is not a result either: nothing was done.
+  const refused =
+    (answer?.startsWith(REFUSAL_MARKER) ?? false) ||
+    toolResultDeclined(step.result);
   const body = refused ? answer?.slice(REFUSAL_MARKER.length).trim() : answer;
   // This deployment's own tools answer the model, not the person; see `ServerToolLine`.
   const own = ownToolLabel(name) !== null;
@@ -322,9 +328,11 @@ export function stepDetails(step: ToolItem): StepDetails {
 function personOf(
   name: string,
   outcome: { pending: boolean; failed: boolean; refused: boolean },
-): { person?: string } {
+): { person?: string; waiting?: string } {
   if (outcome.failed || outcome.refused) return {};
-  const person = personToolLabel(name, outcome.pending ? "waiting" : "done");
+  const waiting = personToolLabel(name, "waiting");
+  if (outcome.pending) return waiting ? { person: waiting, waiting } : {};
+  const person = personToolLabel(name, "done");
   return person ? { person } : {};
 }
 
@@ -427,7 +435,11 @@ function StepStatus({ step, active }: { step: StepDetails; active: boolean }) {
   if (step.pending)
     return (
       <span className="shrink-0 text-muted-foreground">
-        {active ? "In progress" : "Not completed"}
+        {active
+          ? "In progress"
+          : step.waiting
+            ? "Waiting for you"
+            : "Not completed"}
       </span>
     );
   if (step.refused)
@@ -445,7 +457,10 @@ function StepRow({ step, active }: { step: StepDetails; active: boolean }) {
   const line = (
     <span className="flex min-w-0 items-center gap-2">
       <StepIcon kind={step.kind} />
-      <span className="shrink-0">{step.label}</span>
+      {/* A send stopped on its card is waiting for the person, not sending. */}
+      <span className="min-w-0 truncate">
+        {step.pending && !active && step.waiting ? step.waiting : step.label}
+      </span>
       {step.href ? (
         <a
           href={step.href}

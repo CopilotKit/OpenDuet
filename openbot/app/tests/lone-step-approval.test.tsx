@@ -124,7 +124,8 @@ test("a gated call alone in its turn draws its approval card under its own line"
   const view = draw();
   expect(await view.findByRole("button", { name: "Allow once" })).toBeTruthy();
   expect(view.getByRole("button", { name: "Refuse" })).toBeTruthy();
-  expect(view.getByText("Sending your email")).toBeTruthy();
+  // Held on its card, the line waits for the person rather than claiming to send.
+  expect(view.getByText("Waiting for your OK to send your email")).toBeTruthy();
 });
 
 test("a request for some other call draws nothing under this one", async () => {
@@ -134,4 +135,30 @@ test("a request for some other call draws nothing under this one", async () => {
   await settleReactWork();
   expect(view.getByText("Sending your email")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Allow once" })).toBeNull();
+});
+
+test("a send the person declined is never named as sent", async () => {
+  approvals = [];
+  const declined: Message[] = [
+    ...turn,
+    {
+      id: "result-1",
+      role: "tool",
+      toolCallId: "toolu_send",
+      content:
+        "The person declined this action when you asked for their approval, so it was not done.",
+    },
+  ];
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <CopilotKitContext.Provider value={noRenderers}>
+      <QueryClientProvider client={client}>
+        <ChatTranscript messages={declined} />
+      </QueryClientProvider>
+    </CopilotKitContext.Provider>,
+  );
+  expect(await view.findByText("You declined: Send your email")).toBeTruthy();
+  expect(view.queryByText(/Sent your email/)).toBeNull();
 });

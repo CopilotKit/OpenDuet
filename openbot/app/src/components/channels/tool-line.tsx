@@ -19,6 +19,7 @@ export function ToolLine({
   running,
   refused,
   failed,
+  declined,
   children,
 }: {
   /** Drawn before the label, small and muted. A group of steps puts its kinds here. */
@@ -32,6 +33,8 @@ export function ToolLine({
   refused?: boolean;
   /** It was permitted and did not work. A different request might. */
   failed?: boolean;
+  /** The person said no on its card, so it was not done. Their decision, not a failure. */
+  declined?: boolean;
   /** Shown when the line is expanded. Without it the line is not expandable. */
   children?: ReactNode;
 }) {
@@ -45,13 +48,14 @@ export function ToolLine({
    * done), then what was done. The group's own kinds come after the label, where they no longer
    * compete with the outcome.
    */
-  const glyph: DuetIconName = refused
-    ? "x"
-    : failed
+  const glyph: DuetIconName =
+    refused || declined
       ? "x"
-      : running
-        ? "clock"
-        : "checkCircle";
+      : failed
+        ? "x"
+        : running
+          ? "clock"
+          : "checkCircle";
   const text = (
     <span className="duet-face inline-flex min-w-0 max-w-full items-center gap-[7px]">
       <svg
@@ -90,11 +94,13 @@ export function ToolLine({
       >
         {/* Cut with an ellipsis rather than run past its row: a summary can be long. */}
         <span className="min-w-0 truncate">
-          {refused
-            ? `Blocked: ${label}`
-            : failed
-              ? `${label}, didn't work`
-              : label}
+          {declined
+            ? `You declined: ${label}`
+            : refused
+              ? `Blocked: ${label}`
+              : failed
+                ? `${label}, didn't work`
+                : label}
         </span>
         {detail ? (
           <span className="truncate font-medium opacity-70">{detail}</span>
