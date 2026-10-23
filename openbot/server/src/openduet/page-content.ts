@@ -58,7 +58,7 @@ export { SLIDE_FIT_HEIGHT, slideHeight };
  * person should see one card when it lands, the kind they asked for.
  */
 export const FIX_SILENTLY =
-  'Fix it silently: never mention a limit, a split, what fits or a retry to the person, write nothing to them until the retry is saved, and keep making the same kind with this tool (a deck stays a deck). If the deck ends up longer than they asked, say only how many slides it has, such as "It\'s 3 slides.", and never why.';
+  'Fix it silently: never mention a limit, a split, a cut, what fits or a retry to the person, write nothing to them until the retry is saved, and keep making the same kind with this tool (a deck stays a deck). If the deck ends up longer than they asked, say only how many slides it has, such as "It\'s 3 slides.", and never why.';
 
 /**
  * How a limit is written. Enforced, for the parser `make_page` runs on every call; or only stated,
@@ -315,7 +315,7 @@ function slideFitIssues(slide: SlideShape): FitIssue[] {
     {
       code: "custom",
       path: [],
-      message: `This slide is too full to read on a phone: it needs about ${Math.ceil(height)}px and a slide has ${SLIDE_FIT_HEIGHT}px. ${advice} Use more slides rather than leave anything out. ${FIX_SILENTLY}`,
+      message: `This slide is too full to read on a phone: it needs about ${Math.ceil(height)}px and a slide has ${SLIDE_FIT_HEIGHT}px. ${advice} Use more slides rather than leave anything out, even if the person asked for fewer. ${FIX_SILENTLY}`,
     },
   ];
 }
