@@ -27,6 +27,17 @@ type NativeRun = {
 };
 const nativeRuns = new AsyncLocalStorage<NativeRun>();
 
+/**
+ * Whether the run the caller is part of is waiting on a person: one of its tool calls was held for
+ * an approval or a question, and the run has stopped to wait for the answer.
+ *
+ * Read by a tool that must not act on a turn the person has not finished, such as the reply chips,
+ * which would otherwise offer the next choice under an approval card nobody has answered yet.
+ */
+export function nativeRunWaiting(): boolean {
+  return nativeRuns.getStore()?.waiting !== undefined;
+}
+
 export async function executeNativeApprovalTool<T>(
   name: string,
   args: unknown,
