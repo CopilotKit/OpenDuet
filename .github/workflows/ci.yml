@@ -560,6 +560,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Make room for the image build and Docker import
+        run: |
+          set -euo pipefail
+          # BuildKit retains its layers while load: true unpacks another copy into Docker.
+          # This job uses neither the runner's Android SDK nor its .NET installation.
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -h /
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Loaded rather than pushed: this runs on pull requests, including from forks, and it proves
       # the image builds without granting anything the ability to publish one.
