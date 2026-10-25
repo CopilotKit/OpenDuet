@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * Proactive research: a Bot looking through its owner's connected apps in the background, forming
  * memories and suggesting next steps, with tools restricted to reads.
@@ -21,16 +22,22 @@
  */
 import { frameCheckIn } from "@openbot/shared/check-in";
 import { frameTaskBrief, frameTaskReply } from "@openbot/shared/task-brief";
-import { z } from "zod";
-import type { AuditInitiator } from "../audit";
-import type { MemoryStore } from "../memory/store";
-import { REPLIES_TOOL } from "../openduet/replies";
-import { REFUSAL_MARKER } from "../plugins/tools";
-import type { TurnRunner } from "@openbot/toolkit/run-turn";
+import type {
+  DurableTaskReply,
+  TaskReplyContext,
+} from "@openbot/shared/task-reply";
 import {
   type HeadlessTool,
   HeadlessToolSuspension,
 } from "@openbot/toolkit/headless-tools";
+import { ThreadLockBusyError } from "@openbot/toolkit/lease";
+import type { TurnRunner } from "@openbot/toolkit/run-turn";
+import { z } from "zod";
+import type { AuditInitiator } from "../audit";
+import { FIRST_DAY_KIND } from "../channels/first-day";
+import type { MemoryStore } from "../memory/store";
+import { REPLIES_TOOL } from "../openduet/replies";
+import { REFUSAL_MARKER } from "../plugins/tools";
 import type { WorkQueue } from "../work/queue";
 import {
   checkInInitiator,
@@ -52,6 +59,23 @@ import {
 
 export const PROACTIVE_RUN_KIND = "proactive.run";
 export const PROACTIVE_TASK_KIND = "proactive.task";
+
+/** The transcript identity of one execution, shared with readers of its completed work item. */
+export function taskExecutionId(input: {
+  taskId: string;
+  workKey: string;
+  attempt: number;
+  messageId?: string;
+  again?: boolean;
+}): string {
+  const { taskId, workKey, attempt, messageId, again } = input;
+  return messageId && attempt === 1
+    ? messageId
+    : again || attempt > 1
+      ? `task-${taskId}-${createHash("sha256").update(`${workKey}:${attempt}`).digest("hex").slice(0, 16)}`
+      : `task-${taskId}`;
+}
+
 /**
  * How many times a started suggestion's turn is handed out: once, and once more only when its
  * replica died mid-run. An error is final on the first try (`giveUpTask`), because the turn may
@@ -94,8 +118,26 @@ export type TaskOrigin = "asked" | "suggestion" | "check_in";
 /** A task as the engine needs it: which one, its conversation, and its title. */
 export type OpenedTask = { id: string; channelId: string; title: string };
 
+/** Semantic input retained when a failed turn is replayed, without its old run/message identity. */
+export const taskInputSchema = z.object({
+  suggestionId: z.string().min(1).optional(),
+  text: z.string().optional(),
+  attachmentIds: z.array(z.string()).optional(),
+  skillIds: z.array(z.string()).optional(),
+  followup: z.boolean().optional(),
+  /** Questions visible when this reply was accepted, unchanged across attempts and Try again. */
+  questionIds: z.array(z.string().min(1)).optional(),
+  /** The accepted human reply, shared by its retries and no-input Try again executions. */
+  inputId: z.string().min(1).optional(),
+  /** The person's words accompanying a previous Try again, or a followup's display text. */
+  reply: z.string().min(1).optional(),
+});
+export type TaskInput = z.infer<typeof taskInputSchema>;
+
 /** Where a task lives: opened with a conversation of its own, and found again to run its turn. */
 export type TaskThreads = {
+  pendingQuestions?(ownerUserId: string, taskId: string): Promise<string[]>;
+  answerQuestions?(ownerUserId: string, ids: readonly string[]): Promise<void>;
   /** A new conversation with this Bot, and the task record that names it. */
   open(input: {
     ownerUserId: string;
@@ -108,6 +150,7 @@ export type TaskThreads = {
     sourceLink: string | null;
     /** The OpenDuet channel it was asked for in; absent or null for Everything. */
     fromChannelId?: string | null;
+    thumbnail?: string | null;
   }): Promise<OpenedTask>;
   /** The task's own conversation, or null once the person can no longer reach it or its Bot. */
   scope(ownerUserId: string, taskId: string): Promise<ProactiveScope | null>;
@@ -119,13 +162,14 @@ export type TaskThreads = {
     ownerUserId: string,
     taskId: string,
   ): Promise<{
-    ask: { text?: string; suggestionId?: string };
+    ask: TaskInput;
     turns: number;
   }>;
 };
 
 /** What `start_task` hands off from Chat: the ask in the person's words, and where it came from. */
 export type AskedTask = {
+  thumbnail?: string | null;
   title: string;
   instruction: string;
   why?: string | undefined;
@@ -160,7 +204,18 @@ export type ProactiveEngineDeps = {
    */
   startTask(
     scope: ProactiveScope,
-    input: { runId: string; text: string; signal: AbortSignal; final: boolean },
+    input: {
+      runId: string;
+      text: string;
+      acceptedReply?: { id: string; text: string };
+      signal: AbortSignal;
+      final: boolean;
+    } & TaskReplyContext,
+  ): Promise<void>;
+  /** Validate references and retain accepted files before the reply can wait in the durable queue. */
+  acceptReplyContext?(
+    scope: ProactiveScope,
+    input: TaskReplyContext,
   ): Promise<void>;
   /**
    * The Bot writing first: a turn in the person's channel with this framed check-in as its message,
@@ -571,6 +626,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       payload: Record<string, unknown>,
       signal: AbortSignal,
       attempt: number,
+      workKey: string,
     ) => Promise<void>,
     options: {
       leaseMs: number;
@@ -578,14 +634,23 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       retryMs: number;
       /** Told when a run failed and the item has another run left. */
       onRetry?: () => void;
+      serialBy?: string;
+      /** Only when this work is a single turn, with no earlier execution to repeat. */
+      deferBusy?: boolean;
     } = { leaseMs: RUN_LEASE_MS, maxAttempts: 1, retryMs: 60_000 },
   ) {
+    // Refunds repeat attempt numbers. A per-claim owner keeps a late result from refunding a
+    // replacement claim on this same worker, using the queue's existing ownership guard.
+    const claimOwner = options.deferBusy
+      ? `${deps.owner}:${crypto.randomUUID()}`
+      : deps.owner;
     const [item] = await deps.queue.claim({
       kind,
-      owner: deps.owner,
+      owner: claimOwner,
       leaseMs: options.leaseMs,
       limit: 1,
       maxAttempts: options.maxAttempts,
+      ...(options.serialBy ? { serialBy: options.serialBy } : {}),
     });
     if (!item) return false;
     const controller = new AbortController();
@@ -594,7 +659,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         .renew({
           kind,
           key: item.key,
-          owner: deps.owner,
+          owner: claimOwner,
           leaseMs: options.leaseMs,
         })
         .then(
@@ -606,19 +671,25 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     }, options.leaseMs / 3);
     renew.unref?.();
     try {
-      await work(item.payload, controller.signal, item.attempts);
-      await deps.queue.finish({ kind, key: item.key, owner: deps.owner });
+      await work(item.payload, controller.signal, item.attempts, item.key);
+      await deps.queue.finish({ kind, key: item.key, owner: claimOwner });
     } catch (error) {
-      // The reason stays on the row: at its last attempt, that row is the failure.
+      // Only the runner's initial lock acquisition can identify unstarted work. A provider 409
+      // or a lock lost after execution began still consumes its attempt and retains its failure.
+      const unstarted =
+        options.deferBusy && error instanceof ThreadLockBusyError;
       const released = await deps.queue.release({
         kind,
         key: item.key,
-        owner: deps.owner,
+        owner: claimOwner,
         delayMs: options.retryMs,
-        reason: error instanceof Error ? error.message : String(error),
+        ...(unstarted
+          ? { unstarted: true }
+          : { reason: error instanceof Error ? error.message : String(error) }),
       });
-      if (released && item.attempts < options.maxAttempts) options.onRetry?.();
-      throw error;
+      if (released && (unstarted || item.attempts < options.maxAttempts))
+        options.onRetry?.();
+      if (!unstarted) throw error;
     } finally {
       clearInterval(renew);
     }
@@ -630,19 +701,15 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     runId: z.string().min(1),
   });
   /*
-   * A task's turn. A suggestion's carries its id, and the ask is read from it when the turn runs; an
-   * asked one carries the ask. One queued before tasks existed has no `taskId`, and gets its task
+   * A task's turn. A suggestion initially carries its id; corrected retries retain the earlier ask
+   * in text, as asked tasks do. One queued before tasks existed has no `taskId`, and gets its task
    * when it runs, so started work never lands in Chat again.
    */
-  const taskSchema = z.object({
+  const taskSchema = taskInputSchema.extend({
     ownerUserId: z.string().min(1),
     taskId: z.string().min(1).optional(),
-    suggestionId: z.string().min(1).optional(),
-    text: z.string().min(1).optional(),
     /** Queued by Try again, beside the turn that failed. */
     again: z.boolean().optional(),
-    /** What the person said with Try again: a reply typed on the failed task. */
-    reply: z.string().min(1).optional(),
     /** The id the person's reply was drawn under; its first run records the message with it. */
     messageId: z.string().min(1).optional(),
     /**
@@ -681,6 +748,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     payload: Record<string, unknown>,
     signal: AbortSignal,
     attempt: number,
+    workKey: string,
   ) {
     const work = taskSchema.parse(payload);
     /*
@@ -699,17 +767,35 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         work.ownerUserId,
         work.suggestionId,
       );
-      ask = suggestionAsk(suggestion);
+      ask ??= suggestionAsk(suggestion);
       taskId ??= (await openFor(work.ownerUserId, suggestion, "suggestion")).id;
     }
-    if (!taskId || !ask)
+    if (
+      !taskId ||
+      ask === undefined ||
+      (!ask && !(work.followup && work.attachmentIds?.length))
+    )
       throw new ProactiveRefusedError("This task has nothing to start.");
     const scope = await deps.tasks.scope(work.ownerUserId, taskId);
     if (!scope)
       throw new ProactiveRefusedError(
         "This Bot or its channel is no longer available to you.",
       );
-    const rerun = work.again || attempt > 1;
+    // Historical replies have no snapshot. Still deliver them, but never infer which questions
+    // they answer from questions that may have appeared after the person submitted the reply.
+    const priorQuestions = work.followup ? (work.questionIds ?? []) : [];
+    // The durable reply already answers these questions. Finish their idempotent acknowledgment
+    // before executing, so a failed cleanup write cannot repeat a successful turn's actions.
+    await deps.tasks.answerQuestions?.(work.ownerUserId, priorQuestions);
+    // Stable across lock deferrals and worker restarts, distinct for actual retries and separate
+    // Try again work items on the same task. A claim which never ran keeps its message identity.
+    const runId = taskExecutionId({
+      taskId,
+      workKey,
+      attempt,
+      messageId: work.messageId,
+      again: work.again,
+    });
     /*
      * A turn that stops on a request only the person can answer (an approval, a question) has
      * ended where it should, not failed: finished, never retried. A retry would ask, or send,
@@ -717,16 +803,20 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
      */
     try {
       await deps.startTask(scope, {
-        runId:
-          work.messageId && attempt === 1
-            ? work.messageId
-            : rerun
-              ? `task-${taskId}-${crypto.randomUUID().slice(0, 8)}`
-              : `task-${taskId}`,
+        runId,
+        ...(work.inputId && work.reply
+          ? { acceptedReply: { id: work.inputId, text: work.reply } }
+          : {}),
         // A reply is the person's own message; the ask goes with it for the model, not in their bubble.
-        text: work.reply
-          ? frameTaskReply(ask, work.reply)
-          : frameTaskBrief(ask),
+        text: work.followup
+          ? ask
+          : work.reply
+            ? frameTaskReply(ask, work.reply)
+            : frameTaskBrief(ask),
+        ...(work.attachmentIds?.length
+          ? { attachmentIds: work.attachmentIds }
+          : {}),
+        ...(work.skillIds?.length ? { skillIds: work.skillIds } : {}),
         signal,
         final: attempt >= TASK_RUNS,
       });
@@ -740,10 +830,67 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     const retryMs = deps.taskRetryMs ?? TASK_RETRY_MS;
     return drain(PROACTIVE_TASK_KIND, runTask, {
       leaseMs: TASK_LEASE_MS,
+      serialBy: "taskId",
+      deferBusy: true,
       maxAttempts: TASK_RUNS,
       retryMs,
       onRetry: () => track(Bun.sleep(retryMs).then(startSoon)),
     });
+  }
+
+  function drainFirstDay() {
+    return drain(
+      FIRST_DAY_KIND,
+      async (payload, signal, attempt) => {
+        const work = z
+          .object({
+            ownerUserId: z.string(),
+            agentId: z.string(),
+            channelId: z.string(),
+            text: z.string(),
+          })
+          .parse(payload);
+        const scope = await deps.resolveScope(
+          work.ownerUserId,
+          work.channelId,
+          work.agentId,
+        );
+        if (!scope)
+          throw new ProactiveRefusedError(
+            "This conversation is no longer available.",
+          );
+        await deps.startTask(scope, {
+          runId: `first-day-${work.channelId}`,
+          text: work.text,
+          signal,
+          final: attempt >= TASK_RUNS,
+        });
+      },
+      {
+        leaseMs: TASK_LEASE_MS,
+        maxAttempts: TASK_RUNS,
+        retryMs: TASK_RETRY_MS,
+        deferBusy: true,
+        onRetry: () => track(Bun.sleep(TASK_RETRY_MS).then(startFirstDay)),
+      },
+    );
+  }
+
+  function startFirstDay() {
+    track(
+      drainFirstDay()
+        .then((ran) => {
+          if (ran) startFirstDay();
+        })
+        .catch((error: unknown) => {
+          console.error(
+            JSON.stringify({
+              type: "first-day-greeting-error",
+              error: error instanceof Error ? error.name : "UnknownError",
+            }),
+          );
+        }),
+    );
   }
 
   /*
@@ -758,19 +905,24 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
   }
   function startSoon() {
     track(
-      drainTask().catch((error: unknown) => {
-        console.error(
-          JSON.stringify({
-            type: "proactive-task-error",
-            error: error instanceof Error ? error.name : "UnknownError",
-            timestamp: new Date().toISOString(),
-          }),
-        );
-      }),
+      drainTask()
+        .then((ran) => {
+          if (ran) startSoon();
+        })
+        .catch((error: unknown) => {
+          console.error(
+            JSON.stringify({
+              type: "proactive-task-error",
+              error: error instanceof Error ? error.name : "UnknownError",
+              timestamp: new Date().toISOString(),
+            }),
+          );
+        }),
     );
   }
 
   return {
+    startFirstDay,
     researchInstruction,
     /** The headless tools for one proactive turn; empty for any other initiator. */
     async toolsForTurn(input: {
@@ -913,6 +1065,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         sourceApp: input.source ?? null,
         sourceLink: input.link ?? null,
         fromChannelId: input.fromChannelId ?? null,
+        thumbnail: input.thumbnail,
       });
       await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
@@ -940,6 +1093,21 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       input: { reply?: string; messageId?: string } = {},
     ): Promise<void> {
       const { ask, turns } = await deps.tasks.failedTurn(ownerUserId, taskId);
+      let text = ask.text;
+      if (input.reply) {
+        if (ask.followup) {
+          // Followups already carry their complete execution input in text.
+          text = frameTaskReply(text ?? "", input.reply);
+        } else if (ask.reply) {
+          // An initial turn's earlier correction may never have reached model history.
+          // Preserve it before replacing the current reply and its accepted identity.
+          if (text === undefined && ask.suggestionId)
+            text = suggestionAsk(
+              await deps.store.suggestion(ownerUserId, ask.suggestionId),
+            );
+          text = frameTaskReply(text ?? "", ask.reply);
+        }
+      }
       const queued = await deps.queue.offer({
         kind: PROACTIVE_TASK_KIND,
         key: `task:${taskId}:again:${turns}`,
@@ -947,7 +1115,13 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
           ownerUserId,
           taskId,
           ...ask,
-          ...(input.reply ? { reply: input.reply } : {}),
+          ...(text === undefined ? {} : { text }),
+          ...(input.reply
+            ? {
+                reply: input.reply,
+                inputId: input.messageId ?? crypto.randomUUID(),
+              }
+            : {}),
           ...(input.messageId ? { messageId: input.messageId } : {}),
           again: true,
           runs: TASK_RUNS,
@@ -961,6 +1135,43 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         throw new ProactiveRefusedError(
           "OpenDuet is already running this again.",
         );
+      startSoon();
+    },
+    /** Durable, idempotent replies share the task's ordered queue with its initial turn. */
+    async reply(ownerUserId: string, taskId: string, input: DurableTaskReply) {
+      const scope = await deps.tasks.scope(ownerUserId, taskId);
+      if (!scope)
+        throw new ProactiveRefusedError(
+          "This task is no longer available to you.",
+        );
+      if (input.attachmentIds?.length || input.skillIds?.length) {
+        if (!deps.acceptReplyContext)
+          throw new ProactiveRefusedError(
+            "Files and skills are unavailable for this task.",
+          );
+        await deps.acceptReplyContext(scope, input);
+      }
+      const questionIds =
+        (await deps.tasks.pendingQuestions?.(ownerUserId, taskId)) ?? [];
+      await deps.queue.offer({
+        kind: PROACTIVE_TASK_KIND,
+        key: `task:${taskId}:reply:${input.messageId}`,
+        payload: {
+          ownerUserId,
+          taskId,
+          text: input.reply,
+          reply: input.reply || "Sent attachments",
+          ...(input.attachmentIds?.length
+            ? { attachmentIds: input.attachmentIds }
+            : {}),
+          ...(input.skillIds?.length ? { skillIds: input.skillIds } : {}),
+          messageId: input.messageId,
+          inputId: input.messageId,
+          followup: true,
+          questionIds,
+          runs: TASK_RUNS,
+        },
+      });
       startSoon();
     },
     /** Settles once every task started straight away has finished its turn. For tests and shutdown. */
@@ -981,14 +1192,15 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
        * Side by side, so a research run that throws or takes its ten minutes never holds back a
        * task's turn, which is the only path a turn cut off by a restart is retried by.
        */
-      const [research, task] = await Promise.allSettled([
+      const [research, task, greeting] = await Promise.allSettled([
         drain(PROACTIVE_RUN_KIND, async (payload, signal) => {
           const { settingId, runId } = payloadSchema.parse(payload);
           await run(settingId, runId, signal);
         }),
         drainTask(),
+        drainFirstDay(),
       ]);
-      for (const outcome of [research, task])
+      for (const outcome of [research, task, greeting])
         if (outcome.status === "rejected") throw outcome.reason;
     },
   };
@@ -1112,7 +1324,7 @@ export function replyEnding(reply: string | null | undefined): {
             .slice(0, REPLY_TAIL_MAX - 1)
             .join("")}…`
         : sentence,
-    asks: question >= 0,
+    asks: spoken.length > 0 && question >= 0,
   };
 }
 

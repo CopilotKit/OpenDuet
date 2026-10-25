@@ -1,0 +1,22 @@
+{
+  "id": "9248fd3e-e786-411b-9a3c-b2510353c0d8",
+  "thumbnail": null,
+  "queuedReplies": [],
+  "botId": "openduet",
+  "channelId": "channel_1d115779-5ddd-45a1-b8e5-f1bdc8839cb7",
+  "threadId": "bfd62df0-0381-84cf-b30b-7803db2cc337",
+  "title": "Synthetic reliability check, no external data or tools: ask me exactly \"Should…",
+  "why": null,
+  "origin": "asked",
+  "suggestionId": null,
+  "sourceApp": null,
+  "sourceLink": null,
+  "fromChannelId": null,
+  "status": "ready_for_review",
+  "failure": null,
+  "failedAt": null,
+  "next": "Nothing is waiting on you.",
+  "resolvedAt": null,
+  "createdAt": "2026-10-23T20:19:51.960Z",
+  "updatedAt": "2026-10-23T20:19:51.960Z"
+}

@@ -29,6 +29,7 @@ export function NewTaskSheet({
   onAdded,
   starter = "",
   question: asked,
+  instructionPrefix = "",
 }: {
   bot: AgentProfile;
   onClose: () => void;
@@ -38,6 +39,8 @@ export function NewTaskSheet({
   starter?: string;
   /** The sheet's question, when it is not what the Bot should do. */
   question?: string;
+  /** Context the task needs, kept outside the person’s editable ask. */
+  instructionPrefix?: string;
 }) {
   const [draft, setDraft] = useState(starter);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -46,7 +49,10 @@ export function NewTaskSheet({
   const busy = start.isPending || save.isPending;
   const error = start.error ?? save.error;
   const instruction = draft.trim() === starter.trim() ? "" : draft.trim();
-  const ask = { botId: bot.id, instruction };
+  const ask = {
+    botId: bot.id,
+    instruction: [instructionPrefix, instruction].filter(Boolean).join("\n\n"),
+  };
   const question = asked ?? `What should ${bot.name} do?`;
   /*
    * The caret on the starter's blank: set before the field takes focus, and again as it does, since
@@ -76,19 +82,19 @@ export function NewTaskSheet({
         <DialogPrimitive.Backdrop className="duet-veil fixed inset-0 z-50 transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
         <DialogPrimitive.Popup
           className={cn(
-            "duet-face fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[430px] px-2.5 pb-[max(env(safe-area-inset-bottom),12px)] text-duet-ink outline-none",
+            "duet-face fixed inset-x-0 bottom-0 z-50 mx-auto max-h-dvh w-full max-w-[430px] overflow-y-auto overscroll-contain px-2.5 pb-[max(env(safe-area-inset-bottom),12px)] text-duet-ink outline-none",
             "transition-[opacity,translate] duration-300 ease-out data-ending-style:translate-y-6 data-ending-style:opacity-0 data-starting-style:translate-y-6 data-starting-style:opacity-0 motion-reduce:transition-none",
           )}
           initialFocus={field}
         >
           <div className="duet-glass rounded-[28px] p-4 shadow-duet-glass">
             <div className="flex items-start justify-between gap-3">
-              <DialogPrimitive.Title className="type-title pt-1.5 pl-1 font-semibold">
+              <DialogPrimitive.Title className="type-title min-w-0 flex-1 pt-1.5 pl-1 font-semibold [overflow-wrap:anywhere]">
                 {question}
               </DialogPrimitive.Title>
               <button
                 aria-label="Close"
-                className="grid size-10 shrink-0 place-items-center rounded-full text-duet-ink-2 outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+                className="grid size-11 shrink-0 place-items-center rounded-full text-duet-ink-2 outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
                 disabled={busy}
                 onClick={onClose}
                 type="button"
@@ -106,7 +112,9 @@ export function NewTaskSheet({
                 aria-label={question}
                 className="type-body mt-3 min-h-28 w-full resize-none rounded-[20px] bg-duet-card px-4 py-3 text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] outline-none placeholder:text-duet-ink-3 focus-visible:ring-3 focus-visible:ring-duet-violet/25"
                 disabled={busy}
-                maxLength={4000}
+                maxLength={
+                  4000 - (instructionPrefix ? instructionPrefix.length + 2 : 0)
+                }
                 onChange={(event) => setDraft(event.target.value)}
                 onFocus={() => {
                   placeCaret();

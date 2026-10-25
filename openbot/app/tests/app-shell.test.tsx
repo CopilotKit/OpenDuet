@@ -9,9 +9,10 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { Channel } from "@/components/app-sidebar/channel";
 import {
   ARCHIVED_STORAGE_KEY,
   EVERYTHING_LINE,
@@ -19,14 +20,14 @@ import {
   MenuSheet,
 } from "@/components/shell/menu-sheet";
 import { TabBar, tabForPath } from "@/components/shell/tab-bar";
+import { agentKeys } from "@/lib/agents/queries";
 import { authKeys } from "@/lib/auth/queries";
+import { deploymentKeys } from "@/lib/deployment/queries";
+import { type DuetChannel, duetChannelKeys } from "@/lib/duet-channels/queries";
 import { Route as ActivityRoute } from "@/routes/_authed/_app/activity";
 import { Route as InboxRoute } from "@/routes/_authed/_app/inbox";
 import { Route as PageLinkRoute } from "@/routes/_authed/_app/pages.$pageId";
 import { Route as PagesRoute } from "@/routes/_authed/_app/pages.index";
-import { agentKeys } from "@/lib/agents/queries";
-import { deploymentKeys } from "@/lib/deployment/queries";
-import { type DuetChannel, duetChannelKeys } from "@/lib/duet-channels/queries";
 import { settleReactWork } from "./settle-react-work";
 
 /**
@@ -568,6 +569,149 @@ test("conversations from before channels are not channels: they sit under Archiv
   ]);
   expect(rows[1]?.getAttribute("href")).toBe("/channel/c-old-1");
 });
+
+test.each(["drawer", "sidebar"])(
+  "%s title reads follow current row visibility and retain resolved titles",
+  async (surface) => {
+    serving();
+    const originalObserver = globalThis.IntersectionObserver;
+    const intersections = new Map<Element, (visible: boolean) => void>();
+    globalThis.IntersectionObserver = class extends originalObserver {
+      private targets = new Set<Element>();
+      constructor(private callback: IntersectionObserverCallback) {
+        super(callback);
+      }
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.set(target, (isIntersecting) =>
+          this.callback(
+            [
+              {
+                target,
+                isIntersecting,
+                intersectionRatio: Number(isIntersecting),
+                boundingClientRect: target.getBoundingClientRect(),
+                intersectionRect: target.getBoundingClientRect(),
+                rootBounds: null,
+                time: 0,
+              },
+            ],
+            this,
+          ),
+        );
+      }
+      disconnect() {
+        for (const target of this.targets) intersections.delete(target);
+        this.targets.clear();
+      }
+    };
+    const reads: string[] = [];
+    let resolved = false;
+    const base = global.fetch;
+    global.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/copilotkit/threads/")) {
+          reads.push(url);
+          return Response.json({
+            messages: resolved
+              ? [{ id: "first", role: "user", content: "Spring glaze order" }]
+              : [],
+          });
+        }
+        return base(input, init);
+      },
+      { preconnect: base.preconnect },
+    );
+    const conversations = Array.from(
+      { length: 3 },
+      (_, i): DuetChannel => ({
+        ...channel(`old-${i}`, "OpenDuet", null, {
+          icon: "folder",
+          colour: "sky",
+        }),
+        dressed: false,
+        threadId: `old-${i}-thread`,
+        lastMessage: `Latest ${i}`,
+      }),
+    );
+    let client: QueryClient | undefined;
+    try {
+      const view = draw(
+        surface === "drawer" ? (
+          <MenuSheet onOpenChange={() => {}} open />
+        ) : (
+          conversations.map((row) => (
+            <Channel
+              key={row.id}
+              channelId={row.id}
+              participantIds={row.agentIds}
+              name={row.name}
+              threadId={row.threadId ?? undefined}
+              lastMessage={row.lastMessage ?? undefined}
+              said
+              pinned={false}
+              unread={false}
+              busy={false}
+              emphasis="thread"
+            />
+          ))
+        ),
+        (queryClient) => {
+          client = queryClient;
+          seedMenu("user", true, conversations)(queryClient);
+        },
+      );
+      if (surface === "drawer") {
+        const user = userEvent.setup({ document });
+        await user.click(archivedToggle(await view.findByRole("dialog")));
+      }
+      const row = await view.findByRole("link", { name: /Latest 0/ });
+      const visible = (shown: boolean) =>
+        act(async () => {
+          for (const [target, intersect] of intersections) {
+            if (row.contains(target)) intersect(shown);
+          }
+        });
+      // Invalidation exercises the real active-query gate without replacing its options.
+      const refresh = () =>
+        act(async () => {
+          await client?.invalidateQueries({
+            queryKey: ["channels", "first-message"],
+          });
+        });
+      await refresh();
+      expect(reads).toEqual([]);
+      await visible(true);
+      await waitFor(() => expect(reads).toHaveLength(1));
+      await refresh();
+      expect(reads).toHaveLength(2);
+      await visible(false);
+      await refresh();
+      expect(reads).toHaveLength(2);
+      resolved = true;
+      await visible(true);
+      await waitFor(() =>
+        expect(row.textContent).toContain("Spring glaze order"),
+      );
+      expect(reads).toHaveLength(3);
+      expect(new Set(reads)).toEqual(
+        new Set([
+          "/api/copilotkit/threads/old-0-thread/messages?agentId=openduet",
+        ]),
+      );
+      await visible(false);
+      await visible(true);
+      await settleReactWork();
+      expect(reads).toHaveLength(3);
+      expect(row.textContent).toContain("Spring glaze order");
+    } finally {
+      cleanup();
+      client?.clear();
+      globalThis.IntersectionObserver = originalObserver;
+    }
+  },
+);
 
 test("New channel stays in reach under a long list of channels: only the channels scroll", async () => {
   serving();

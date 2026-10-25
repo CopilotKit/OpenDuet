@@ -11,14 +11,15 @@ import type { TurnRunner } from "@openbot/toolkit/run-turn";
  */
 export function signallingBusy(
   runner: TurnRunner,
-  signalBusy: (threadId: string, busy: boolean) => Promise<void>,
+  signalBusy: (threadId: string, busy: boolean, runId: string) => Promise<void>,
 ): TurnRunner {
   return async (input) => {
-    await signalBusy(input.threadId, true).catch(() => undefined);
+    const busyOwner = `server-turn:${crypto.randomUUID()}`;
+    await signalBusy(input.threadId, true, busyOwner).catch(() => undefined);
     try {
       return await runner(input);
     } finally {
-      await signalBusy(input.threadId, false).catch(() => undefined);
+      await signalBusy(input.threadId, false, busyOwner).catch(() => undefined);
     }
   };
 }

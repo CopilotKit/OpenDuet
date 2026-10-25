@@ -667,3 +667,14 @@ body {
 .duet-touch [data-slot="button"][data-size^="icon"] {
   min-width: var(--duet-target);
 }
+
+/* PromptArea's placeholder is an overlay. Keep it on the same scalable line as the editor. */
+.duet-composer-editor > .relative {
+  min-height: 1lh;
+}
+.duet-composer-editor > .relative > [aria-hidden="true"] {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

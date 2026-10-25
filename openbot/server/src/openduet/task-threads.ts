@@ -1,16 +1,21 @@
+import { readFirstDay } from "@openbot/shared/first-day";
 import { existsSync } from "node:fs";
-import { readTaskBrief } from "@openbot/shared/task-brief";
+import { frameTaskInput, readTaskBrief } from "@openbot/shared/task-brief";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
+import { ThreadLockBusyError } from "@openbot/toolkit/lease";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import type { AgentActor } from "../agents/profile-types";
 import { PERSON_INITIATOR } from "../audit";
 import type { ChannelStore } from "../channels/routes";
+import type { Database } from "../db/client";
 import {
   type ProactiveEngineDeps,
   type ProactiveScope,
   replyTail,
+  replyEnding,
   type TaskThreads,
 } from "../proactive/engine";
+import type { createTaskReplyContext } from "./task-reply-context";
 import { plainFailure, type TaskStore } from "./task-store";
 
 /*
@@ -27,7 +32,11 @@ import { plainFailure, type TaskStore } from "./task-store";
  * roster marks them, so Chat and the menu never mistake one for the person's own.
  */
 export function createTaskThreads(deps: {
-  store: Pick<TaskStore, "create" | "locate" | "failedTurn">;
+  database: Pick<Database, "transaction">;
+  store: Pick<
+    TaskStore,
+    "create" | "locate" | "failedTurn" | "pendingQuestions" | "answerQuestions"
+  >;
   channels: Pick<ChannelStore, "create">;
   actorFor: (ownerUserId: string) => Promise<AgentActor>;
   /** The conversation as a turn needs it, or null once the person cannot reach it or its Bot. */
@@ -38,24 +47,38 @@ export function createTaskThreads(deps: {
   ) => Promise<ProactiveScope | null>;
 }): TaskThreads {
   return {
+    pendingQuestions: (ownerUserId, taskId) =>
+      deps.store.pendingQuestions(ownerUserId, taskId),
+    answerQuestions: (ownerUserId, ids) =>
+      deps.store.answerQuestions(ownerUserId, ids),
     async open(input) {
-      const channel = await deps.channels.create(
-        await deps.actorFor(input.ownerUserId),
-        [input.agentId],
-      );
-      const task = await deps.store.create({
-        ownerUserId: input.ownerUserId,
-        botId: input.agentId,
-        channelId: channel.id,
-        title: input.title,
-        why: input.why,
-        origin: input.origin,
-        suggestionId: input.suggestionId,
-        sourceApp: input.sourceApp,
-        sourceLink: input.sourceLink,
-        fromChannelId: input.fromChannelId ?? null,
+      const actor = await deps.actorFor(input.ownerUserId);
+      // direct() excludes tasks by their association row. Commit both together so a concurrent
+      // Chat/first-day lookup cannot adopt the channel while that row is still being inserted.
+      return deps.database.transaction(async (transaction) => {
+        const channel = await deps.channels.create(
+          actor,
+          [input.agentId],
+          transaction,
+        );
+        const task = await deps.store.create(
+          {
+            ownerUserId: input.ownerUserId,
+            botId: input.agentId,
+            channelId: channel.id,
+            title: input.title,
+            why: input.why,
+            origin: input.origin,
+            suggestionId: input.suggestionId,
+            sourceApp: input.sourceApp,
+            sourceLink: input.sourceLink,
+            fromChannelId: input.fromChannelId ?? null,
+            thumbnail: input.thumbnail,
+          },
+          transaction,
+        );
+        return { id: task.id, channelId: task.channelId, title: task.title };
       });
-      return { id: task.id, channelId: task.channelId, title: task.title };
     },
     async scope(ownerUserId, taskId) {
       const task = await deps.store.locate(ownerUserId, taskId);
@@ -99,6 +122,7 @@ export function createTaskTurn(deps: {
   channels: Pick<ChannelStore, "recordActivity" | "signalBusy">;
   actorFor: (ownerUserId: string) => Promise<AgentActor>;
   runTurn: TurnRunner;
+  replyContext?: Pick<ReturnType<typeof createTaskReplyContext>, "resolve">;
   /** See `DEV_FAIL_TASKS_WHILE`. Read from the environment when not given. */
   failWhile?: string | undefined;
 }): ProactiveEngineDeps["startTask"] {
@@ -108,28 +132,72 @@ export function createTaskTurn(deps: {
       : process.env[DEV_FAIL_TASKS_WHILE]?.trim() || undefined;
   return async (scope, input) => {
     const actor = await deps.actorFor(scope.ownerUserId);
-    const record = (text: string, agentId: string | null, id: string) =>
+    const record = (
+      text: string,
+      agentId: string | null,
+      id: string,
+      needsInput?: boolean,
+    ) =>
       deps.channels.recordActivity(
         actor,
         scope.channelId,
-        { text, agentId, at: new Date() },
+        {
+          text,
+          agentId,
+          at: new Date(),
+          ...(needsInput === undefined ? {} : { needsInput }),
+        },
         { id },
       );
     // The roster's line is the person's ask, never the frame the model reads around it.
     await record(
-      readTaskBrief(input.text) ?? input.text,
+      input.acceptedReply?.text ??
+        readTaskBrief(input.text) ??
+        readFirstDay(input.text) ??
+        (input.text || "Sent attachments"),
       null,
-      `${input.runId}:input`,
+      readTaskBrief(input.text) === null ? input.runId : `${input.runId}:input`,
     );
-    await deps.channels.signalBusy(scope.threadId, true).catch(() => {});
+    await deps.channels
+      .signalBusy(scope.threadId, true, input.runId)
+      .catch(() => {});
     try {
       const failing = failWhile !== undefined && existsSync(failWhile);
       const cut = new AbortController();
+      const context =
+        input.attachmentIds?.length || input.skillIds?.length
+          ? await (deps.replyContext?.resolve(scope, input) ??
+              Promise.reject(
+                new Error("Files and skills are unavailable for this task."),
+              ))
+          : { attachments: [], skillInstructions: [] };
+      // Accepted file-only replies need the same identity as text replies, while the runner's
+      // instruction and the attachment parts retain the person's original input unchanged.
+      const text = input.acceptedReply
+        ? frameTaskInput(input.text, input.acceptedReply)
+        : input.text;
+      const content = context.attachments.length
+        ? [
+            ...(text ? [{ type: "text" as const, text }] : []),
+            ...context.attachments,
+          ]
+        : text;
       const turn = deps.runTurn({
         ...scope,
         routineId: input.runId,
         instruction: input.text,
-        userMessage: { id: input.runId, role: "user", content: input.text },
+        userMessage: { id: input.runId, role: "user", content },
+        ...(context.skillInstructions.length
+          ? {
+              systemMessages: context.skillInstructions.map(
+                (content, index) => ({
+                  id: `${input.runId}:skill:${index}`,
+                  role: "system" as const,
+                  content,
+                }),
+              ),
+            }
+          : {}),
         initiator: PERSON_INITIATOR,
         signal: failing
           ? AbortSignal.any([input.signal, cut.signal])
@@ -138,7 +206,11 @@ export function createTaskTurn(deps: {
       });
       if (failing) {
         const timer = setTimeout(() => cut.abort(), DEV_FAIL_AFTER_MS);
-        await turn.catch(() => undefined).finally(() => clearTimeout(timer));
+        await turn
+          .catch((error: unknown) => {
+            if (error instanceof ThreadLockBusyError) throw error;
+          })
+          .finally(() => clearTimeout(timer));
         throw new Error(
           `The model provider is unavailable (simulated: ${DEV_FAIL_TASKS_WHILE} names a file that exists).`,
         );
@@ -155,10 +227,11 @@ export function createTaskTurn(deps: {
           replyTail(result.replyText) ?? result.replyText,
           scope.agentId,
           `${input.runId}:reply`,
+          replyEnding(result.replyText).asks || result.replyChips === true,
         );
     } catch (error) {
       if (!(error instanceof HeadlessToolSuspension)) {
-        if (input.final)
+        if (input.final && !(error instanceof ThreadLockBusyError))
           await record(
             `I couldn't finish this: ${plainFailure(error instanceof Error ? error.message : String(error))}.`,
             scope.agentId,
@@ -168,7 +241,9 @@ export function createTaskTurn(deps: {
       }
       await record(error.message, scope.agentId, `${input.runId}:waiting`);
     } finally {
-      await deps.channels.signalBusy(scope.threadId, false).catch(() => {});
+      await deps.channels
+        .signalBusy(scope.threadId, false, input.runId)
+        .catch(() => {});
     }
   };
 }

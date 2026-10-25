@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import {
-  type ApprovalDecision,
-  approvalInboxOptions,
-  decideApproval,
-} from "@/lib/approvals";
 import { personWasAsked } from "@/lib/approval-view";
+import {
+  approvalInboxOptions,
+  decideApprovalMutationOptions,
+} from "@/lib/approvals";
 import { ApprovalCard } from "./approval-card";
 
 /**
@@ -26,11 +25,7 @@ export function InlineApproval({
 }) {
   const cache = useQueryClient();
   const inbox = useQuery(approvalInboxOptions());
-  const decision = useMutation({
-    mutationFn: (choice: ApprovalDecision) =>
-      decideApproval(request?.id ?? "", choice),
-    onSuccess: () => cache.invalidateQueries({ queryKey: ["approvals"] }),
-  });
+  const decision = useMutation(decideApprovalMutationOptions(cache));
   const request = toolCallId
     ? inbox.data?.requests.find(
         (candidate) => candidate.action.toolCallId === toolCallId,
@@ -50,7 +45,7 @@ export function InlineApproval({
     <ApprovalCard
       busy={decision.isPending}
       error={decision.error?.message ?? null}
-      onDecide={(choice) => decision.mutate(choice)}
+      onDecide={(choice) => decision.mutate({ id: request.id, choice })}
       request={request}
     />
   );

@@ -45,6 +45,8 @@ async function throwawayDatabase(): Promise<string> {
   return url.href;
 }
 
+// Dropping every case and race-interleaving database can wait on PostgreSQL checkpoints;
+// give the whole cleanup more time than the five seconds allowed just to close its client.
 afterAll(async () => {
   const admin = postgres(administrative.href, { max: 1, onnotice: () => {} });
   try {
@@ -54,7 +56,7 @@ afterAll(async () => {
   } finally {
     await admin.end({ timeout: 5 });
   }
-});
+}, 30_000);
 
 type Entry = { tag: string; when: number; sql: string };
 

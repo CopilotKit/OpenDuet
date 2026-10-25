@@ -1393,3 +1393,34 @@ describe("repliesLast", () => {
     ).toEqual(["u1", "a3", "call-2", "u2", "a5"]);
   });
 });
+
+test("a page revised twice in one turn draws only its latest card", () => {
+  const calls = ["save-1", "save-2"].map((id) => ({
+    id,
+    type: "function" as const,
+    function: { name: "make_page", arguments: "{}" },
+  }));
+  const items = toVisibleChatItems([
+    { id: "u", role: "user", content: "Make a deck" },
+    ...calls.flatMap((call) => [
+      {
+        id: `a-${call.id}`,
+        role: "assistant" as const,
+        content: "",
+        toolCalls: [call],
+      },
+      {
+        id: `t-${call.id}`,
+        role: "tool" as const,
+        toolCallId: call.id,
+        content: JSON.stringify({ page: { id: "page-1", title: call.id } }),
+      },
+    ]),
+    { id: "done", role: "assistant", content: "It's ready." },
+  ]);
+  expect(
+    repliesLast(items)
+      .filter((i) => i.kind === "tool")
+      .map((i) => i.id),
+  ).toEqual(["save-2"]);
+});

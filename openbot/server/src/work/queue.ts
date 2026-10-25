@@ -15,10 +15,14 @@
  * Postgres considered expired on arrival, and the next replica to look took the item straight out
  * from under the first. Both then ran it. Every time this file names a moment it names it in SQL.
  */
-import { and, eq, gte, isNull, like, lt, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, isNull, like, lt, or, sql } from "drizzle-orm";
 import postgres from "postgres";
 import type { Database } from "../db/client";
-import { workItems } from "../db/schema";
+import {
+  intelligenceChannelMappings,
+  openduetTasks,
+  workItems,
+} from "../db/schema";
 
 /**
  * Said aloud when work is queued, so a sweep can start now instead of at its next poll.
@@ -68,7 +72,8 @@ export type WorkItem = {
   key: string;
   payload: Record<string, unknown>;
   /**
-   * How many times this has been handed out, including now.
+   * How many execution attempts this has been handed out for, including now. Claims deferred
+   * before execution do not spend an attempt.
    *
    * ONE MEANS IT HAS CERTAINLY NOT RUN. More than one means a previous owner stopped renewing, and
    * may already have called a tool or spent money before it did. A caller that cannot tell those
@@ -123,8 +128,13 @@ export type WorkQueue = {
     leaseMs: number;
     limit?: number;
     maxAttempts?: number;
+    /**
+     * Only the oldest unfinished item for each payload field value may run. Task IDs also
+     * include question-card responses in that task's conversation, across both work kinds.
+     */
+    serialBy?: string;
   }) => Promise<WorkItem[]>;
-  /** Keep a claim alive while the work runs. False means it was already taken away. */
+  /** Keep a live claim alive. False means it expired, finished, or changed owners. */
   renew: (input: {
     kind: string;
     key: string;
@@ -132,20 +142,22 @@ export type WorkQueue = {
     leaseMs: number;
   }) => Promise<boolean>;
   /**
-   * Done. False means the lease had already gone to somebody else, so this was not ours to finish.
+   * Done. False means the claim expired, finished, or changed owners.
    */
   finish: (input: {
     kind: string;
     key: string;
     owner: string;
   }) => Promise<boolean>;
-  /** Not done, and worth another go after `delayMs`. False means it was no longer ours. */
+  /** Not done, and worth another go after `delayMs`. False means the claim expired or was lost. */
   release: (input: {
     kind: string;
     key: string;
     owner: string;
     delayMs: number;
     reason?: string;
+    /** Refund a live claim only when execution never began, such as initial thread-lock contention. */
+    unstarted?: boolean;
   }) => Promise<boolean>;
   /**
    * Drop what is done with, older than the retention window. Returns how many went.
@@ -271,22 +283,66 @@ export function createWorkQueue(database: Database): WorkQueue {
       leaseMs,
       limit = 1,
       maxAttempts = DEFAULT_MAX_ATTEMPTS,
+      serialBy,
     }) {
+      // Both task producers share one execution order, including responses accepted before this
+      // worker version. Resolve their saved conversation exactly as the task status reader does.
+      const taskOrder =
+        serialBy === "taskId" &&
+        (kind === "proactive.task" || kind === "person.response");
+      const serialKey = (alias: "due" | "other") => {
+        const payload = sql`${sql.identifier(alias)}.payload`;
+        return taskOrder
+          ? sql`case when ${sql.identifier(alias)}.kind = 'person.response' then (
+              select task.id from ${openduetTasks} as task
+              inner join ${intelligenceChannelMappings} as mapping
+                on mapping.channel_id = task.channel_id
+              where task.owner_user_id = ${payload}->>'ownerUserId'
+                and mapping.user_id = task.owner_user_id
+                and ${payload}->'question'->>'actorId' = task.owner_user_id
+                and mapping.thread_id = ${payload}->'question'->>'threadId'
+                and (${payload}->'question'->>'channelId' is null
+                  or ${payload}->'question'->>'channelId' = task.channel_id)
+            ) else ${payload}->>${serialBy} end`
+          : sql`${payload}->>${serialBy}`;
+      };
+      const siblingKind = taskOrder
+        ? sql`other.kind in ('proactive.task', 'person.response')`
+        : sql`other.kind = ${kind}`;
+      // These are the workers' existing caps: a response runs once, a task at most twice.
+      const siblingAttempts = taskOrder
+        ? sql`case when other.kind = 'person.response' then 1 else 2 end`
+        : sql`${maxAttempts}`;
       return database.transaction(async (transaction) => {
         /*
          * `skip locked` is what makes this concurrent rather than merely correct. Without it a
          * second replica blocks on the first replica's rows and the queue serialises; with it, it
          * walks past them and takes the next free ones.
+         *
+         * Exclude live siblings before the limit too: a delayed older insert must not take the
+         * only slot, fail the group recheck below, and starve unrelated groups on every sweep.
          */
         const due = await transaction.execute(sql`
-          select "kind", "key"
-          from "work_items"
+          select "kind", "key", ${serialBy ? serialKey("due") : sql`null`} as "serial_key"
+          from "work_items" as due
           where "kind" = ${kind}
             and "finished_at" is null
             and "attempts" < ${maxAttempts}
             and "run_at" <= now()
             and ("lease_until" is null or "lease_until" <= now())
-          order by "run_at" asc
+          ${
+            serialBy
+              ? sql`and not exists (
+            select 1 from "work_items" as other
+            where ${siblingKind} and (other.kind, other.key) != (due.kind, due.key)
+              and other.finished_at is null
+              and (other.attempts < ${siblingAttempts} or other.lease_until > now())
+              and ${serialKey("other")} = ${serialKey("due")}
+              and (other.lease_until > now() or (other.created_at, other.key, other.kind) < (due.created_at, due.key, due.kind))
+          )`
+              : sql``
+          }
+          order by "run_at" asc, "created_at" asc, "key" asc
           limit ${limit}
           for update skip locked
         `);
@@ -296,11 +352,32 @@ export function createWorkQueue(database: Database): WorkQueue {
         ) as {
           kind: string;
           key: string;
+          serial_key: string | null;
         }[];
         if (rows.length === 0) return [];
 
         const claimed: WorkItem[] = [];
         for (const row of rows) {
+          if (serialBy && row.serial_key !== null) {
+            // A delayed insert may become visible after a newer row was selected. Serialize
+            // claims of the group, then re-read on a fresh statement snapshot before leasing.
+            const [group] = await transaction.execute<{ locked: boolean }>(sql`
+              select pg_try_advisory_xact_lock(hashtext(${taskOrder ? "proactive.task" : kind}), hashtext(${`${serialBy}:${row.serial_key}`})) as locked
+            `);
+            if (!group?.locked) continue;
+            const blocking = await transaction.execute(sql`
+              select 1 from work_items as other
+              where ${siblingKind} and (other.kind, other.key) != (${kind}, ${row.key})
+                and ${serialKey("other")} = ${row.serial_key}
+                and other.finished_at is null
+                and (other.attempts < ${siblingAttempts} or other.lease_until > now())
+                and (other.lease_until > now() or (other.created_at, other.key, other.kind) < (
+                  select created_at, key, kind from work_items where kind = ${kind} and key = ${row.key}
+                ))
+              limit 1
+            `);
+            if (blocking.length > 0) continue;
+          }
           const [updated] = await transaction
             .update(workItems)
             .set({
@@ -336,11 +413,13 @@ export function createWorkQueue(database: Database): WorkQueue {
         .update(workItems)
         .set({ leaseUntil: fromNow(leaseMs), updatedAt: sql`now()` })
         /*
-         * Only while still ours. A lease that expired and was taken by somebody else must not be
-         * renewed back out from under them, which would put two replicas on one item believing they
-         * each held it.
+         * The owner alone is not enough: an expired final attempt can keep its owner while a
+         * serialized sibling starts. Renew only a live lease, on the same database clock claim
+         * uses, so a late heartbeat cannot revive that row alongside its sibling.
          */
-        .where(ours(kind, key, owner))
+        .where(
+          and(ours(kind, key, owner), gt(workItems.leaseUntil, sql`now()`)),
+        )
         .returning({ key: workItems.key });
       return Boolean(renewed);
     },
@@ -359,12 +438,16 @@ export function createWorkQueue(database: Database): WorkQueue {
           leaseUntil: null,
           updatedAt: sql`now()`,
         })
-        .where(ours(kind, key, owner))
+        // An expired final attempt may already have a newer sibling outcome. Its late
+        // completion must not replace that outcome, even if the old owner is still recorded.
+        .where(
+          and(ours(kind, key, owner), gt(workItems.leaseUntil, sql`now()`)),
+        )
         .returning({ key: workItems.key });
       return Boolean(finished);
     },
 
-    async release({ kind, key, owner, delayMs, reason }) {
+    async release({ kind, key, owner, delayMs, reason, unstarted }) {
       // Freed and pushed out, rather than finished: the work still wants doing, just not immediately
       // and not by whoever just gave up on it. The reason stays on the row so an item that runs out
       // of attempts says why rather than simply stopping.
@@ -376,8 +459,14 @@ export function createWorkQueue(database: Database): WorkQueue {
           runAt: fromNow(delayMs),
           updatedAt: sql`now()`,
           ...(reason === undefined ? {} : { lastError: reason }),
+          // The ownership guard and clearing claimedBy make a refund atomic and one-shot.
+          ...(unstarted ? { attempts: sql`${workItems.attempts} - 1` } : {}),
         })
-        .where(ours(kind, key, owner))
+        // An expired final attempt already lets its sibling start. A late release must neither
+        // move that older failure past a newer outcome nor refund its spent attempt.
+        .where(
+          and(ours(kind, key, owner), gt(workItems.leaseUntil, sql`now()`)),
+        )
         .returning({ key: workItems.key });
       return Boolean(released);
     },

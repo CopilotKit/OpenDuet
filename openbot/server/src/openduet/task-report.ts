@@ -1,9 +1,9 @@
-import { readTaskBrief } from "@openbot/shared/task-brief";
+import { readTaskFrame } from "@openbot/shared/task-brief";
 import { historyOrEmpty } from "@openbot/toolkit/thread-history";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { approvalRequests, channels, workItems } from "../db/schema";
-import { PROACTIVE_TASK_KIND } from "../proactive/engine";
+import { PROACTIVE_TASK_KIND, taskExecutionId } from "../proactive/engine";
 import { UNTRUSTED_TAG } from "../untrusted-content";
 import type { TaskRecord } from "./task-store";
 
@@ -112,6 +112,10 @@ export type ReportInput = {
   resumedEndedAt: ReadonlyMap<string, Date>;
   /** The conversation's last message, from its channel. */
   lastMessageAt: Date | null;
+  /** Transcript openers whose particular execution finished, even while later work waits. */
+  completedTurnIds?: ReadonlySet<string>;
+  /** Accepted question answers, keyed by their original response message ID, without model context. */
+  questionResponses?: ReadonlyMap<string, string>;
 };
 
 const DECISIONS = new Set(["allow_once", "allow_always", "deny", "handled"]);
@@ -329,10 +333,11 @@ export function resourcesOf(
 }
 
 type Turn = {
-  /** What opened it: the task's ask, the person's reply, or an approval the conversation carried on from. */
+  id: string;
+  /** What opened it: the task's ask or replay, the person's reply, or an approval carried on from. */
   opener:
     | { kind: "brief" }
-    | { kind: "reply"; message: ReportMessage }
+    | { kind: "reply"; id: string; text: string }
     | { kind: "resume"; approvalId: string };
   messages: ReportMessage[];
 };
@@ -340,22 +345,43 @@ type Turn = {
 const RESUME_PREFIX = "approval:";
 
 /** The conversation as turns: each opened by the ask, a reply, or an approval carried on from. */
-function turnsOf(messages: readonly ReportMessage[]): Turn[] {
+function turnsOf(
+  messages: readonly ReportMessage[],
+  questionResponses: ReportInput["questionResponses"],
+): Turn[] {
   const turns: Turn[] = [];
+  const acceptedInputs = new Set<string>();
   for (const message of messages) {
     if (message.role === "user") {
       const text = textOf(message.content);
+      const frame = readTaskFrame(text);
+      // New execution IDs still open outcome turns, but only accepted input adds a human reply.
+      const replay =
+        frame?.inputId !== undefined && acceptedInputs.has(frame.inputId);
+      if (frame?.inputId) acceptedInputs.add(frame.inputId);
+      // Question-card answers predate task frames. Their stable message ID is also the accepted
+      // input ID carried by Try again, so replay adds an outcome without another human answer.
+      else if (message.id.startsWith("person-response:"))
+        acceptedInputs.add(message.id);
       turns.push({
+        id: message.id,
         opener:
-          turns.length === 0 && readTaskBrief(text) !== null
+          frame?.kind === "brief" || replay
             ? { kind: "brief" }
-            : { kind: "reply", message },
+            : {
+                kind: "reply",
+                id: message.id,
+                // The ledger preserves the literal answer even if the question or answer quotes
+                // framing syntax. Never split the generated question wrapper to recover it.
+                text: questionResponses?.get(message.id) ?? frame?.text ?? text,
+              },
         messages: [],
       });
       continue;
     }
     if (message.role === "tool" && message.id.startsWith(RESUME_PREFIX)) {
       turns.push({
+        id: message.id,
         opener: {
           kind: "resume",
           approvalId: message.id.slice(RESUME_PREFIX.length),
@@ -368,7 +394,12 @@ function turnsOf(messages: readonly ReportMessage[]): Turn[] {
     const current = turns.at(-1);
     if (current) current.messages.push(message);
     // Anything before the first user message (a seeded greeting) opens a turn of its own.
-    else turns.push({ opener: { kind: "brief" }, messages: [message] });
+    else
+      turns.push({
+        id: message.id,
+        opener: { kind: "brief" },
+        messages: [message],
+      });
   }
   return turns;
 }
@@ -402,17 +433,17 @@ export function buildTaskReport(input: ReportInput): TaskReport {
     },
   });
 
-  const turns = turnsOf(input.messages);
+  const turns = turnsOf(input.messages, input.questionResponses);
   const entries: ReportEntry[] = [];
   const placed = new Set<string>();
   turns.forEach((turn, index) => {
     const last = index === turns.length - 1;
     if (turn.opener.kind === "reply") {
-      const text = said(textOf(turn.opener.message.content));
+      const text = said(turn.opener.text);
       if (text)
         entries.push({
           kind: "reply",
-          id: turn.opener.message.id,
+          id: turn.opener.id,
           text,
           at: null,
         });
@@ -434,13 +465,16 @@ export function buildTaskReport(input: ReportInput): TaskReport {
       (message) =>
         message.role === "assistant" && textOf(message.content).trim() !== "",
     );
-    // The latest turn may still be streaming while the task works: only a finished one is an update.
-    const finished = !(last && input.task.status === "working");
+    // Working includes future queued work. Keep a known completed execution's update, while
+    // still excluding the latest turn when its own completion has not reached the ledger.
+    const finished =
+      !(last && input.task.status === "working") ||
+      input.completedTurnIds?.has(turn.id);
     if (reply && finished) {
       const text = firstSentence(textOf(reply.content));
       const endedAt =
         asked[0]?.createdAt ??
-        (turn.opener.kind === "brief"
+        (turn.opener.kind === "brief" && index === 0
           ? input.firstTurnEndedAt
           : turn.opener.kind === "resume"
             ? (input.resumedEndedAt.get(turn.opener.approvalId) ??
@@ -513,7 +547,7 @@ export function createTaskReportReader(deps: {
   return async (ownerUserId, task) => {
     if (!task.threadId) return { taskId: task.id, entries: [], resources: [] };
     const threadId = task.threadId;
-    const [messages, approvalRows, firstTurn, channel] = await Promise.all([
+    const [messages, rows, turns, channel, answers] = await Promise.all([
       deps.history({ threadId, ownerUserId }),
       deps.database
         .select({
@@ -534,7 +568,12 @@ export function createTaskReportReader(deps: {
           ),
         ),
       deps.database
-        .select({ finishedAt: workItems.finishedAt })
+        .select({
+          key: workItems.key,
+          attempts: workItems.attempts,
+          payload: workItems.payload,
+          finishedAt: workItems.finishedAt,
+        })
         .from(workItems)
         .where(
           and(
@@ -543,15 +582,31 @@ export function createTaskReportReader(deps: {
             sql`${workItems.payload}->>'ownerUserId' = ${ownerUserId}`,
           ),
         )
-        .orderBy(workItems.createdAt)
-        .limit(1),
+        .orderBy(workItems.createdAt),
       deps.database
         .select({ lastMessageAt: channels.lastMessageAt })
         .from(channels)
         .where(eq(channels.id, task.channelId))
         .limit(1),
+      deps.database
+        .select({
+          key: workItems.key,
+          payload: workItems.payload,
+          finishedAt: workItems.finishedAt,
+        })
+        .from(workItems)
+        .where(
+          and(
+            eq(workItems.kind, "person.response"),
+            sql`${workItems.payload}->>'ownerUserId' = ${ownerUserId}`,
+            sql`${workItems.payload}->'question'->>'actorId' = ${ownerUserId}`,
+            sql`${workItems.payload}->'question'->>'threadId' = ${threadId}`,
+            sql`(${workItems.payload}->'question'->>'channelId' is null
+              or ${workItems.payload}->'question'->>'channelId' = ${task.channelId})`,
+          ),
+        ),
     ]);
-    const approvals: ReportApproval[] = approvalRows.map((row) => ({
+    const approvals: ReportApproval[] = rows.map((row) => ({
       id: row.id,
       toolCallId: row.toolCallId,
       status: row.status,
@@ -588,13 +643,41 @@ export function createTaskReportReader(deps: {
       task,
       messages,
       approvals,
-      firstTurnEndedAt: firstTurn[0]?.finishedAt ?? null,
+      firstTurnEndedAt: turns[0]?.finishedAt ?? null,
       resumedEndedAt: new Map(
         resumed.flatMap((row) =>
           row.finishedAt ? [[row.key, row.finishedAt] as const] : [],
         ),
       ),
       lastMessageAt: channel[0]?.lastMessageAt ?? null,
+      completedTurnIds: new Set([
+        ...turns.flatMap((row) =>
+          row.finishedAt && row.attempts > 0
+            ? [
+                taskExecutionId({
+                  taskId: task.id,
+                  workKey: row.key,
+                  attempt: row.attempts,
+                  messageId: asString(row.payload.messageId) || undefined,
+                  again: row.payload.again === true,
+                }),
+              ]
+            : [],
+        ),
+        ...resumed.flatMap((row) =>
+          row.finishedAt ? [`${RESUME_PREFIX}${row.key}`] : [],
+        ),
+        ...answers.flatMap((row) =>
+          row.finishedAt ? [`person-response:${row.key}`] : [],
+        ),
+      ]),
+      questionResponses: new Map(
+        answers.flatMap((row) =>
+          typeof row.payload.response === "string"
+            ? [[`person-response:${row.key}`, row.payload.response] as const]
+            : [],
+        ),
+      ),
     });
   };
 }

@@ -51,3 +51,37 @@ describe("a server-started turn announces itself", () => {
     expect(result).toEqual({ replyText: "Done." });
   });
 });
+
+test("concurrent server invocations own different busy claims, even with the same logical run id", async () => {
+  const active = new Set<string>();
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const runner = signallingBusy(
+    async () => {
+      if (++calls === 1) await waiting;
+      return { replyText: "Done." };
+    },
+    async (_, busy, runId) => {
+      if (busy) active.add(runId);
+      else active.delete(runId);
+    },
+  );
+  const input = {
+    ownerUserId: "u",
+    routineId: "same",
+    runId: "same",
+    agentId: "bot",
+    threadId: "thread",
+    instruction: "",
+  };
+  const first = runner(input);
+  await Promise.resolve();
+  await runner(input);
+  expect(active.size).toBe(1);
+  release();
+  await first;
+  expect(active.size).toBe(0);
+});

@@ -1731,7 +1731,11 @@ export function mountCopilotRuntime(
   identifyActor: IdentifyActor,
   options: {
     basePath?: string;
-    onRunBusy?: (input: { threadId: string; busy: boolean }) => void;
+    onRunBusy?: (input: {
+      threadId: string;
+      runId: string;
+      busy: boolean;
+    }) => void | Promise<void>;
     learningSettings?: LearningSettingsStore;
   } = {},
 ) {

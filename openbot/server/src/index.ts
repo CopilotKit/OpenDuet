@@ -91,7 +91,11 @@ import {
   createGroupStore,
   groupSourceForRun,
 } from "./channels/group";
-import { type ChannelStore, createChannelStore } from "./channels/routes";
+import {
+  type ChannelStore,
+  createChannelStore,
+  expireChannelBusyClaims,
+} from "./channels/routes";
 import { createStallGuard } from "./channels/stall-guard";
 import {
   forgetSettledSummaries,
@@ -257,6 +261,7 @@ import {
   createChannelHello,
   createDuetChannelStore,
 } from "./openduet/channels";
+import { createComputerCheck } from "./openduet/computer-check";
 import { createPageStore } from "./openduet/pages";
 import { withRunChannels } from "./openduet/run-channel";
 import {
@@ -269,6 +274,7 @@ import {
   intelligenceHistory,
 } from "./openduet/task-report";
 import { createTaskStore } from "./openduet/task-store";
+import { createTaskReplyContext } from "./openduet/task-reply-context";
 import { createTaskThreads, createTaskTurn } from "./openduet/task-threads";
 import type { TaskStarter } from "./openduet/tasks";
 import { createOpenDuetTools, createTaskIntake } from "./openduet/wiring";
@@ -486,6 +492,14 @@ const channelActivityListener = await startChannelActivityListener(
   config.databaseUrl,
   channelEvents,
 );
+// Persistent claims recover after a restart; every pass takes at most 100 unlocked channels.
+const channelBusySweep = repeatAfterEach(async () => {
+  try {
+    await expireChannelBusyClaims(database);
+  } catch (error) {
+    console.error("Channel busy expiry failed.", error);
+  }
+}, 30_000);
 const roleRepository = createRoleRepository(database);
 const loadAgentsForActor = createRuntimeAgentLoader(
   database,
@@ -1823,7 +1837,9 @@ const copilotRuntime = mountCopilotRuntime(
   identifyActor,
   {
     onRunBusy: (input) => {
-      void channelStore.signalBusy(input.threadId, input.busy).catch(() => {});
+      return channelStore
+        .signalBusy(input.threadId, input.busy, input.runId)
+        .catch(() => {});
     },
     learningSettings,
   },
@@ -2031,6 +2047,7 @@ const groupConversations = createGroupConversations({
       await actorFor(turn.ownerUserId),
       turn.channelId,
       busy,
+      `group:${turn.messageId}`,
     ),
   createChannel: async (ownerUserId, agentIds) =>
     channelStore.create(await actorFor(ownerUserId), agentIds),
@@ -2053,7 +2070,7 @@ const approvalSweep = repeatAfterEach(
     // The continuation after a decision is server work the browser never started: announce it.
     approvalContinuationRunner: signallingBusy(
       approvalContinuationRunner,
-      (threadId, busy) => channelStore.signalBusy(threadId, busy),
+      (threadId, busy, runId) => channelStore.signalBusy(threadId, busy, runId),
     ),
     channelStore,
     actorFor,
@@ -2093,7 +2110,7 @@ const deliveryRouter = createDeliveryRouter({
       { text: input.text, agentId: null, at: new Date() },
       { id: `delivery-input:${input.runId}` },
     );
-    await channelStore.signalBusy(input.threadId, true);
+    await channelStore.signalBusy(input.threadId, true, input.runId);
     try {
       const result = await approvalContinuationRunner({
         ownerUserId: input.ownerUserId,
@@ -2119,7 +2136,7 @@ const deliveryRouter = createDeliveryRouter({
         );
       return result;
     } finally {
-      await channelStore.signalBusy(input.threadId, false);
+      await channelStore.signalBusy(input.threadId, false, input.runId);
     }
   },
   audit: (event) =>
@@ -2176,7 +2193,23 @@ const proactiveRunTurn = createTurnRunner({
     copilotRuntime.learning?.containerForThread(input) ??
     Promise.resolve(undefined),
 });
+const taskReplyContext = createTaskReplyContext({
+  load: (scope, id) =>
+    loadAttachmentForTurn(
+      database,
+      { actorId: scope.ownerUserId, threadId: scope.threadId },
+      id,
+    ),
+  markSent: (scope, ids) =>
+    markAttachmentsSent(
+      database,
+      { actorId: scope.ownerUserId, threadId: scope.threadId },
+      ids,
+    ),
+  skillsFor: (agentId) => pluginStore.listForAgent(agentId),
+});
 const proactiveEngine = createProactiveEngine({
+  acceptReplyContext: taskReplyContext.accept,
   store: proactiveStore,
   memory: personalMemoryStore,
   queue: createWorkQueue(database),
@@ -2186,12 +2219,14 @@ const proactiveEngine = createProactiveEngine({
   notify: (scope, input) => deliveryNotifications(scope, input),
   // Started work runs as a task, in a conversation of its own. See openduet/task-threads.ts.
   tasks: createTaskThreads({
+    database,
     store: openDuetTasks,
     channels: channelStore,
     actorFor,
     scopeFor: deliveryScopeFor,
   }),
   startTask: createTaskTurn({
+    replyContext: taskReplyContext,
     channels: channelStore,
     actorFor,
     runTurn: approvalContinuationRunner,
@@ -2709,6 +2744,12 @@ const app = createApp(
           tenantPackage.tenantId,
         ),
         computer: Boolean(config.computer),
+        computerCheck: createComputerCheck({
+          provider: computerProvider,
+          controls: enterpriseControls,
+          ...(config.computer?.token ? { token: config.computer.token } : {}),
+          ...(config.webBotAuth ? { webBotAuth: config.webBotAuth } : {}),
+        }),
         apps: {
           configured: Boolean(composio),
           provider: composio?.provider ?? config.brokerProvider ?? "composio",
@@ -2773,6 +2814,7 @@ if (config.singleUser) {
 // so a watch-mode restart does not leave two behind on every reload.
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
+    channelBusySweep.stop();
     responsibilitySweep.stop();
     wakeUpSweep.stop();
     wakeUpReaper.stop();

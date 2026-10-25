@@ -31,7 +31,7 @@ export function PillButton({
   return (
     <button
       className={cn(
-        "type-row inline-flex h-[46px] min-w-0 flex-1 basis-0 items-center justify-center rounded-full px-4 font-semibold transition-[filter,transform,opacity] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
+        "type-row inline-flex min-h-[46px] min-w-0 flex-1 basis-[7rem] items-center justify-center rounded-full px-4 py-2.5 font-semibold transition-[filter,transform,opacity] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
         primary
           ? "bg-duet-black text-duet-on-black hover:brightness-125"
           : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
@@ -117,7 +117,7 @@ export function ApprovalCard({
       ) : null}
       {waiting && onDecide ? (
         <div className="px-4 pt-1 pb-3">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {handOff ? (
               <>
                 <PillButton disabled={busy} onClick={() => onDecide("deny")}>
@@ -213,7 +213,7 @@ function ApprovalContent({
       <details className="group px-4 pb-1">
         <summary
           aria-controls={detailsId}
-          className="type-label inline-flex cursor-pointer list-none items-center gap-1 py-1 font-medium text-duet-ink-3 outline-none focus-visible:underline [&::-webkit-details-marker]:hidden"
+          className="type-label inline-flex min-h-11 cursor-pointer list-none items-center gap-1 py-1 font-medium text-duet-ink-3 outline-none focus-visible:underline [&::-webkit-details-marker]:hidden"
         >
           Details
           <DuetIcon

@@ -18,12 +18,12 @@ import {
 import { toVisibleChatItems } from "@/components/channels/chat-messages";
 import { FINISH_MS, type MicOrbState } from "@/components/duet/mic-orb";
 import { primaryBot } from "@/lib/agents/primary-bot";
+import { agentListQueryOptions } from "@/lib/agents/queries";
 import {
   type ApprovalInboxData,
   type ApprovalRequest,
   approvalInboxOptions,
 } from "@/lib/approvals";
-import { agentListQueryOptions } from "@/lib/agents/queries";
 import { ongoingChannel } from "@/lib/channels/ongoing";
 import { channelListQueryOptions } from "@/lib/channels/queries";
 import { STEP_PHRASES, stepPhrase } from "@/lib/plugins/tool-name";
@@ -152,6 +152,7 @@ export const SERVER_WORKING = STEP_PHRASES.working;
 export function stepFor(
   messages: readonly Message[],
   working: boolean,
+  approvals: readonly ApprovalRequest[] = [],
 ): string | null {
   if (!working) return null;
   const items = toVisibleChatItems(messages);
@@ -165,7 +166,13 @@ export function stepFor(
   );
   const running = turn
     .flatMap((item) =>
-      item.kind === "tool" && item.result === undefined
+      item.kind === "tool" &&
+      item.result === undefined &&
+      !approvals.some(
+        (request) =>
+          request.action.toolCallId === item.toolCall.id &&
+          (request.decision === "deny" || request.decision === "handled"),
+      )
         ? [stepPhrase(item.toolCall.function.name)]
         : [],
     )
@@ -206,9 +213,9 @@ const DECISION_WINDOW_MS = 5 * 60_000;
  * What the server is doing in a conversation while its busy flag is up, as a pill phrase, or null
  * when it is not busy.
  *
- * The flag says only that a turn is running. When the person has just allowed an action in that
- * thread, the run is that action going ahead, so the pill names it ("Sending your email"); anything
- * else is "Working on it".
+ * The flag says only that a turn is running. When the newest decision in that thread allowed an
+ * action that is still approved or being carried out, the pill names it ("Sending your email");
+ * once it completes, or otherwise, the phrase is "Working on it".
  */
 export function serverWorkPhrase(
   busy: boolean,
@@ -217,13 +224,12 @@ export function serverWorkPhrase(
   now = Date.now(),
 ): string | null {
   if (!busy) return null;
-  // The newest action the person allowed in this thread, if they allowed one just now.
+  // The newest decision wins. A refusal or completion must not resurrect an earlier allowed send.
   const decided = (inbox?.requests ?? [])
     .filter(
       (request) =>
         request.action.threadId === threadId &&
-        (request.decision === "allow_once" ||
-          request.decision === "allow_always") &&
+        request.decision != null &&
         typeof request.decidedAt === "string" &&
         now - Date.parse(request.decidedAt) < DECISION_WINDOW_MS,
     )
@@ -231,7 +237,11 @@ export function serverWorkPhrase(
       (a, b) => Date.parse(b.decidedAt ?? "") - Date.parse(a.decidedAt ?? ""),
     )
     .at(0);
-  return decided ? approvedActionPhrase(decided) : SERVER_WORKING;
+  return decided &&
+    (decided.status === "approved" || decided.status === "consumed") &&
+    (decided.decision === "allow_once" || decided.decision === "allow_always")
+    ? approvedActionPhrase(decided)
+    : SERVER_WORKING;
 }
 
 /** The phrase for an action the person allowed, read from what it does. */

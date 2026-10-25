@@ -138,6 +138,9 @@ export function OnboardingWizard({
     if (!stepId) return;
     if (!moved.current && stepId === arrivedOn.current) return;
     moved.current = true;
+    // The frame keeps its scroll container between steps; the new heading starts at the top.
+    const main = container.current?.closest("main");
+    if (main) main.scrollTop = 0;
     const heading = container.current?.querySelector<HTMLElement>(
       `[data-step="${stepId}"] h1`,
     );

@@ -126,6 +126,7 @@ const engine = createProactiveEngine({
   resolveScope: scopeFor,
   notify: async () => undefined,
   tasks: createTaskThreads({
+    database,
     store: taskStore,
     channels: channelStore,
     actorFor,

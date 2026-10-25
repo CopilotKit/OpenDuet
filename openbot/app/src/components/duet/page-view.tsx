@@ -2,12 +2,13 @@ import {
   BAR_PLOT,
   barFigure,
   barsLayout,
-  LEAST_SCALE,
+  CURRENT_SLIDE_LAYOUT,
   metricColumns,
   ROW_GAP,
   rowLabelWidth,
   SLIDE_PADDING,
-  SLIDE_WIDTH,
+  type SlideLayoutVersion,
+  slideGeometry,
   TAP_TARGET,
 } from "@openbot/shared/slide-fit";
 import {
@@ -20,6 +21,7 @@ import {
 import type { PageBlock, PageSlide } from "@/lib/pages/queries";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
+import { RichBlock } from "./page-rich-block";
 
 /*
  * A page the Bot made, drawn from its blocks in the shell's own type and colours. The viewer draws
@@ -45,9 +47,13 @@ export type OnListItem = (text: string) => void;
 export function PageBlocks({
   blocks,
   onListItem,
+  onCheck,
 }: {
   blocks: readonly PageBlock[];
   onListItem?: OnListItem;
+  onCheck?:
+    | ((block: number, item: string, checked: boolean) => void)
+    | undefined;
 }) {
   const headline = isDashboard(blocks);
   return (
@@ -55,10 +61,15 @@ export function PageBlocks({
       {blocks.map((block, index) => (
         <Block
           block={block}
-          // Blocks have no ids, and they never move once made: the index is the identity.
-          // biome-ignore lint/suspicious/noArrayIndexKey: a page's blocks are fixed in order.
-          key={index}
+          // Saved positions remain stable even when the parser skips unsupported blocks.
+          key={block.persistedIndex ?? index}
           lead={headline && index === 0}
+          onCheck={
+            onCheck
+              ? (item, checked) =>
+                  onCheck(block.persistedIndex ?? index, item, checked)
+              : undefined
+          }
           {...(onListItem ? { onListItem } : {})}
         />
       ))}
@@ -69,16 +80,25 @@ export function PageBlocks({
 function Block({
   block,
   lead,
+  onCheck,
   onListItem,
 }: {
   block: PageBlock;
   lead: boolean;
+  onCheck?: ((item: string, checked: boolean) => void) | undefined;
   onListItem?: OnListItem;
 }) {
   switch (block.type) {
+    case "timeline":
+    case "decision":
+    case "checklist":
+    case "table":
+    case "comparison":
+    case "image":
+      return <RichBlock block={block} onCheck={onCheck} />;
     case "heading":
       return (
-        <h3 className="type-title mt-7 font-semibold text-duet-ink first:mt-0">
+        <h3 className="type-title mt-7 font-semibold text-duet-ink [overflow-wrap:anywhere] first:mt-0">
           {block.text}
         </h3>
       );
@@ -144,11 +164,17 @@ function Block({
       return (
         <figure className="mt-6 first:mt-0">
           {block.label ? (
-            <figcaption className="type-label mb-3 font-semibold text-duet-ink-2">
+            <figcaption className="type-label mb-3 font-semibold text-duet-ink-2 [overflow-wrap:anywhere]">
               {block.label}
             </figcaption>
           ) : null}
-          <BarChart height={176} items={block.items} label={block.label} />
+          <BarChart
+            height={176}
+            items={block.items}
+            label={block.label}
+            scale={block.scale}
+            highlight={block.highlight}
+          />
         </figure>
       );
     case "list":
@@ -158,7 +184,7 @@ function Block({
           className="mt-7 first:mt-0"
         >
           {block.title ? (
-            <h3 className="type-title mb-3 font-semibold text-duet-ink">
+            <h3 className="type-title mb-3 font-semibold text-duet-ink [overflow-wrap:anywhere]">
               {block.title}
             </h3>
           ) : null}
@@ -232,21 +258,26 @@ function ListRow({
 }
 
 /**
- * Labelled numbers as bars, the last one in violet: the one the chart is about, usually the latest.
+ * Labelled numbers as bars, preserving a saved chart's scale and highlighted bar.
+ * Without saved metadata, the largest value sets the scale and the last bar is violet.
  * The figures are read out as a list, since a screen reader cannot see the heights.
  */
 export function BarChart({
   items,
   label,
   height,
+  scale,
+  highlight,
   compact = false,
 }: {
   items: readonly { label: string; value: number }[];
   label?: string | undefined;
   height?: number;
+  scale?: number | undefined;
+  highlight?: number | undefined;
   compact?: boolean;
 }) {
-  const max = Math.max(...items.map((item) => item.value), 0);
+  const max = scale ?? Math.max(...items.map((item) => item.value), 0);
   const described = items.map((item) => `${item.label} ${item.value}`);
   return (
     <div
@@ -262,7 +293,7 @@ export function BarChart({
         )}
       >
         {items.map((item, index) => {
-          const last = index === items.length - 1;
+          const highlighted = index === (highlight ?? items.length - 1);
           const share = max > 0 ? item.value / max : 0;
           return (
             <div
@@ -276,7 +307,7 @@ export function BarChart({
                   compact
                     ? "text-[11px] leading-[13px]"
                     : "text-[13px] leading-4",
-                  last ? "text-duet-violet" : "text-duet-ink-2",
+                  highlighted ? "text-duet-violet" : "text-duet-ink-2",
                 )}
               >
                 {formatValue(item.value)}
@@ -286,7 +317,7 @@ export function BarChart({
                   className={cn(
                     "w-full",
                     compact ? "rounded-[4px]" : "rounded-[7px]",
-                    last ? "bg-duet-violet" : "bg-duet-ink-3/35",
+                    highlighted ? "bg-duet-violet" : "bg-duet-ink-3/35",
                   )}
                   style={{ height: `${Math.max(share * 100, 3)}%` }}
                 />
@@ -323,16 +354,16 @@ export function formatValue(value: number): string {
  * cut off, clamped or left out. What keeps a slide from running long is the tool, not the slide:
  * `make_page` refuses, at save, a slide that would not fit its frame, and tells the model to split it.
  *
- * The slide is laid out at one width, 330px, and the whole card scaled to the width the deck gives
- * it, so it wraps in the same places on every phone and the save-time measure holds on all of them
+ * The slide is laid out at its saved width (264px now; 330px for legacy decks), then scaled to
+ * the width the deck gives it, so it wraps in the same places on every phone and the save-time measure holds on all of them
  * (shared/slide-fit.ts). The sizes here are that measure's, in px so the root size never moves them:
  * an 18/22 title, 15/20 text, 18/22 figures, 13/16 captions, 12px between blocks, 16px of padding.
  * Change one here and change it there.
  */
 
 /** A slide's height at the design width, before it is scaled: its content, or 16:9 if that is taller. */
-function cardHeight(content: number): number {
-  return Math.max(content + 2 * SLIDE_PADDING, (SLIDE_WIDTH * 9) / 16);
+function cardHeight(content: number, width: number): number {
+  return Math.max(content + 2 * SLIDE_PADDING, (width * 9) / 16);
 }
 
 /** The width an element's parent gives it: its content box. */
@@ -354,13 +385,20 @@ function widthGiven(element: HTMLElement): number {
  */
 export function SlideCard({
   slide,
+  layoutVersion = CURRENT_SLIDE_LAYOUT,
   onListItem,
+  onCheck,
   className,
 }: {
   slide: PageSlide;
+  layoutVersion?: SlideLayoutVersion;
+  onCheck?:
+    | ((block: number, item: string, checked: boolean) => void)
+    | undefined;
   onListItem?: OnListItem;
   className?: string;
 }) {
+  const geometry = slideGeometry(layoutVersion);
   const frame = useRef<HTMLDivElement>(null);
   const words = useRef<HTMLDivElement>(null);
   /*
@@ -383,7 +421,7 @@ export function SlideCard({
       if (given <= 0) return;
       const next = {
         given,
-        scale: Math.max(given / SLIDE_WIDTH, LEAST_SCALE),
+        scale: Math.max(given / geometry.width, geometry.leastScale),
         height: outer.clientHeight,
         // offsetHeight is the laid-out height, before the transform scales it.
         content: inner.offsetHeight,
@@ -405,9 +443,9 @@ export function SlideCard({
     observer.observe(inner);
     if (outer.parentElement) observer.observe(outer.parentElement);
     return () => observer.disconnect();
-  }, []);
-  const height = fit ? cardHeight(fit.content) : 0;
-  const width = fit ? SLIDE_WIDTH * fit.scale : 0;
+  }, [geometry]);
+  const height = fit ? cardHeight(fit.content, geometry.width) : 0;
+  const width = fit ? geometry.width * fit.scale : 0;
   return (
     <div
       className={cn("relative h-full", fit ? null : "w-full", className)}
@@ -431,7 +469,7 @@ export function SlideCard({
         style={
           fit
             ? {
-                width: SLIDE_WIDTH,
+                width: geometry.width,
                 height: Math.max(fit.height / fit.scale, height),
                 transform: `scale(${fit.scale})`,
               }
@@ -448,6 +486,10 @@ export function SlideCard({
         <div
           className="col-start-1 row-start-1 flex min-w-0 flex-col self-start"
           ref={words}
+          // The fit measure uses Inter/system sans, even when the surrounding page is editorial.
+          style={{
+            fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+          }}
         >
           <h3 className="font-semibold text-[18px] leading-[22px] tracking-[-0.01em] [overflow-wrap:anywhere]">
             {slide.title}
@@ -457,10 +499,16 @@ export function SlideCard({
               {slide.blocks.map((block, index) => (
                 <SlideBlock
                   block={block}
-                  // biome-ignore lint/suspicious/noArrayIndexKey: a slide's blocks are fixed in order.
-                  key={index}
+                  key={block.persistedIndex ?? index}
                   onListItem={onListItem}
                   scale={fit?.scale ?? 1}
+                  layoutVersion={layoutVersion}
+                  onCheck={
+                    onCheck
+                      ? (item, checked) =>
+                          onCheck(block.persistedIndex ?? index, item, checked)
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -474,14 +522,33 @@ export function SlideCard({
 function SlideBlock({
   block,
   onListItem,
+  onCheck,
   scale,
+  layoutVersion,
 }: {
+  layoutVersion: SlideLayoutVersion;
   block: PageBlock;
   onListItem?: OnListItem | undefined;
+  onCheck?: ((item: string, checked: boolean) => void) | undefined;
   /** How much the slide is scaled on screen, so a row can stay a 44px target there. */
   scale: number;
 }): ReactNode {
   switch (block.type) {
+    case "timeline":
+    case "decision":
+    case "checklist":
+    case "table":
+    case "comparison":
+    case "image":
+      return (
+        <RichBlock
+          block={block}
+          compact
+          scale={scale}
+          onCheck={onCheck}
+          layoutVersion={layoutVersion}
+        />
+      );
     case "heading":
       return (
         <p className="font-semibold text-[15px] text-duet-ink leading-[20px] [overflow-wrap:anywhere]">
@@ -517,7 +584,9 @@ function SlideBlock({
         <ul
           className={cn(
             "grid gap-[8px]",
-            metricColumns(block) === 2 ? "grid-cols-2" : "grid-cols-1",
+            metricColumns(block, layoutVersion) === 2
+              ? "grid-cols-2"
+              : "grid-cols-1",
           )}
         >
           {block.items.map((metric, index) => (
@@ -542,7 +611,7 @@ function SlideBlock({
         </ul>
       );
     case "bars":
-      return <SlideBars block={block} />;
+      return <SlideBars block={block} layoutVersion={layoutVersion} />;
     case "list":
       return (
         <div>
@@ -637,18 +706,24 @@ function SlideRow({
  * the same choice (`barsLayout`). The figures are read out as a list, since a screen reader cannot
  * see the bars.
  */
-function SlideBars({ block }: { block: Extract<PageBlock, { type: "bars" }> }) {
+function SlideBars({
+  block,
+  layoutVersion,
+}: {
+  block: Extract<PageBlock, { type: "bars" }>;
+  layoutVersion: SlideLayoutVersion;
+}) {
   const { items, label } = block;
   // A part of a chart continued across slides draws against the whole chart's largest value.
   const max = block.scale ?? Math.max(...items.map((item) => item.value), 0);
   const described = items.map((item) => `${item.label} ${item.value}`);
   const name = [label, described.join(", ")].filter(Boolean).join(": ");
   const tone = (index: number) =>
-    index === items.length - 1 ? "violet" : "grey";
+    index === (block.highlight ?? items.length - 1) ? "violet" : "grey";
   const share = (value: number) => (max > 0 ? value / max : 0);
-  const rows = barsLayout(block) === "rows";
+  const rows = barsLayout(block, layoutVersion) === "rows";
   // In rows, the label column takes the widest label, as the measure does (`rowLabelWidth`).
-  const labelWidth = rows ? rowLabelWidth(block) : 0;
+  const labelWidth = rows ? rowLabelWidth(block, layoutVersion) : 0;
   return (
     <figure className="flex flex-col">
       {label ? (

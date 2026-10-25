@@ -40,9 +40,8 @@ export type ChannelActivityEvent = {
   /**
    * A turn started or ended in this channel. Absent on an ordinary activity event.
    *
-   * Transient and message-less: it is never written to a table, only announced, so the roster can
-   * show a working indicator for a headless turn — a handoff hop, a relay — that no browser
-   * streams. A missed one costs at most a stuck-looking dot until the next real event, never data.
+   * Message-less aggregate of persisted, unexpired run claims. Both explicit releases and the
+   * server expiry sweep publish it; roster reads recover the same state after missed events.
    */
   busy?: boolean;
 };

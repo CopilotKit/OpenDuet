@@ -1,21 +1,8 @@
-# Find and stop this stack's own processes, for `start.sh` and `stop.sh`.
-#
-# Sourced by both, after `require-bash.sh`. Not executable and not a script anybody runs.
-#
-# Both scripts ask two questions. What is listening on a port: `lsof`. Is one of our background
-# processes running: `pgrep -f`, and stop it with `pkill -f`. Git Bash on Windows has none of the
-# three, and its `ps` cannot see a native process's arguments, so there every answer came back empty
-# and every failure was silent. `stop.sh` said the app and server were "not running" and left them
-# up. `start.sh` could not see a port held by something else. It also started another routine worker
-# on every rerun, and then reported that the one it had just started "did not stay up".
-#
-# WHERE THE TOOL EXISTS, IT IS CALLED EXACTLY AS BEFORE. Only where it is missing on Windows does the
-# question go to PowerShell, which ships with Windows. Its answers are Windows process ids, which Git
-# Bash's `kill` does not accept, so stopping those goes through PowerShell as well.
-#
-# The port, pattern and ids reach PowerShell through the environment rather than on its command
-# line, so a search for a pattern never finds the PowerShell process doing the searching, the way
-# `pgrep -f` leaves itself out.
+# Find and stop this deployment's processes, sourced after `require-bash.sh`.
+# Port inspection uses lsof (PowerShell on Windows without it). Background process ownership
+# requires an exact Bun command plus this checkout's physical working directory on POSIX.
+# New launches use absolute entry paths so Windows, which does not expose cwd through CIM,
+# can prove ownership too. Never signal or reuse a process from a global relative-pattern match.
 
 # `type -P` rather than `command -v`: only a program on PATH counts, not a shell function or alias of
 # the same name that happens to be defined.
@@ -67,37 +54,92 @@ kill_pids() {
   kill "$@" 2>/dev/null || true
 }
 
-# The ids of processes whose command line is the pattern, such as `bun worker/src/index.ts`, and when
-# asked, stopped and waited for as `kill_pids` does. Windows records the executable as a path,
-# `C:\...\bun.exe` and sometimes quoted, so the first word is matched against the process name and
-# the rest against its command line.
+# Windows command lines retain quotes and native path separators. Match the complete arguments,
+# not a substring; an absolute entry path is the ownership proof. `unscoped` only reports legacy
+# relative launches so start.sh can explain why it cannot safely adopt or stop them.
 openbot_windows_matching() {
-  OPENBOT_PATTERN="$1" OPENBOT_STOP="${2:-}" openbot_powershell '
-    $name, $rest = $env:OPENBOT_PATTERN -split " ", 2
+  local cwd="$2"
+  if type -P cygpath >/dev/null 2>&1; then
+    cwd="$(cygpath -m "$cwd")" || return 1
+  fi
+  OPENBOT_PATTERN="$1" OPENBOT_CWD="$cwd" OPENBOT_ACTION="${3:-}" openbot_powershell '
+    $name, $relative = $env:OPENBOT_PATTERN -split " ", 2
+    $split = $relative.LastIndexOf(" ") + 1
+    $prefix = $relative.Substring(0, $split)
+    $script = $env:OPENBOT_CWD.Replace("\", "/").TrimEnd("/") + "/" + $relative.Substring($split)
+    $absolute = @("$prefix$script", "$prefix`"$script`"")
     $ids = @(Get-CimInstance Win32_Process |
-      Where-Object { $_.Name -eq "$name.exe" -and $_.CommandLine -and $_.CommandLine.Contains(" $rest") } |
-      ForEach-Object { $_.ProcessId })
-    if ($ids -and $env:OPENBOT_STOP) {
+      Where-Object {
+        if ($_.Name -ne "$name.exe" -or !$_.CommandLine) { return $false }
+        $arguments = ($_.CommandLine.Trim() -replace "^(?:`"[^`"]*`"|\S+)\s+", "").Replace("\", "/")
+        if ($env:OPENBOT_ACTION -eq "unscoped") { return $arguments -eq $relative }
+        $absolute -contains $arguments
+      } | ForEach-Object { $_.ProcessId })
+    if ($ids -and $env:OPENBOT_ACTION -eq "stop") {
       Stop-Process -Force -Id $ids -ErrorAction SilentlyContinue
       Wait-Process -Id $ids -Timeout 5 -ErrorAction SilentlyContinue
     }
     $ids'
 }
 
-# `pgrep -f <pattern>`: true when such a process is running.
-running() {
-  if openbot_windows_without pgrep; then
-    [ -n "$(openbot_windows_matching "$1")" ]
-    return
+openbot_process_cwd() {
+  if [ -d "/proc/$1" ]; then
+    readlink "/proc/$1/cwd" 2>/dev/null
+  else
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null | while IFS= read -r line; do
+      case "$line" in n*) printf '%s\n' "${line#n}"; break ;; esac
+    done
   fi
-  pgrep -f "$1" >/dev/null 2>&1
 }
 
-# `pkill -f <pattern>`.
-stop_matching() {
-  if openbot_windows_without pkill; then
-    openbot_windows_matching "$1" stop >/dev/null
-    return 0
+# pgrep supplies candidates only. Verify the executable, full arguments and cwd, including when
+# rechecking immediately before a signal. Literal comparisons avoid regex metacharacters in paths.
+openbot_process_matches() {
+  local pid="$1" pattern="$2" cwd="$3" executable command args absolute
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 1 ] || return 1
+  executable="$(ps -p "$pid" -o comm= 2>/dev/null)" || return 1
+  case "${executable##*/}" in bun|bun.exe) ;; *) return 1 ;; esac
+  command="$(ps -p "$pid" -o args= -ww 2>/dev/null)" || return 1
+  args="${pattern#* }"
+  absolute="${pattern% *} $cwd/${pattern##* }"
+  case "$command" in
+    "$pattern"|"$executable $args"|"$absolute"|"$executable ${absolute#* }") ;;
+    *) return 1 ;;
+  esac
+  [ "$(openbot_process_cwd "$pid")" = "$cwd" ]
+}
+
+openbot_matching_pids() {
+  local pattern="$1" cwd="${2:-}" pid
+  # Missing or inaccessible ownership information is never permission to match globally.
+  [ -n "$cwd" ] && cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || return 0
+  if [ "${OS:-}" = Windows_NT ]; then
+    openbot_windows_matching "$pattern" "$cwd"
+    return
   fi
-  pkill -f "$1" >/dev/null 2>&1 || true
+  while IFS= read -r pid; do
+    if openbot_process_matches "$pid" "$pattern" "$cwd"; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(pgrep -f "${pattern##* }" 2>/dev/null || true)
+}
+
+# Both helpers require the command AND its owning working directory.
+running() {
+  [ -n "$(openbot_matching_pids "$1" "${2:-}")" ]
+}
+
+stop_matching() {
+  local pattern="$1" cwd="${2:-}" pid
+  [ -n "$cwd" ] && cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || return 0
+  if [ "${OS:-}" = Windows_NT ]; then
+    openbot_windows_matching "$pattern" "$cwd" stop >/dev/null
+    return
+  fi
+  while IFS= read -r pid; do
+    if openbot_process_matches "$pid" "$pattern" "$cwd"; then
+      kill "$pid" 2>/dev/null || true # The verified process may already have exited.
+    fi
+  done < <(openbot_matching_pids "$pattern" "$cwd")
 }

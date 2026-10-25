@@ -1,3 +1,10 @@
+import {
+  CHANNEL_COLOURS,
+  CHANNEL_ICONS,
+  type ChannelColour,
+  type ChannelIcon,
+} from "@openbot/shared/channel-look";
+import type { PageTheme } from "@openbot/shared/page-look";
 import { sql } from "drizzle-orm";
 import {
   check,
@@ -7,12 +14,6 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import {
-  CHANNEL_COLOURS,
-  CHANNEL_ICONS,
-  type ChannelColour,
-  type ChannelIcon,
-} from "@openbot/shared/channel-look";
 import type { PageContent, PageKind } from "../../openduet/page-content";
 import { agents, channels, users } from "./core";
 import { jsonb } from "./json";
@@ -26,6 +27,9 @@ import { proactiveSuggestions } from "./proactive";
  * `channel_id` is where it was asked for, when that is known. The tool runs without the conversation
  * in hand today, so it is null until a caller can say.
  */
+/** Private storage metadata, never accepted in make_page or exposed inside public content. */
+export type StoredPageContent = PageContent & { _checklistRevision?: string };
+
 export const openduetPages = pgTable(
   "openduet_pages",
   {
@@ -40,7 +44,9 @@ export const openduetPages = pgTable(
     kind: text("kind").$type<PageKind>().notNull(),
     title: text("title").notNull(),
     summary: text("summary"),
-    content: jsonb("content").$type<PageContent>().notNull(),
+    thumbnail: text("thumbnail"),
+    theme: text("theme").$type<PageTheme>().notNull().default("classic"),
+    content: jsonb("content").$type<StoredPageContent>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -54,8 +60,12 @@ export const openduetPages = pgTable(
       table.updatedAt,
     ),
     check(
+      "openduet_pages_theme_check",
+      sql`${table.theme} IN ('classic', 'studio', 'earth', 'ocean', 'editorial')`,
+    ),
+    check(
       "openduet_pages_kind_check",
-      sql`${table.kind} IN ('page', 'slides')`,
+      sql`${table.kind} IN ('page', 'slides', 'dashboard', 'doc', 'design', 'design-system')`,
     ),
   ],
 );
@@ -95,6 +105,7 @@ export const openduetTasks = pgTable(
     }),
     title: text("title").notNull(),
     why: text("why"),
+    thumbnail: text("thumbnail"),
     origin: text("origin").$type<OpenDuetTaskOrigin>().notNull(),
     suggestionId: text("suggestion_id").references(
       () => proactiveSuggestions.id,

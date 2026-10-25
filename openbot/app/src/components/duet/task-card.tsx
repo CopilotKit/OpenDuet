@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 import { DuetIcon, type DuetIconName } from "./icons";
 import { CardRow, DuetCard, OutcomePill, type PillTone } from "./kit";
+import { SafeSvg } from "./page-rich-block";
 
 /*
  * A task OpenDuet is working on, as one compact row: what it is, where it stands, and a chevron that
@@ -44,11 +45,13 @@ export function TaskStatusPill({ status }: { status: TaskStatus }) {
 /** The row itself, with no card around it, for a list that draws its own. */
 export function TaskRow({
   title,
+  thumbnail,
   status,
   failure = null,
   channel,
 }: {
   title: string;
+  thumbnail?: string | null | undefined;
   /** Null while the task has not been read yet: the row draws without a pill rather than a guess. */
   status: TaskStatus | null;
   /** Why it couldn't finish, said under the pill while it is failed. */
@@ -74,7 +77,15 @@ export function TaskRow({
         ) : undefined
       }
       icon="tasks"
-      title={<span className="line-clamp-2">{title}</span>}
+      title={
+        <span className="flex items-center gap-2">
+          <SafeSvg
+            className="h-10 w-16 shrink-0 overflow-hidden rounded-lg"
+            svg={thumbnail}
+          />
+          <span className="line-clamp-2">{title}</span>
+        </span>
+      }
       trailing={
         <span aria-hidden className="shrink-0 text-duet-ink-3">
           <DuetIcon name="chevronRight" size={18} stroke={2.2} />
@@ -105,7 +116,7 @@ export function TaskButton({
     <button
       aria-label={label}
       className={cn(
-        "type-label h-[44px] shrink-0 rounded-full px-4 font-semibold outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50",
+        "type-label min-h-[44px] max-w-full shrink-0 rounded-full px-4 py-2 font-semibold outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50",
         primary
           ? "bg-duet-black text-duet-on-black hover:brightness-125"
           : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
@@ -157,6 +168,7 @@ export function TryTaskAgain({
 export function TaskCard({
   taskId,
   title,
+  thumbnail,
   status,
   failure = null,
   channel,
@@ -164,6 +176,7 @@ export function TaskCard({
 }: {
   taskId: string;
   title: string;
+  thumbnail?: string | null | undefined;
   status: TaskStatus | null;
   failure?: string | null;
   /** The tag of the channel it was asked for in. */
@@ -183,6 +196,7 @@ export function TaskCard({
               failure={failure}
               status={status}
               title={title}
+              thumbnail={thumbnail}
             />
           </div>
         ),
@@ -240,10 +254,12 @@ export function TaskGlyph({ status }: { status: TaskStatus | null }) {
  */
 export function TaskLink({
   title,
+  thumbnail,
   status,
   link,
 }: {
   title: string;
+  thumbnail?: string | null | undefined;
   status: TaskStatus | null;
   /** Wraps the line in whatever opens the task: a router link, given its class and contents. */
   link: (props: { className: string; children: ReactNode }) => ReactNode;
@@ -271,6 +287,10 @@ export function TaskLink({
         <span className="grid shrink-0 place-items-center">
           <TaskGlyph status={status} />
         </span>
+        <SafeSvg
+          className="h-9 w-14 shrink-0 overflow-hidden rounded-lg"
+          svg={thumbnail}
+        />
         <span className="type-sub min-w-0 truncate text-duet-ink-2">
           {title}
         </span>

@@ -1,8 +1,12 @@
 import { START_TASK_TOOL } from "@openbot/shared/task-brief";
+import {
+  sanitizeThumbnail,
+  THUMBNAIL_GUIDANCE,
+} from "@openbot/shared/thumbnail";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import { z } from "zod";
 import type { AuditInitiator } from "../audit";
-import type { AskedTask as StartedTask, OpenedTask } from "../proactive/engine";
+import type { OpenedTask, AskedTask as StartedTask } from "../proactive/engine";
 
 /*
  * Tasks the person asks for in a conversation: "turn these into tasks", "hand those off", "add that
@@ -188,6 +192,7 @@ const startParameters = z
       .describe("Why it matters or by when, in a sentence, when they said."),
     source,
     link,
+    thumbnail: z.string().optional().describe(THUMBNAIL_GUIDANCE),
   })
   .strict();
 
@@ -217,6 +222,7 @@ function startTaskTool(options: {
       "Use it for anything bigger than a quick answer: drafting, researching, preparing something, or any job of several steps or more than one reply.",
       'Call it once per piece of work; two separate asks are two tasks. Then reply only "On it.", or "On it" and one short clause, and do not do the work in Chat.',
       "Never call it inside a task's own conversation; there, do the work.",
+      THUMBNAIL_GUIDANCE,
     ].join(" "),
     parameters: startParameters,
     initiator: options.initiator,
@@ -227,12 +233,17 @@ function startTaskTool(options: {
       const task = await options.start({
         ownerUserId: options.actorId,
         agentId: options.botId,
-        task: { ...parsed.data, fromChannelId: options.channel() },
+        task: {
+          ...parsed.data,
+          thumbnail: sanitizeThumbnail(parsed.data.thumbnail) ?? undefined,
+          fromChannelId: options.channel(),
+        },
       });
       return JSON.stringify({
         taskId: task.id,
         channelId: task.channelId,
         title: task.title,
+        thumbnail: sanitizeThumbnail(parsed.data.thumbnail),
         note: 'The task is under way in its own conversation, and its card is under your reply. Reply only "On it.", or "On it" and one short clause. Do not describe the task or what happens next, and do not do the work here.',
       });
     },

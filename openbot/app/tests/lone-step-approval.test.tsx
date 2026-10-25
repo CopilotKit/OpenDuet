@@ -3,8 +3,9 @@ import type { Message } from "@ag-ui/core";
 import { CopilotKitContext } from "@copilotkit/react-core/v2/context";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
+import { approvalInboxOptions } from "@/lib/approvals";
 import { settleReactWork } from "./settle-react-work";
 
 /**
@@ -18,28 +19,44 @@ import { settleReactWork } from "./settle-react-work";
 
 let approvals: unknown[] = [];
 let asked = 0;
+const decisions: { path: string; method?: string; body?: BodyInit | null }[] =
+  [];
 let realFetch: typeof fetch;
 
 beforeAll(() => {
   GlobalRegistrator.register({ url: "http://localhost/" });
   realFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    if (String(input).endsWith("/api/approvals")) {
-      asked += 1;
-      return Response.json({
-        enabled: true,
-        requests: approvals,
-        questions: [],
-      });
-    }
-    return Response.json({});
-  }) as typeof fetch;
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/decision")) {
+        decisions.push({
+          path: String(input),
+          method: init?.method,
+          body: init?.body,
+        });
+        return Response.json({ ok: true });
+      }
+      if (String(input).endsWith("/api/approvals")) {
+        asked += 1;
+        if (decisions.length > 0)
+          return Response.json({ error: "Inbox unavailable" }, { status: 503 });
+        return Response.json({
+          enabled: true,
+          requests: approvals,
+          questions: [],
+        });
+      }
+      return Response.json({});
+    },
+    { preconnect: realFetch.preconnect },
+  );
 });
 
 afterEach(() => {
   cleanup();
   approvals = [];
   asked = 0;
+  decisions.length = 0;
 });
 
 afterAll(async () => {
@@ -110,13 +127,14 @@ function draw() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const view = render(
     <CopilotKitContext.Provider value={noRenderers}>
       <QueryClientProvider client={client}>
         <ChatTranscript messages={turn} />
       </QueryClientProvider>
     </CopilotKitContext.Provider>,
   );
+  return { ...view, client };
 }
 
 test("a gated call alone in its turn draws its approval card under its own line", async () => {
@@ -135,6 +153,39 @@ test("a request for some other call draws nothing under this one", async () => {
   await settleReactWork();
   expect(view.getByText("Sending your email")).toBeTruthy();
   expect(view.queryByRole("button", { name: "Allow once" })).toBeNull();
+});
+
+test("an accepted inline refusal stays decided when the inbox refresh fails", async () => {
+  approvals = [waitingSend("toolu_send")];
+  const view = draw();
+  const key = approvalInboxOptions().queryKey;
+  fireEvent.click(await view.findByRole("button", { name: "Refuse" }));
+  await waitFor(() =>
+    expect(view.client.getQueryState(key)?.status).toBe("error"),
+  );
+  expect(decisions).toEqual([
+    {
+      path: "/api/approvals/approval-toolu_send/decision",
+      method: "POST",
+      body: '{"decision":"deny"}',
+    },
+  ]);
+  await waitFor(() =>
+    expect(
+      view.queryAllByRole("region", { name: "Waiting for your approval" })
+        .length,
+    ).toBe(0),
+  );
+  expect(view.queryByRole("button", { name: "Allow once" })).toBeNull();
+  expect(view.queryByRole("button", { name: "Refuse" })).toBeNull();
+  expect(
+    view.client.getQueryData(approvalInboxOptions().queryKey)?.requests[0],
+  ).toMatchObject({
+    id: "approval-toolu_send",
+    status: "denied",
+    decision: "deny",
+    decidedAt: expect.any(String),
+  });
 });
 
 test("a send the person declined is never named as sent", async () => {

@@ -1,3 +1,9 @@
+import {
+  PAGE_KIND_COLOURS,
+  PAGE_KIND_LABELS,
+  type PageKind,
+} from "@openbot/shared/page-look";
+import { sanitizeThumbnail } from "@openbot/shared/thumbnail";
 import { type ReactNode, useCallback } from "react";
 import { clockTime } from "@/lib/approval-view";
 import type { PageBlock, PageSummary } from "@/lib/pages/queries";
@@ -5,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
 import { DuetCard } from "./kit";
 import { type CardSize, registerCard, rememberOpenedFrom } from "./page-morph";
+import { SafeSvg } from "./page-rich-block";
 import { isDashboard } from "./page-view";
 
 /*
@@ -28,11 +35,7 @@ export function updatedLabel(iso: string, now = new Date()): string {
 const PREVIEW_HEIGHT: Record<CardSize, number> = { row: 150, grid: 116 };
 
 /** What a page is, in a word: the Make filters and the grid's cards say it this way. */
-export const KIND_LABEL: Record<ReturnType<typeof previewKind>, string> = {
-  page: "Page",
-  slides: "Deck",
-  dashboard: "Dashboard",
-};
+export const KIND_LABEL = PAGE_KIND_LABELS;
 
 export function PageCard({
   page,
@@ -96,7 +99,10 @@ export function PageCardFace({
           aria-hidden
           className="relative overflow-hidden bg-duet-tile"
           data-preview={kind}
-          style={{ height: PREVIEW_HEIGHT.grid }}
+          style={{
+            height: PREVIEW_HEIGHT.grid,
+            background: `color-mix(in srgb, ${PAGE_KIND_COLOURS[kind]} 12%, var(--duet-tile))`,
+          }}
         >
           <PagePreview page={page} size="grid" />
         </div>
@@ -118,7 +124,10 @@ export function PageCardFace({
         aria-hidden
         className="relative overflow-hidden bg-duet-tile"
         data-preview={kind}
-        style={{ height: PREVIEW_HEIGHT.row }}
+        style={{
+          height: PREVIEW_HEIGHT.row,
+          background: `color-mix(in srgb, ${PAGE_KIND_COLOURS[kind]} 12%, var(--duet-tile))`,
+        }}
       >
         <PagePreview page={page} size="row" />
       </div>
@@ -140,20 +149,29 @@ export function PageCardFace({
 }
 
 /** Which preview a page gets: a deck's first slide, a dashboard's figures, or a page's first lines. */
-export function previewKind(
-  page: PageSummary,
-): "slides" | "dashboard" | "page" {
-  if (page.kind === "slides") return "slides";
+export function previewKind(page: PageSummary): PageKind {
+  if (page.kind !== "page") return page.kind;
   return isDashboard(page.preview.blocks) ? "dashboard" : "page";
 }
 
 function PagePreview({ page, size }: { page: PageSummary; size: CardSize }) {
+  if (sanitizeThumbnail(page.thumbnail))
+    return <SafeSvg className="absolute inset-0" svg={page.thumbnail} />;
   switch (previewKind(page)) {
     case "slides":
       return <SlidePreview page={page} size={size} />;
     case "dashboard":
-      return <DashboardPreview blocks={page.preview.blocks} size={size} />;
+      return (
+        <DashboardPreview
+          blocks={page.preview.blocks}
+          size={size}
+          title={page.title}
+        />
+      );
     case "page":
+    case "doc":
+    case "design":
+    case "design-system":
       return (
         <DocumentPreview
           blocks={page.preview.blocks}
@@ -241,6 +259,46 @@ function Bars({ count, strong = false }: { count: number; strong?: boolean }) {
 
 function SkeletonBlock({ block }: { block: PageBlock }) {
   switch (block.type) {
+    case "image":
+      return <SafeSvg className="h-14" svg={block.svg} />;
+    case "table":
+      return (
+        <div className="grid grid-cols-3 gap-1">
+          {block.rows.slice(0, 3).flatMap((row, i) =>
+            row.slice(0, 3).map((cell, j) => (
+              <span
+                className="h-3 rounded bg-duet-ink-3/20"
+                // biome-ignore lint/suspicious/noArrayIndexKey: saved table cells keep their position.
+                key={`${i}-${j}`}
+                title={cell}
+              />
+            )),
+          )}
+        </div>
+      );
+    case "timeline":
+    case "checklist":
+      return <Bars count={Math.min(block.items.length, 3)} strong />;
+    case "comparison":
+      return (
+        <div className="flex gap-2">
+          {block.columns.map((column, index) => (
+            <span
+              className="min-w-0 flex-1 rounded bg-duet-ink-3/15 p-1 text-[9px]"
+              // biome-ignore lint/suspicious/noArrayIndexKey: comparison columns may share a title and have no persistent identity.
+              key={index}
+            >
+              {column.title}
+            </span>
+          ))}
+        </div>
+      );
+    case "decision":
+      return (
+        <p className="text-[10px] text-duet-ink-2">
+          {block.pick ? `Pick: ${block.pick}` : block.question}
+        </p>
+      );
     case "heading":
       return (
         <span className="mt-1 block h-[8px] w-[46%] rounded-full bg-duet-ink-3/55" />
@@ -281,7 +339,7 @@ function SkeletonBlock({ block }: { block: PageBlock }) {
         </div>
       );
     case "bars":
-      return <MiniBars items={block.items} height={34} />;
+      return <MiniBars block={block} height={34} />;
     case "list":
       return (
         <div className="flex flex-col gap-[7px]">
@@ -302,25 +360,29 @@ function SkeletonBlock({ block }: { block: PageBlock }) {
   }
 }
 
-/** Bars with no figures, the last one violet: the shape of a chart at thumbnail size. */
+/** A chart at thumbnail size, keeping its shared scale and original highlighted bar. */
 function MiniBars({
-  items,
+  block,
   height,
 }: {
-  items: readonly { value: number }[];
+  block: Extract<PageBlock, { type: "bars" }>;
   height: number;
 }) {
-  const max = Math.max(...items.map((item) => item.value), 0);
+  const { items, scale, highlight } = block;
+  const max = scale ?? Math.max(...items.map((item) => item.value), 0);
   return (
     <div className="flex w-full items-end gap-[3px]" style={{ height }}>
       {items.map((item, index) => (
         <span
           className={cn(
             "block flex-1 rounded-[2px]",
-            index === items.length - 1 ? "bg-duet-violet" : "bg-duet-ink-3/35",
+            index === (highlight ?? items.length - 1)
+              ? "bg-duet-violet"
+              : "bg-duet-ink-3/35",
           )}
-          // biome-ignore lint/suspicious/noArrayIndexKey: two bars may share a value.
+          // biome-ignore lint/suspicious/noArrayIndexKey: two bars may share a label.
           key={index}
+          title={item.label}
           style={{
             height: `${Math.max(max > 0 ? (item.value / max) * 100 : 0, 6)}%`,
           }}
@@ -330,16 +392,23 @@ function MiniBars({
   );
 }
 
-/** A dashboard: its headline sentence over its first figures, three a row wide and two in the grid. */
+/** A dashboard's first headline and figures, wherever they occur in its saved blocks. */
 function DashboardPreview({
   blocks,
   size,
+  title,
 }: {
   blocks: readonly PageBlock[];
   size: CardSize;
+  title: string;
 }) {
   const grid = size === "grid";
-  const [headline, metrics] = blocks;
+  const headline = blocks.find(
+    (block) => block.type === "text" || block.type === "heading",
+  );
+  const metrics = blocks.find((block) => block.type === "metrics");
+  if (!metrics)
+    return <DocumentPreview blocks={blocks} size={size} title={title} />;
   return (
     <div
       className={cn("flex h-full flex-col", grid ? "px-3 pt-3" : "px-4 pt-4")}
@@ -352,7 +421,7 @@ function DashboardPreview({
             : "line-clamp-2 text-[16px] leading-[20px] tracking-[-0.01em]",
         )}
       >
-        {headline?.type === "text" ? headline.text : ""}
+        {headline?.text ?? title}
       </p>
       <div
         className={cn(
@@ -360,41 +429,37 @@ function DashboardPreview({
           grid ? "mt-2.5 grid-cols-2 gap-1.5" : "mt-3 grid-cols-3 gap-2",
         )}
       >
-        {(metrics?.type === "metrics" ? metrics.items : [])
-          .slice(0, grid ? 2 : 3)
-          .map((metric, index) => (
-            <div
+        {metrics.items.slice(0, grid ? 2 : 3).map((metric, index) => (
+          <div
+            className={cn(
+              "min-w-0 bg-duet-card shadow-[0_0_0_1px_var(--duet-hair-2)]",
+              grid ? "rounded-[9px] px-2 py-1.5" : "rounded-[12px] px-2.5 py-2",
+            )}
+            // biome-ignore lint/suspicious/noArrayIndexKey: two tiles may share a label.
+            key={index}
+          >
+            <p
               className={cn(
-                "min-w-0 bg-duet-card shadow-[0_0_0_1px_var(--duet-hair-2)]",
+                "truncate font-semibold text-duet-ink tabular-nums",
                 grid
-                  ? "rounded-[9px] px-2 py-1.5"
-                  : "rounded-[12px] px-2.5 py-2",
+                  ? "text-[15px] leading-[19px] tracking-[-0.012em]"
+                  : "text-[17px] leading-[21px] tracking-[-0.015em]",
               )}
-              // biome-ignore lint/suspicious/noArrayIndexKey: two tiles may share a label.
-              key={index}
             >
-              <p
-                className={cn(
-                  "truncate font-semibold text-duet-ink tabular-nums",
-                  grid
-                    ? "text-[15px] leading-[19px] tracking-[-0.012em]"
-                    : "text-[17px] leading-[21px] tracking-[-0.015em]",
-                )}
-              >
-                {metric.value}
-              </p>
-              <p
-                className={cn(
-                  "truncate text-duet-ink-2",
-                  grid
-                    ? "text-[10px] leading-[13px]"
-                    : "text-[11px] leading-[14px]",
-                )}
-              >
-                {metric.label}
-              </p>
-            </div>
-          ))}
+              {metric.value}
+            </p>
+            <p
+              className={cn(
+                "truncate text-duet-ink-2",
+                grid
+                  ? "text-[10px] leading-[13px]"
+                  : "text-[11px] leading-[14px]",
+              )}
+            >
+              {metric.label}
+            </p>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -402,7 +467,7 @@ function DashboardPreview({
 
 /**
  * A deck: one slide as a 16:9 thumbnail, the first with a chart when there is one (the server
- * picks it), with the slide's title and its chart drawn as real bars, the last one violet. A slide
+ * picks it), with the slide's title and its chart drawn as real bars. A slide
  * with no chart shows its other lines as soft bars.
  */
 function SlidePreview({ page, size }: { page: PageSummary; size: CardSize }) {
@@ -439,7 +504,7 @@ function SlidePreview({ page, size }: { page: PageSummary; size: CardSize }) {
               grid ? "mt-1.5" : "mt-2",
             )}
           >
-            <MiniBars height={grid ? 44 : 64} items={chart.items} />
+            <MiniBars block={chart} height={grid ? 44 : 64} />
           </div>
         ) : (
           <div

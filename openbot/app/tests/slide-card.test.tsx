@@ -200,16 +200,16 @@ test("a weekday chart with full day names lies in rows, every label and figure w
   expect(chart.getAttribute("data-layout")).toBe("rows");
   for (const day of days) expect(view.getByText(day)).toBeTruthy();
   expect(view.getAllByText("1.2K")).toHaveLength(days.length);
-  // Short labels still stand in columns.
+  // Three short labels fit the 264px slide's columns; seven abbreviations do not.
   cleanup();
   const short = render(
     <SlideCard
       slide={{
-        title: "Emails by day",
+        title: "Emails, Monday to Wednesday",
         blocks: [
           {
             type: "bars",
-            items: days.map((label, index) => ({
+            items: days.slice(0, 3).map((label, index) => ({
               label: label.slice(0, 3),
               value: 10 + index,
             })),
@@ -219,6 +219,8 @@ test("a weekday chart with full day names lies in rows, every label and figure w
     />,
   );
   expect(short.getByRole("img").getAttribute("data-layout")).toBe("columns");
+  for (const day of ["Mon", "Tue", "Wed"])
+    expect(short.getByText(day)).toBeTruthy();
 });
 
 test("figures too wide for half a slide take a whole-width tile each", () => {

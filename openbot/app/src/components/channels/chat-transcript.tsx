@@ -855,6 +855,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   role,
   text,
   seen = false,
+  replay = false,
 }: {
   commandNames?: string;
   delay: number;
@@ -864,8 +865,13 @@ const TranscriptMessage = memo(function TranscriptMessage({
   text: string;
   /** The person's newest message, which the Bot has picked up and not yet answered in words. */
   seen?: boolean;
+  /** A new execution of an already accepted task reply, never another person submission. */
+  replay?: boolean;
 }) {
   const isUser = role === "user";
+  if (isUser && replay) {
+    return <p className="type-label text-duet-ink-3">Trying again.</p>;
+  }
   if (!isUser && firstDayAnswer) {
     return <FirstDayAnswer delay={delay} text={text} />;
   }
@@ -1002,7 +1008,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
  */
 export function seenMessageId(items: readonly TranscriptItem[]): string | null {
   const newest = items.findLastIndex(
-    (item) => item.kind === "text" && isPersonSentMessage(item.role, item.text),
+    (item) =>
+      item.kind === "text" &&
+      isPersonSentMessage(item.role, item.text, item.taskInput?.replay),
   );
   if (newest === -1) return null;
   const answered = items
@@ -1775,10 +1783,14 @@ export function ServerToolLine({
 export function isPersonSentMessage(
   role: "user" | "assistant",
   text: string,
+  replay = false,
 ): boolean {
   // A check-in is the same: the Bot started it, and it must not scroll the person's place away.
   return (
-    role === "user" && readFiring(text) === null && readCheckIn(text) === null
+    role === "user" &&
+    !replay &&
+    readFiring(text) === null &&
+    readCheckIn(text) === null
   );
 }
 
@@ -1824,7 +1836,8 @@ function anchorRowIds(items: readonly TranscriptItem[]): Set<string> {
   for (const item of items) {
     const sent =
       item.kind === "attachments" ||
-      (item.kind === "text" && isPersonSentMessage(item.role, item.text));
+      (item.kind === "text" &&
+        isPersonSentMessage(item.role, item.text, item.taskInput?.replay));
     if (!sent) continue;
 
     const turn = turnOf(item);
@@ -1943,10 +1956,14 @@ export function ChatTranscript({
       lastItem?.kind === "attachments");
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (folded && viewportRef.current) viewportRef.current.scrollTop = 0;
+  }, [folded]);
   const newestUserMessageId =
     items.findLast(
       (item) =>
-        (item.kind === "text" && isPersonSentMessage(item.role, item.text)) ||
+        (item.kind === "text" &&
+          isPersonSentMessage(item.role, item.text, item.taskInput?.replay)) ||
         /*
          * Same reasoning as `waitingOnFirstToken` above: an attachment is always the person's own,
          * so a turn that is only a file still counts as them sending something. This id decides
@@ -1997,7 +2014,7 @@ export function ChatTranscript({
   }, [hasItems, delays]);
 
   return (
-    <MessageScrollerProvider autoScroll scrollPreviousItemPeek={48}>
+    <MessageScrollerProvider autoScroll={!folded} scrollPreviousItemPeek={48}>
       <MessageScroller>
         <MessageScrollerViewport ref={viewportRef}>
           <MessageScrollerContent
@@ -2139,6 +2156,7 @@ export function ChatTranscript({
                     delay={delays.delayFor(item.id, index, items.length)}
                     firstDayAnswer={firstDay?.answer.has(item.id) === true}
                     role={item.role}
+                    replay={item.taskInput?.replay}
                     seen={item.id === seenId}
                     text={item.text}
                   />

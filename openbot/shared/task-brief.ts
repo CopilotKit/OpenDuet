@@ -19,12 +19,15 @@ export const TASK_FRAME = [
   `Do the work here yourself, all of it, and end with what you did and anything still waiting on them. Never call ${START_TASK_TOOL} in this conversation: this is the task.`,
 ] as const;
 
-/** The frame and the blank line under it, which is what `readTaskBrief` strips. */
+/** The historical frame and blank line remain the prefix of correction messages. */
 const PREFIX = [...TASK_FRAME, "", ""].join("\n");
+// The label precedes the blank line, so this cannot match a historical frame's arbitrary body.
+// Everything after this distinct prefix is the ask, including any quoted framing syntax.
+const BRIEF_PREFIX = [...TASK_FRAME, "The person's task:", "", ""].join("\n");
 
 /** The person's ask, wrapped in the sentences that tell the turn it is a task's own conversation. */
 export function frameTaskBrief(ask: string): string {
-  return [...TASK_FRAME, "", ask].join("\n");
+  return `${BRIEF_PREFIX}${ask}`;
 }
 
 /**
@@ -34,22 +37,85 @@ export function frameTaskBrief(ask: string): string {
 export const TASK_REPLY_LINE =
   "The run before this one couldn't finish. The person replied to the task with this:";
 
+const REPLY_SEPARATOR = `\n\n${TASK_REPLY_LINE}\n\n`;
+// JavaScript string offsets count UTF-16 code units. A length makes the boundary independent of
+// earlier framed retries and anything the person quoted, without changing either person's text.
+const CONTEXT_LENGTH_PREFIX = "Earlier task input (UTF-16 length): ";
+
 /** A reply to a failed task: the ask under the frame for the model, then the person's own words. */
 export function frameTaskReply(ask: string, reply: string): string {
-  return [...TASK_FRAME, "", ask, "", TASK_REPLY_LINE, "", reply].join("\n");
+  return `${PREFIX}${CONTEXT_LENGTH_PREFIX}${ask.length}\n${ask}${REPLY_SEPARATOR}${reply}`;
+}
+
+// Distinct from historical framing, whose next line is blank. JSON keeps accepted data on one line.
+const INPUT_PREFIX = [...TASK_FRAME, "Accepted task reply identity: "].join(
+  "\n",
+);
+
+/** Persist accepted words and identity independently of execution framing and user-message IDs. */
+export function frameTaskInput(
+  text: string,
+  acceptedReply: { id: string; text: string },
+): string {
+  return `${INPUT_PREFIX}${JSON.stringify(acceptedReply)}\n\n${text}`;
 }
 
 /**
- * The ask back out of a framed message, or null if this was not one. For a reply to a failed task,
- * the reply.
- *
- * Null means "not a task's first message" and nothing else, the contract `readFiring` keeps. A prefix
- * match on the whole frame, so a person quoting one of its lines still sees their own words.
+ * Decode the task input's kind and exact person-authored text, including historical encodings.
+ * A whole-frame prefix match means quoting just one instruction line is not mistaken for a frame.
  */
-export function readTaskBrief(text: string): string | null {
+export function readTaskFrame(
+  text: string,
+): { kind: "brief" | "reply"; text: string; inputId?: string } | null {
+  if (!text.startsWith(INPUT_PREFIX)) return readTaskContent(text);
+  const end = text.indexOf("\n\n", INPUT_PREFIX.length);
+  if (end === -1) return null;
+  let accepted: { id?: unknown; text?: unknown } | null;
+  try {
+    accepted = JSON.parse(text.slice(INPUT_PREFIX.length, end));
+  } catch {
+    return null;
+  }
+  if (
+    typeof accepted?.id !== "string" ||
+    !accepted.id ||
+    typeof accepted.text !== "string"
+  )
+    return null;
+  // Accepted words are opaque: even a complete task frame quoted by the person stays literal.
+  return { kind: "reply", text: accepted.text, inputId: accepted.id };
+}
+
+function readTaskContent(
+  text: string,
+): { kind: "brief" | "reply"; text: string } | null {
+  if (text.startsWith(BRIEF_PREFIX))
+    return { kind: "brief", text: text.slice(BRIEF_PREFIX.length) };
   if (!text.startsWith(PREFIX)) return null;
   const rest = text.slice(PREFIX.length);
-  // A reply to a failed task reads as the reply: that is what the person said.
-  const reply = rest.indexOf(`\n\n${TASK_REPLY_LINE}\n\n`);
-  return reply === -1 ? rest : rest.slice(reply + TASK_REPLY_LINE.length + 4);
+  if (rest.startsWith(CONTEXT_LENGTH_PREFIX)) {
+    const lineEnd = rest.indexOf("\n");
+    const length = rest.slice(CONTEXT_LENGTH_PREFIX.length, lineEnd);
+    const offset = lineEnd + 1 + Number(length);
+    if (
+      /^\d+$/.test(length) &&
+      Number.isSafeInteger(offset) &&
+      rest.startsWith(REPLY_SEPARATOR, offset)
+    )
+      return {
+        kind: "reply",
+        text: rest.slice(offset + REPLY_SEPARATOR.length),
+      };
+  }
+  // Historical frames have no length. Keep their first-separator contract so a separator quoted
+  // inside the person's reply is still part of their words.
+  const reply = rest.indexOf(REPLY_SEPARATOR);
+  return reply === -1
+    ? { kind: "brief", text: rest }
+    : { kind: "reply", text: rest.slice(reply + REPLY_SEPARATOR.length) };
+}
+
+/** The person's ask or latest correction, or null if the message has no task frame. */
+export function readTaskBrief(text: string): string | null {
+  return readTaskFrame(text)?.text ?? null;
 }

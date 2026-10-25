@@ -1,3 +1,4 @@
+import type { DurableTaskReply } from "@openbot/shared/task-reply";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import { client } from "@/lib/client";
 import { proactiveKeys } from "@/lib/proactive";
@@ -100,4 +101,28 @@ export const tryTaskAgainMutationOptions = (queryClient: QueryClient) =>
         },
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: taskKeys.all }),
+  });
+
+/** Accepted by the server before the composer clears; delivered without this page staying open. */
+export const replyToTaskMutationOptions = (queryClient: QueryClient) =>
+  mutationOptions({
+    mutationFn: ({
+      id,
+      reply,
+      messageId,
+      ...context
+    }: { id: string } & DurableTaskReply) =>
+      client<TaskRecord>(
+        `/api/openduet/tasks/${encodeURIComponent(id)}/reply`,
+        "task",
+        {
+          method: "POST",
+          body: { reply, messageId, ...context },
+          fallback: "Couldn't save this reply. Try again.",
+        },
+      ),
+    onSuccess: (task) => {
+      queryClient.setQueryData(taskKeys.detail(task.id), task);
+      return queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
   });

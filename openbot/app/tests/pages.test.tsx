@@ -12,6 +12,7 @@ import {
   useParams,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -24,16 +25,22 @@ import {
   ConversationSendContext,
 } from "@/components/channels/conversation-send";
 import { PageCard, updatedLabel } from "@/components/duet/page-card";
-import { PageBlocks } from "@/components/duet/page-view";
 import {
   PageSheet,
   PageSheetHost,
+  SlideDeck,
   useCloseSheet,
 } from "@/components/duet/page-sheet";
+import { PageBlocks } from "@/components/duet/page-view";
 import { MakeScreen } from "@/components/shell/make-screen";
 import { agentKeys } from "@/lib/agents/queries";
 import { ConversationPageCard, readPage } from "@/lib/copilot/page-card-tool";
-import type { PageSummary } from "@/lib/pages/queries";
+import {
+  type PageBlock,
+  type PageSlide,
+  type PageSummary,
+  pageQueryOptions,
+} from "@/lib/pages/queries";
 import { searchTextEntry } from "@/lib/search-text";
 import { queryClient } from "@/query-client";
 import { settleReactWork } from "./settle-react-work";
@@ -163,21 +170,35 @@ const records: Record<string, unknown> = {
 };
 
 let listed: unknown[] = [];
-function serving() {
-  global.fetch = (async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === "/api/agents")
-      return Response.json({ agents: [{ id: "openduet", name: "OpenDuet" }] });
-    if (url === "/api/openduet/pages") return Response.json({ pages: listed });
-    const one = /^\/api\/openduet\/pages\/(.+)$/.exec(url);
-    if (one) {
-      const record = records[decodeURIComponent(one[1] ?? "")];
-      return record
-        ? Response.json({ page: record })
-        : Response.json({ error: "Couldn't find that page." }, { status: 404 });
-    }
-    return Response.json({});
-  }) as unknown as typeof fetch;
+function serving(pageStatus = 200) {
+  global.fetch = Object.assign(
+    async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      if (url === "/api/agents")
+        return Response.json({
+          agents: [{ id: "openduet", name: "OpenDuet" }],
+        });
+      if (url === "/api/openduet/pages")
+        return Response.json({ pages: listed });
+      const one = /^\/api\/openduet\/pages\/(.+)$/.exec(url);
+      if (one) {
+        if (pageStatus !== 200)
+          return Response.json(
+            { error: "Temporarily unavailable." },
+            { status: pageStatus },
+          );
+        const record = records[decodeURIComponent(one[1] ?? "")];
+        return record
+          ? Response.json({ page: record })
+          : Response.json(
+              { error: "Couldn't find that page." },
+              { status: 404 },
+            );
+      }
+      return Response.json({});
+    },
+    { preconnect: originalFetch.preconnect },
+  );
 }
 
 const sent: string[] = [];
@@ -256,7 +277,7 @@ function app(chat: ReactNode, path: string) {
 }
 
 /** A card on its own, linking nowhere, to look at its preview. */
-function card(page: PageSummary) {
+function card(page: PageSummary, size: "row" | "grid" = "row") {
   const view = render(
     <PageCard
       link={({ className, children }) => (
@@ -266,6 +287,7 @@ function card(page: PageSummary) {
       )}
       now={new Date("2026-10-22T10:00:00")}
       page={page}
+      size={size}
     />,
   );
   const preview = view.container.querySelector("[data-preview]");
@@ -307,16 +329,210 @@ test("a deck's card previews its first slide with its chart as real bars, the la
   expect(view.getByRole("link").textContent).toContain("Series A deck");
 });
 
-test("a dashboard's card previews its headline over its first three figures", () => {
-  const { preview } = card(pulse);
-  expect(preview.getAttribute("data-preview")).toBe("dashboard");
-  expect(preview.textContent).toContain(
-    "Healthy, with one leak: weekend delivery at Valencia.",
-  );
-  for (const value of ["$528K", "$2.1M", "+11%"])
-    expect(preview.textContent).toContain(value);
-  expect(preview.textContent).not.toContain("3,120");
-});
+// Unequal values on a larger shared scale expose local rescaling and constant-height bars.
+const chartItems = [
+  { label: "First", value: 10 },
+  { label: "Second", value: 20 },
+];
+for (const scenario of [
+  {
+    name: "explicit first highlight",
+    metadata: { scale: 100, highlight: 0 },
+    heights: ["10%", "20%"],
+    highlights: [true, false],
+  },
+  {
+    name: "no highlight sentinel",
+    metadata: { scale: 100, highlight: -1 },
+    heights: ["10%", "20%"],
+    highlights: [false, false],
+  },
+  {
+    name: "highlight outside this fragment",
+    metadata: { scale: 100, highlight: 2 },
+    heights: ["10%", "20%"],
+    highlights: [false, false],
+  },
+  {
+    name: "legacy defaults",
+    metadata: {},
+    heights: ["50%", "100%"],
+    highlights: [false, true],
+  },
+]) {
+  const chart: PageBlock = {
+    type: "bars",
+    items: chartItems,
+    ...scenario.metadata,
+  };
+  test(`a full page chart preserves ${scenario.name}`, () => {
+    const view = render(<PageBlocks blocks={[chart]} />);
+    const rendered = chartItems.map(({ label }) => {
+      const column = view.getByText(label).parentElement;
+      const bar = column?.querySelector<HTMLElement>("div[style]");
+      return {
+        label,
+        height: bar?.style.height,
+        highlighted: bar?.classList.contains("bg-duet-violet"),
+      };
+    });
+    expect(rendered).toEqual(
+      chartItems.map(({ label }, index) => ({
+        label,
+        height: scenario.heights[index],
+        highlighted: scenario.highlights[index],
+      })),
+    );
+  });
+  for (const kind of ["page", "slides"] as const) {
+    test(`a ${kind} row chart preview preserves ${scenario.name}`, () => {
+      const { preview } = card({ ...deck, kind, preview: { blocks: [chart] } });
+      const bars = [
+        ...preview.querySelectorAll<HTMLElement>('span[style*="height:"]'),
+      ];
+      expect(bars.map((bar) => bar.style.height)).toEqual(scenario.heights);
+      expect(
+        bars.map((bar) => ({
+          label: bar.title,
+          highlighted: bar.classList.contains("bg-duet-violet"),
+        })),
+      ).toEqual(
+        chartItems.map(({ label }, index) => ({
+          label,
+          highlighted: scenario.highlights[index],
+        })),
+      );
+    });
+  }
+}
+
+for (const size of ["row", "grid"] as const) {
+  const figures: PageSummary["preview"]["blocks"][number] = {
+    type: "metrics",
+    items: [
+      { label: "Revenue", value: "$12K" },
+      { label: "Orders", value: "42" },
+      { label: "Growth", value: "+8%" },
+      { label: "Customers", value: "350" },
+    ],
+  };
+
+  test(`an explicit dashboard ${size} card finds metrics before its headline`, () => {
+    const { preview } = card(
+      {
+        ...pulse,
+        kind: "dashboard",
+        preview: {
+          blocks: [
+            figures,
+            { type: "text", text: "Revenue is ahead of plan." },
+          ],
+        },
+      },
+      size,
+    );
+    expect(preview.getAttribute("data-preview")).toBe("dashboard");
+    expect(preview.textContent).toContain("Revenue is ahead of plan.");
+    expect(preview.textContent).toContain("$12KRevenue");
+    expect(preview.textContent).toContain("42Orders");
+    expect(preview.textContent?.includes("+8%Growth")).toBe(size === "row");
+    expect(preview.textContent).not.toContain("350");
+  });
+
+  test(`an explicit dashboard ${size} card finds a heading and later metrics`, () => {
+    const { preview } = card(
+      {
+        ...pulse,
+        kind: "dashboard",
+        preview: {
+          blocks: [
+            { type: "heading", text: "This month's performance" },
+            { type: "bullets", items: ["Wholesale growth"] },
+            figures,
+          ],
+        },
+      },
+      size,
+    );
+    expect(preview.textContent).toContain("This month's performance");
+    expect(preview.textContent).toContain("$12KRevenue");
+  });
+
+  test(`an explicit dashboard ${size} card uses its title when metrics have no headline`, () => {
+    const { preview } = card(
+      { ...pulse, kind: "dashboard", preview: { blocks: [figures] } },
+      size,
+    );
+    expect(preview.textContent).toContain("Marlo Pulse");
+    expect(preview.textContent).toContain("$12KRevenue");
+  });
+
+  test(`an explicit dashboard ${size} card without metrics previews its available content`, () => {
+    const { preview } = card(
+      {
+        ...pulse,
+        kind: "dashboard",
+        preview: {
+          blocks: [
+            {
+              type: "bars",
+              items: [
+                { label: "Mon", value: 4 },
+                { label: "Tue", value: 6 },
+                { label: "Wed", value: 9 },
+              ],
+            },
+            {
+              type: "decision",
+              question: "Which channel?",
+              options: [
+                { title: "Wholesale", pros: ["Growth"], cons: [] },
+                { title: "Retail", pros: ["Margin"], cons: [] },
+              ],
+              pick: "Wholesale",
+            },
+          ],
+        },
+      },
+      size,
+    );
+    expect(preview.getAttribute("data-preview")).toBe("dashboard");
+    expect(preview.textContent).toContain("Marlo Pulse");
+    expect(preview.textContent).toContain("Pick: Wholesale");
+    expect(
+      preview.querySelector(".bg-duet-violet")?.parentElement?.children.length,
+    ).toBe(3);
+  });
+
+  test(`a legacy dashboard ${size} card previews its headline and first figures`, () => {
+    const { preview } = card(pulse, size);
+    expect(preview.getAttribute("data-preview")).toBe("dashboard");
+    expect(preview.textContent).toContain(
+      "Healthy, with one leak: weekend delivery at Valencia.",
+    );
+    for (const value of ["$528K", "$2.1M"])
+      expect(preview.textContent).toContain(value);
+    expect(preview.textContent?.includes("+11%")).toBe(size === "row");
+    expect(preview.textContent).not.toContain("3,120");
+  });
+
+  test(`an ordinary page ${size} card with metrics first remains a document preview`, () => {
+    const { preview } = card(
+      { ...pulse, preview: { blocks: [figures] } },
+      size,
+    );
+    expect(preview.getAttribute("data-preview")).toBe("page");
+    expect(preview.textContent).toContain("Marlo Pulse");
+    expect(preview.textContent).not.toContain("$12K");
+  });
+
+  test(`an explicit doc ${size} card keeps its document preview with legacy dashboard blocks`, () => {
+    const { preview } = card({ ...pulse, kind: "doc" }, size);
+    expect(preview.getAttribute("data-preview")).toBe("doc");
+    expect(preview.textContent).toContain("Marlo Pulse");
+    expect(preview.textContent).not.toContain("$528K");
+  });
+}
 
 test("the tool's answer is drawn as a card only when it saved a page", () => {
   expect(readPage(JSON.stringify(prep))?.title).toBe("Partner meeting prep");
@@ -351,7 +567,7 @@ test("in Chat the card opens the page over the conversation at /make/<id>, and Ã
   expect(within(sheet).getByText("Valencia")).toBeTruthy();
   expect(within(sheet).getAllByText("vs last year")).toHaveLength(8);
 
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   await waitFor(() => expect(view.queryByRole("dialog") === null).toBe(true));
   expect(router.state.location.pathname).toBe("/");
   expect(router.state.location.search).toEqual({});
@@ -397,7 +613,7 @@ test("Make lists everything made as thumbnail cards, in the server's order, and 
   expect(within(look).queryAllByRole("button")).toHaveLength(0);
   expect(look.textContent).toContain("Northford teams");
 
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   await waitFor(() => expect(view.queryByRole("dialog") === null).toBe(true));
   expect(router.state.location.pathname).toBe("/make");
 });
@@ -407,7 +623,7 @@ test("a /make/<id> link opened on its own closes to the Make grid", async () => 
   serving();
   const { view, router } = app(null, "/make/pulse");
   const sheet = await view.findByRole("dialog", { name: "Marlo Pulse" });
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/make"));
 });
 
@@ -474,6 +690,206 @@ test("a deck shows one slide at a time, turned by the arrow keys, the buttons or
   expect(track.firstElementChild?.className).toContain(
     "motion-reduce:transition-none",
   );
+});
+
+test.each([1, 2])(
+  "a focused table keeps native arrow scrolling in a %s-slide deck",
+  (count) => {
+    const slides: PageSlide[] = [
+      {
+        title: "Table",
+        blocks: [
+          {
+            type: "table",
+            columns: ["One", "Two", "Three", "Four"],
+            rows: [["A", "B", "C", "D"]],
+          },
+        ],
+      },
+      { title: "Next", blocks: [] },
+    ];
+    const view = render(<SlideDeck slides={slides.slice(0, count)} />);
+    const scroller = view.getByRole("table").parentElement!;
+    // Happy DOM has no layout or bundled CSS. Supply the table's browser geometry.
+    Object.defineProperties(scroller, {
+      clientWidth: { value: 230 },
+      scrollWidth: { value: 400 },
+    });
+    scroller.style.overflowX = "auto";
+    scroller.tabIndex = 0;
+    scroller.focus();
+    expect(document.activeElement).toBe(scroller);
+
+    for (const key of ["ArrowRight", "ArrowLeft"]) {
+      // A true dispatch result means the browser's default scrolling remains available.
+      expect(fireEvent.keyDown(scroller, { key })).toBe(true);
+      expect(view.getByText(`1 / ${count}`)).toBeTruthy();
+    }
+  },
+);
+
+test("deck arrow shortcuts still respect editing, modifiers and canceled events", () => {
+  const view = render(
+    <>
+      <input aria-label="Title" />
+      <textarea aria-label="Notes" />
+      <div contentEditable suppressContentEditableWarning>
+        <span>Edit me</span>
+      </div>
+      <SlideDeck
+        slides={[
+          { title: "First", blocks: [] },
+          { title: "Second", blocks: [] },
+        ]}
+      />
+    </>,
+  );
+  for (const target of [
+    view.getByRole("textbox", { name: "Title" }),
+    view.getByRole("textbox", { name: "Notes" }),
+    view.getByText("Edit me"),
+  ]) {
+    target.focus();
+    expect(fireEvent.keyDown(target, { key: "ArrowRight" })).toBe(true);
+  }
+  for (const modifier of [{ altKey: true }, { metaKey: true }]) {
+    expect(
+      fireEvent.keyDown(document, { key: "ArrowRight", ...modifier }),
+    ).toBe(true);
+  }
+  const canceled = new KeyboardEvent("keydown", {
+    key: "ArrowRight",
+    bubbles: true,
+    cancelable: true,
+  });
+  canceled.preventDefault();
+  fireEvent(document, canceled);
+  expect(view.getByText("1 / 2")).toBeTruthy();
+  expect(fireEvent.keyDown(document, { key: "ArrowRight" })).toBe(false);
+  expect(view.getByText("2 / 2")).toBeTruthy();
+});
+
+test("a failed page refresh preserves the selected slide through retry", async () => {
+  const { queryKey } = pageQueryOptions(deck.id);
+  serving();
+  const { view } = app(null, "/make/deck");
+  const sheet = await view.findByRole("dialog", { name: "Series A deck" });
+  fireEvent.click(
+    await within(sheet).findByRole("button", { name: "Next slide" }),
+  );
+  const selected = within(sheet).getByRole("group", { name: "Slide 2 of 3" });
+  const saved = queryClient.getQueryData(queryKey);
+  expect(within(selected).getByText("Weekends grew.")).toBeTruthy();
+  expect(within(sheet).getByText("2 / 3")).toBeTruthy();
+
+  serving(503);
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey });
+  });
+  const error = await within(sheet).findByRole("alert");
+  const retained = queryClient.getQueryData(queryKey);
+  expect(retained).toEqual(saved);
+  expect(within(sheet).getByRole("group", { name: "Slide 2 of 3" })).toBe(
+    selected,
+  );
+  expect(within(sheet).getByText("2 / 3")).toBeTruthy();
+  expect(error.textContent).toContain("Couldn't refresh this page");
+
+  serving();
+  fireEvent.click(within(sheet).getByRole("button", { name: "Refresh page" }));
+  await waitFor(() =>
+    expect(within(sheet).queryByRole("alert") === null).toBe(true),
+  );
+  expect(within(sheet).getByRole("group", { name: "Slide 2 of 3" })).toBe(
+    selected,
+  );
+  expect(within(sheet).getByText("2 / 3")).toBeTruthy();
+  expect(within(selected).getByText("Weekends grew.")).toBeTruthy();
+});
+
+test("an initial page failure without saved content remains visible", async () => {
+  serving(503);
+  const { view } = app(null, "/make/deck");
+  const sheet = await view.findByRole("dialog");
+  expect(
+    (await within(sheet).findByRole("alert", {}, { timeout: 2000 }))
+      .textContent,
+  ).toContain("Couldn't open this page");
+  expect(within(sheet).queryByRole("region", { name: "Slides" })).toBeNull();
+  expect(
+    within(sheet)
+      .getByRole("button", { name: "Refresh page" })
+      .hasAttribute("disabled"),
+  ).toBe(false);
+});
+
+test("a revised deck clamps a removed selection and keeps a valid selection", () => {
+  const slides = [
+    { title: "First", blocks: [] },
+    { title: "Second", blocks: [] },
+    { title: "Third", blocks: [] },
+  ];
+  const view = render(<SlideDeck slides={slides} />);
+  const previous = view.getByRole("button", { name: "Previous slide" });
+  const next = view.getByRole("button", { name: "Next slide" });
+  const expectCurrent = (number: number, count: number) => {
+    expect(view.getByText(`${number} / ${count}`)).toBeTruthy();
+    expect(view.getByText(`Slide ${number} of ${count}`)).toBeTruthy();
+    const current = view.getByRole("group", {
+      name: `Slide ${number} of ${count}`,
+    });
+    expect(current.parentElement?.style.transform).toBe(
+      `translateX(-${(number - 1) * 100}%)`,
+    );
+    const rendered = view.container.querySelectorAll(
+      '[aria-roledescription="slide"]',
+    );
+    expect(rendered).toHaveLength(count);
+    for (const slide of rendered) {
+      expect(slide.getAttribute("aria-hidden")).toBe(String(slide !== current));
+      expect(slide.hasAttribute("inert")).toBe(slide !== current);
+    }
+    expect(previous.hasAttribute("disabled")).toBe(number === 1);
+    expect(next.hasAttribute("disabled")).toBe(number === count);
+  };
+
+  fireEvent.click(next);
+  fireEvent.click(next);
+  expectCurrent(3, 3);
+  view.rerender(<SlideDeck slides={slides.slice(0, 2)} />);
+  expectCurrent(2, 2);
+  // Growing again must not restore the removed third-slide selection.
+  view.rerender(<SlideDeck slides={slides} />);
+  expectCurrent(2, 3);
+  view.rerender(<SlideDeck slides={slides.slice(0, 2)} />);
+  expectCurrent(2, 2);
+  fireEvent.click(previous);
+  expectCurrent(1, 2);
+  view.rerender(<SlideDeck slides={slides.slice(0, 1)} />);
+  expectCurrent(1, 1);
+});
+
+test("a deck that becomes empty starts at its first slide when restored", () => {
+  const slides = [
+    { title: "First", blocks: [] },
+    { title: "Second", blocks: [] },
+    { title: "Third", blocks: [] },
+  ];
+  const view = render(<SlideDeck slides={slides} />);
+  fireEvent.click(view.getByRole("button", { name: "Next slide" }));
+  fireEvent.click(view.getByRole("button", { name: "Next slide" }));
+  view.rerender(<SlideDeck slides={[]} />);
+  expect(view.queryByRole("region", { name: "Slides" })).toBeNull();
+  // A document key listener is still mounted while there are no slides.
+  fireEvent.keyDown(document, { key: "ArrowRight" });
+  fireEvent.keyDown(document, { key: "ArrowLeft" });
+  view.rerender(<SlideDeck slides={slides} />);
+  expect(view.getByText("1 / 3")).toBeTruthy();
+  const current = view.getByRole("group", { name: "Slide 1 of 3" });
+  expect(current.hasAttribute("inert")).toBe(false);
+  expect(current.parentElement?.style.transform).toBe("translateX(-0%)");
+  fireEvent.keyDown(document, { key: "ArrowRight" });
+  expect(view.getByText("2 / 3")).toBeTruthy();
 });
 
 test("a dashboard's headline is set large, and a long one steps down a size", () => {

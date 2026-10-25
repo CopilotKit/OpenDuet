@@ -125,6 +125,62 @@ test("a task's own approval or question makes it Needs input and is not listed a
   });
 });
 
+for (const status of ["failed", "working", "ready_for_review"] as const) {
+  test(`an accepted answer does not turn a ${status} task back into Needs input`, () => {
+    const answered = {
+      ...task({ id: "answered", status, failure: "a service didn't answer" }),
+      answeredQuestionIds: ["old"],
+    };
+    const questions = [question("old", "answered-thread")];
+    const groups = group({ tasks: [answered], questions });
+    expect(groups.map((entry) => entry.id)).toEqual([status]);
+    if (status === "failed")
+      expect(groups[0]?.items[0]).toMatchObject({
+        status: "failed",
+        need: "Couldn't finish: a service didn't answer.",
+      });
+    expect(
+      needsInputCount([answered], {
+        enabled: true,
+        rules: [],
+        teamRules: [],
+        requests: [],
+        questions,
+      }),
+    ).toBe(0);
+  });
+}
+
+test("accepted question IDs preserve new questions, approvals, and other tasks' questions", () => {
+  const answered = {
+    ...task({ id: "answered", status: "failed" }),
+    answeredQuestionIds: ["old"],
+  };
+  for (const waiting of [
+    { questions: [question("new", "answered-thread")], requests: [] },
+    { questions: [], requests: [request("approval", "answered-thread")] },
+  ]) {
+    expect(group({ tasks: [answered], ...waiting })[0]?.id).toBe("needs_input");
+    expect(
+      needsInputCount([answered], {
+        enabled: true,
+        rules: [],
+        teamRules: [],
+        ...waiting,
+      }),
+    ).toBe(1);
+  }
+  const groups = group({
+    tasks: [answered, task({ id: "other", status: "working" })],
+    questions: [question("old", "other-thread")],
+  });
+  expect(
+    groups
+      .find((entry) => entry.id === "needs_input")
+      ?.items.map((item) => item.key),
+  ).toEqual(["task:other"]);
+});
+
 test("a busy conversation reads Working, and a waiting one still reads Needs input", () => {
   const groups = group({
     tasks: [

@@ -8,17 +8,19 @@
  *
  * It needs the app and server running with Gmail connected (Fake Google is enough), and system
  * Chrome. Every question gets its own new conversation, so one answer cannot shape the next. Writes
- * results-<date>.md beside this file.
+ * results-<timestamp>.md beside this file.
  */
 import { writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { join } from "node:path";
 
-const require = createRequire(
-  join(import.meta.dir, "../../openbot/package.json"),
-);
-const { chromium } =
-  require("playwright-core") as typeof import("playwright-core");
+import { sampleQuestions } from "../../openbot/scripts/evals/chat-browser";
+import {
+  completedReplies,
+  samplingFailureReport,
+  type CompletedReply,
+} from "../../openbot/scripts/evals/chat-sampling";
+import { markdownTableRow } from "../../openbot/scripts/evals/markdown-table";
+import { evaluateVoiceBudget } from "../../openbot/scripts/evals/voice-budget";
 
 const APP = process.env.OPENDUET_APP ?? "http://localhost:3066";
 if (/:(3030|3130)\b/.test(APP)) throw new Error("Refusing Jerel's real stack.");
@@ -60,74 +62,32 @@ const SELF_CORRECTION =
 const DEFLECTION =
   /^(I'?ve already asked|Tell me|Which |Do you want|Could you)/i;
 
-type Reply = { ask: string; bubbles: string[]; listItems: number };
-
-const browser = await chromium.launch({
-  executablePath:
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  headless: true,
-});
-const page = await (
-  await browser.newContext({
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
-  })
-).newPage();
-
-async function ask(question: string): Promise<Reply> {
-  const created = await fetch(`${APP}/api/channels`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: APP },
-    body: JSON.stringify({ agentIds: ["openduet"] }),
-  });
-  const { channel } = (await created.json()) as { channel: { id: string } };
-  await page.goto(`${APP}/channel/${channel.id}`, { waitUntil: "load" });
-  await page.waitForTimeout(3000);
-  await page.locator('[contenteditable="true"], textarea').last().click();
-  await page.keyboard.type(question);
-  await page.getByRole("button", { name: "Send message" }).click();
-  const started = Date.now();
-  // Settled: nothing running, at least one reply bubble, and no new bubble for three seconds.
-  let last = -1;
-  let stableSince = Date.now();
-  while (Date.now() - started < 150_000) {
-    await page.waitForTimeout(1000);
-    if (await page.getByRole("button", { name: "Allow once" }).count()) break;
-    const busy = await page.locator('[aria-busy="true"]').count();
-    const count = await page.locator('[data-slot="bubble-content"]').count();
-    if (count !== last || busy) {
-      last = count;
-      stableSince = Date.now();
-      continue;
-    }
-    if (count > 1 && Date.now() - stableSince > 3000) break;
-  }
-  return page.evaluate((ask) => {
-    const bubbles = [
-      ...document.querySelectorAll('[data-slot="bubble-content"]'),
-    ];
-    // The first bubble is the question; the rest are the reply.
-    const reply = bubbles.slice(1);
-    return {
-      ask,
-      bubbles: reply.map((bubble) => (bubble as HTMLElement).innerText.trim()),
-      listItems: Math.max(
-        0,
-        ...reply.map((bubble) => bubble.querySelectorAll("li").length),
-      ),
-    };
-  }, question);
+const questions = [...EXAMPLES.map((example) => example.ask), ...EVERYDAY];
+const samples = await sampleQuestions(APP, questions);
+const resultPath = join(
+  import.meta.dir,
+  `results-${new Date().toISOString().replace(/[:.]/g, "-")}.md`,
+);
+const replies = completedReplies(samples, questions);
+if (!replies) {
+  const failure = samplingFailureReport(samples, questions);
+  await writeFile(
+    resultPath,
+    `# Voice eval sampling failure\n\nStack: ${APP}.\n\n${failure}`,
+    { flag: "wx" },
+  );
+  throw new Error(`${failure}Report: ${resultPath}`);
 }
 
-const words = (reply: Reply) =>
+const words = (reply: CompletedReply) =>
   reply.bubbles.join(" ").split(/\s+/).filter(Boolean).length;
 const sentences = (text: string) =>
   (text.match(/[.!?](\s|$)/g) ?? []).length || 1;
 
 const examples = [];
-for (const example of EXAMPLES) {
-  const reply = await ask(example.ask);
+for (const [index, example] of EXAMPLES.entries()) {
+  const reply = replies[index];
+  if (!reply) throw new Error(`Missing completed answer for ${example.ask}`);
   const first = reply.bubbles[0] ?? "";
   const direct =
     first.length > 0 &&
@@ -144,8 +104,9 @@ for (const example of EXAMPLES) {
 }
 
 const everyday = [];
-for (const question of EVERYDAY) {
-  const reply = await ask(question);
+for (const [index, question] of EVERYDAY.entries()) {
+  const reply = replies[EXAMPLES.length + index];
+  if (!reply) throw new Error(`Missing completed answer for ${question}`);
   const all = reply.bubbles.join(" ");
   const row = {
     ...reply,
@@ -157,10 +118,8 @@ for (const question of EVERYDAY) {
   everyday.push(row);
   console.log(`${row.words}w ${JSON.stringify(row.perBubble)} ${question}`);
 }
-await browser.close();
 
-const counts = everyday.map((row) => row.words).sort((a, b) => a - b);
-const median = counts[Math.floor(counts.length / 2)] ?? 0;
+const { counts, median, pass } = evaluateVoiceBudget(everyday, examples);
 const lines = [
   `# Voice eval, ${new Date().toISOString().slice(0, 10)}`,
   "",
@@ -170,9 +129,13 @@ const lines = [
   "",
   "| Question | Direct | Repeats the example's made-up facts | Reply |",
   "|---|---|---|---|",
-  ...examples.map(
-    (row) =>
-      `| ${row.ask} | ${row.direct ? "yes" : "NO"} | ${row.invented ? "YES" : "no"} | ${row.bubbles.join(" / ").replace(/\|/g, "/")} |`,
+  ...examples.map((row) =>
+    markdownTableRow([
+      row.ask,
+      row.direct ? "yes" : "NO",
+      row.invented ? "YES" : "no",
+      row.bubbles.join(" / "),
+    ]),
   ),
   "",
   "## Everyday asks",
@@ -183,14 +146,26 @@ const lines = [
   "",
   "| Ask | Bubbles | Words | Sentences per bubble | Listed | Caveat | Reply |",
   "|---|---|---|---|---|---|---|",
-  ...everyday.map(
-    (row) =>
-      `| ${row.ask} | ${row.bubbles.length} | ${row.words} | ${row.perBubble.join(", ")} | ${row.listItems} | ${row.caveat || row.selfCorrection ? "yes" : "no"} | ${row.bubbles.join(" / ").replace(/\|/g, "/").replace(/\n+/g, " ")} |`,
+  ...everyday.map((row) =>
+    markdownTableRow([
+      row.ask,
+      row.bubbles.length,
+      row.words,
+      row.perBubble.join(", "),
+      row.listItems,
+      row.caveat || row.selfCorrection ? "yes" : "no",
+      row.bubbles.join(" / "),
+    ]),
   ),
   "",
 ];
-await writeFile(
-  join(import.meta.dir, `results-${new Date().toISOString().slice(0, 10)}.md`),
-  lines.join("\n"),
-);
+await writeFile(resultPath, lines.join("\n"), { flag: "wx" });
 console.log(lines.slice(9, 14).join("\n"));
+
+// A useful budget gate, not just a printed measurement.
+if (!pass) {
+  console.error(
+    "Voice regression: require median ≤45 words, no reply over80, and direct grounded examples.",
+  );
+  process.exitCode = 1;
+}

@@ -573,7 +573,7 @@ describe("what the addressed Bot is actually given", () => {
  */
 describe("the working indicator", () => {
   function withBusy() {
-    const busy: Array<{ threadId: string; busy: boolean }> = [];
+    const busy: Array<{ threadId: string; runId: string; busy: boolean }> = [];
     const deliver = createHandoffDelivery({
       admission: serverTurnAdmission,
       agentFor: async () => stubAgent(),
@@ -611,8 +611,12 @@ describe("the working indicator", () => {
 
     // Keyed on the asking thread, not the scratch thread the run happens in.
     expect(busy).toEqual([
-      { threadId: "thread-1", busy: true },
-      { threadId: "thread-1", busy: false },
+      {
+        threadId: "thread-1",
+        runId: expect.stringMatching(/^handoff:/),
+        busy: true,
+      },
+      { threadId: "thread-1", runId: busy[0]!.runId, busy: false },
     ]);
   });
 

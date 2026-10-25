@@ -18,7 +18,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$PWD"
+ROOT="$(pwd -P)"
 
 KEEP_COMPUTERS=false
 for arg in "$@"; do
@@ -123,11 +123,12 @@ info "1/4  App"
 stop_port "$APP_PORT" app
 
 info "2/4  Routine worker"
-# The same pattern start.sh starts it with, and it has to stay that specific: a bare `bun
-# src/index.ts` matches the server, computer and supervisor containers on a Linux host too.
-if running "bun worker/src/index.ts"; then
-  stop_matching "bun worker/src/index.ts"
+# Match the worker command and checkout together, just as start.sh does.
+if running "bun worker/src/index.ts" "$ROOT"; then
+  stop_matching "bun worker/src/index.ts" "$ROOT"
   green "  worker: stopped"
+elif [ "${OS:-}" = Windows_NT ] && [ -n "$(openbot_windows_matching "bun worker/src/index.ts" "$ROOT" unscoped)" ]; then
+  red "  worker: a legacy relative launch has unknown ownership; stop it in Task Manager."
 else
   info "  worker: not running"
 fi

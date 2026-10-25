@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "apps",
+    "contentWidth": 326,
+    "scrollWidth": 326,
+    "labels": []
+  },
+  {
+    "kind": "approval",
+    "contentWidth": 326,
+    "scrollWidth": 326,
+    "labels": [
+      {
+        "text": "Refuse",
+        "width": 196,
+        "scrollWidth": 196,
+        "height": 86,
+        "scrollHeight": 86
+      },
+      {
+        "text": "Allow once",
+        "width": 196,
+        "scrollWidth": 196,
+        "height": 132,
+        "scrollHeight": 132
+      },
+      {
+        "text": "Always allow",
+        "width": 196,
+        "scrollWidth": 196,
+        "height": 88,
+        "scrollHeight": 88
+      }
+    ]
+  }
+]

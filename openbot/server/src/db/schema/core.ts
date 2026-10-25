@@ -320,6 +320,16 @@ export const channels = pgTable(
     lastMessage: text("last_message"),
     /** Internal source identity for enriching a delayed preview without replacing other activity. */
     lastMessageSourceId: text("last_message_source_id"),
+    /** Full reply's final question/chips, before the roster truncates its preview. */
+    lastMessageNeedsInput: boolean("last_message_needs_input"),
+    firstDayStartedAt: timestamp("first_day_started_at", {
+      withTimezone: true,
+    }),
+    /** Independent run owners: a rejected run may clear only its own announcement. */
+    busyClaims: jsonb("busy_claims")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default({}),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     /** Which agent spoke, so a channel with several can show the right one. Null for a person. */
     lastMessageAgentId: text("last_message_agent_id").references(

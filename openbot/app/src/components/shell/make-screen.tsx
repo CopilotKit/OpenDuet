@@ -1,16 +1,21 @@
-import { useQuery } from "@tanstack/react-query";
+import { PAGE_KIND_COLOURS, type PageKind } from "@openbot/shared/page-look";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import { DuetCard } from "@/components/duet/kit";
 import { PageCard, previewKind } from "@/components/duet/page-card";
 import { TaskStatusPill } from "@/components/duet/task-card";
 import { primaryBot } from "@/lib/agents/primary-bot";
 import { agentListQueryOptions } from "@/lib/agents/queries";
-import { type PageSummary, pageListQueryOptions } from "@/lib/pages/queries";
-import { type TaskRecord, taskListQueryOptions } from "@/lib/tasks/queries";
+import {
+  type PageSummary,
+  pageKeys,
+  pageListQueryOptions,
+} from "@/lib/pages/queries";
 import { useReducedMotionPreference } from "@/lib/reduced-motion";
+import { type TaskRecord, taskListQueryOptions } from "@/lib/tasks/queries";
 import { cn } from "@/lib/utils";
 import { NewTaskSheet } from "./new-task-sheet";
 import { ScreenScroll, ScreenTitle } from "./screen";
@@ -25,20 +30,42 @@ import { ScreenScroll, ScreenTitle } from "./screen";
 
 /** What the + offers, top to bottom, each with the line the sheet opens with. */
 export const MAKE_KINDS: readonly {
-  id: "page" | "deck" | "dashboard" | "doc";
+  id: PageKind;
   label: string;
   icon: DuetIconName;
   starter: string;
 }[] = [
-  { id: "page", label: "Page", icon: "layout", starter: "Make a page about …" },
-  { id: "deck", label: "Deck", icon: "deck", starter: "Make a deck about …" },
+  {
+    id: "design-system",
+    label: "Design System",
+    icon: "sparkle",
+    starter: "Make a design system for …",
+  },
+  {
+    id: "design",
+    label: "Design",
+    icon: "layout",
+    starter: "Make a design for …",
+  },
   {
     id: "dashboard",
     label: "Dashboard",
     icon: "dashboard",
     starter: "Make a dashboard of …",
   },
-  { id: "doc", label: "Doc", icon: "page", starter: "Write a doc about …" },
+  {
+    id: "slides",
+    label: "Slides",
+    icon: "deck",
+    starter: "Make a deck about …",
+  },
+  { id: "doc", label: "Docs", icon: "page", starter: "Write a doc about …" },
+  {
+    id: "page",
+    label: "Web page",
+    icon: "globe",
+    starter: "Make a web page about …",
+  },
 ];
 export type MakeKind = (typeof MAKE_KINDS)[number];
 
@@ -46,9 +73,7 @@ export type MakeKind = (typeof MAKE_KINDS)[number];
 export type MakeFilter = "all" | ReturnType<typeof previewKind>;
 export const MAKE_FILTERS: readonly { id: MakeFilter; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "page", label: "Pages" },
-  { id: "slides", label: "Decks" },
-  { id: "dashboard", label: "Dashboards" },
+  ...MAKE_KINDS.map(({ id, label }) => ({ id, label })),
 ];
 
 /** The pages a chip shows, in the order given. */
@@ -66,8 +91,14 @@ const MAKING_POLL_MS = 3_000;
 /** The gap between the + options as they fan out, nearest the + first. */
 const FAN_STAGGER_S = 0.045;
 
-/** A task started here, and the pages there were when it started. */
-type Started = { id: string; label: string; known: ReadonlySet<string> };
+/** A task started here, with no page baseline until the list has been read. */
+type Started = {
+  id: string;
+  label: string;
+  known: ReadonlySet<string> | undefined;
+  /** Once its terminal refresh succeeds, it can only reserve pages from that read. */
+  finalPages?: ReadonlySet<string>;
+};
 
 /**
  * The tasks started here that have not made their thing yet. One is done once a page arrives that
@@ -79,15 +110,29 @@ export function stillBeingMade(
   pages: readonly PageSummary[] | undefined,
   tasks: readonly TaskRecord[] | undefined,
 ): Started[] {
-  const claimed = new Set<string>();
+  const claimed = new Map<string, Started>();
   const arrived = new Set<string>();
+  const claim = (entry: Started, visited: Set<string>): boolean => {
+    if (!entry.known) return false;
+    for (const page of pages ?? []) {
+      if (
+        entry.known.has(page.id) ||
+        visited.has(page.id) ||
+        (entry.finalPages && !entry.finalPages.has(page.id))
+      )
+        continue;
+      visited.add(page.id);
+      const previous = claimed.get(page.id);
+      // Keep the older task matched, but let it use another eligible page. Otherwise the
+      // newest-first list lets it take the only page outside a later task's baseline.
+      if (previous && !claim(previous, visited)) continue;
+      claimed.set(page.id, entry);
+      return true;
+    }
+    return false;
+  };
   for (const entry of [...started].reverse()) {
-    const fresh = pages?.find(
-      (page) => !entry.known.has(page.id) && !claimed.has(page.id),
-    );
-    if (!fresh) continue;
-    claimed.add(fresh.id);
-    arrived.add(entry.id);
+    if (claim(entry, new Set())) arrived.add(entry.id);
   }
   return started.filter((entry) => {
     if (arrived.has(entry.id)) return false;
@@ -98,6 +143,7 @@ export function stillBeingMade(
 }
 
 export function MakeScreen() {
+  const queryClient = useQueryClient();
   const agents = useQuery(agentListQueryOptions());
   const bot = primaryBot(agents.data);
   const name = bot?.name;
@@ -120,6 +166,126 @@ export function MakeScreen() {
   });
   const making = stillBeingMade(started, pages.data, tasks.data);
   const reduced = useReducedMotionPreference();
+  const stopped = useRef(
+    new Map<string, { before: number; settled: boolean }>(),
+  );
+
+  useEffect(() => {
+    if (!pages.data || started.every((entry) => entry.known !== undefined))
+      return;
+    // A task can start before the initial list arrives. Treat that list as the baseline: its
+    // pages may predate the task. Only a later new page can replace its working card.
+    const known = new Set(pages.data.map((page) => page.id));
+    setStarted((current) =>
+      current.map((entry) => (entry.known ? entry : { ...entry, known })),
+    );
+  }, [pages.data, started]);
+
+  useEffect(() => {
+    let refresh = false;
+    const resumed = new Set<string>();
+    for (const entry of started) {
+      const task = tasks.data?.find((candidate) => candidate.id === entry.id);
+      if (!task) continue;
+      if (task.status === "working" || task.status === "needs_input") {
+        stopped.current.delete(entry.id);
+        if (entry.finalPages) resumed.add(entry.id);
+      } else if (!stopped.current.has(entry.id)) {
+        // A refresh from an earlier stop must not close a task that has since retried.
+        stopped.current.set(entry.id, {
+          before:
+            queryClient.getQueryState(pageKeys.list)?.dataUpdateCount ?? 0,
+          settled: false,
+        });
+        refresh = true;
+      }
+    }
+    if (resumed.size > 0) {
+      setStarted((current) =>
+        current.map((entry) =>
+          resumed.has(entry.id) ? { ...entry, finalPages: undefined } : entry,
+        ),
+      );
+    }
+    if (!refresh) {
+      const final = queryClient.getQueryState<PageSummary[]>(pageKeys.list);
+      if (
+        !final?.data ||
+        final.status !== "success" ||
+        final.fetchStatus !== "idle" ||
+        pages.status !== "success" ||
+        pages.fetchStatus !== "idle" ||
+        pages.dataUpdatedAt !== final.dataUpdatedAt
+      )
+        return;
+      // A failed final refresh can recover on an ordinary read. Wait for new successful
+      // evidence after that terminal transition, without treating its retained cache as empty.
+      const terminal = new Map(stopped.current);
+      const recovered = new Set(
+        started
+          .filter((entry) => {
+            const stop = terminal.get(entry.id);
+            return (
+              !entry.finalPages &&
+              stop?.settled &&
+              final.dataUpdateCount > stop.before
+            );
+          })
+          .map((entry) => entry.id),
+      );
+      if (recovered.size > 0) {
+        const finalPages = new Set(final.data.map((page) => page.id));
+        setStarted((current) =>
+          current.map((entry) =>
+            recovered.has(entry.id) &&
+            stopped.current.get(entry.id) === terminal.get(entry.id)
+              ? { ...entry, finalPages }
+              : entry,
+          ),
+        );
+      }
+      return;
+    }
+    // Tasks can finish before the next page poll. Read once after that transition, even if an
+    // older page request is still pending. Retain earlier output claims, but close eligibility
+    // at this final read so a task with no output cannot take a later task's page.
+    const terminal = new Map(stopped.current);
+    const list = { queryKey: pageKeys.list, exact: true };
+    const before =
+      queryClient.getQueryState(pageKeys.list)?.dataUpdateCount ?? 0;
+    void queryClient
+      .cancelQueries(list)
+      .then(() => queryClient.invalidateQueries(list))
+      .then(() => {
+        for (const stop of terminal.values()) stop.settled = true;
+        const final = queryClient.getQueryState<PageSummary[]>(pageKeys.list);
+        // A cancelled or failed refresh is not evidence that no output was made.
+        if (
+          !final?.data ||
+          final.status !== "success" ||
+          final.fetchStatus !== "idle" ||
+          final.dataUpdateCount <= before
+        )
+          return;
+        const finalPages = new Set(final.data.map((page) => page.id));
+        setStarted((current) =>
+          current.map((entry) =>
+            !entry.finalPages &&
+            terminal.has(entry.id) &&
+            stopped.current.get(entry.id) === terminal.get(entry.id)
+              ? { ...entry, finalPages }
+              : entry,
+          ),
+        );
+      });
+  }, [
+    queryClient,
+    started,
+    tasks.data,
+    pages.dataUpdatedAt,
+    pages.status,
+    pages.fetchStatus,
+  ]);
 
   // Nothing while the Bots load: the title and the + both name one, and a placeholder is a flicker.
   if (agents.isPending) return null;
@@ -156,8 +322,8 @@ export function MakeScreen() {
         <DuetCard className="px-4 py-4">
           <p className="type-row font-semibold">Nothing made yet.</p>
           <p className="type-sub mt-0.5 text-duet-ink-2">
-            Tap + and pick a page, deck, dashboard or doc. What{" "}
-            {name ?? "your Bot"} makes shows up here.
+            Tap + to choose what to make. What {name ?? "your Bot"} makes shows
+            up here.
           </p>
         </DuetCard>
       ) : (
@@ -218,7 +384,9 @@ export function MakeScreen() {
               {
                 id: task.id,
                 label: kind.label.toLowerCase(),
-                known: new Set((pages.data ?? []).map((page) => page.id)),
+                known: pages.data
+                  ? new Set(pages.data.map((page) => page.id))
+                  : undefined,
               },
               ...current,
             ]);
@@ -253,7 +421,7 @@ function MakeFilters({
           <button
             aria-pressed={on}
             className={cn(
-              "type-label flex h-9 shrink-0 items-center rounded-full px-3.5 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
+              "type-label flex min-h-11 shrink-0 items-center rounded-full px-3.5 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40",
               on
                 ? "bg-duet-black text-duet-on-black"
                 : "bg-duet-card text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
@@ -346,7 +514,8 @@ function MakeFan({
   }, [fanned, onToggle]);
   const last = MAKE_KINDS.length - 1;
   return (
-    <>
+    // The icon-only + keeps its touch size when text grows, leaving room for a full-sized pill.
+    <div className="contents [--make-plus-size:56px]">
       <AnimatePresence>
         {fanned ? (
           <motion.button
@@ -365,7 +534,9 @@ function MakeFan({
       </AnimatePresence>
       <ul
         aria-label="What to make"
-        className="pointer-events-none absolute right-4 bottom-[calc(var(--duet-tab-space,0px)+82px)] z-30 flex flex-col items-end gap-2.5"
+        // The 16px padding contains the rise animation and focus rings without moving the pills.
+        // Cap the stack above the +; this overlay cannot use the screen body's scroll container.
+        className="absolute right-[calc(1rem-16px)] bottom-[calc(var(--duet-tab-space,0px)+var(--make-plus-size)+10px)] z-30 flex max-h-[calc(100%-var(--duet-tab-space,0px)-var(--make-plus-size)-18px)] max-w-[calc(100%-2rem+32px)] flex-col items-end gap-2.5 overflow-y-auto overscroll-contain p-[16px] [scroll-padding:16px]"
         hidden={!fanned}
         id="make-kinds"
       >
@@ -377,7 +548,7 @@ function MakeFan({
                 return (
                   <motion.li
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    className="pointer-events-auto"
+                    className="pointer-events-auto max-w-full shrink-0"
                     exit={
                       reduced
                         ? { opacity: 0 }
@@ -402,12 +573,18 @@ function MakeFan({
                   >
                     <button
                       aria-label={`Make a ${kind.label.toLowerCase()}`}
-                      className="duet-glass type-row flex h-12 items-center gap-2.5 rounded-full py-1.5 pr-5 pl-1.5 font-semibold text-duet-ink shadow-duet-glass transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
+                      className="type-row flex min-h-11 max-w-full items-center gap-2.5 rounded-full py-1.5 pr-5 pl-1.5 text-left font-semibold text-duet-ink shadow-duet-glass transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
                       data-kind={kind.id}
+                      style={{
+                        background: `color-mix(in srgb, ${PAGE_KIND_COLOURS[kind.id]} 13%, var(--duet-card))`,
+                      }}
                       onClick={() => onPick(kind)}
                       type="button"
                     >
-                      <span className="grid size-9 place-items-center rounded-full bg-duet-card text-duet-ink shadow-duet-card">
+                      <span
+                        className="grid size-8 shrink-0 place-items-center rounded-full bg-duet-card shadow-duet-card"
+                        style={{ color: PAGE_KIND_COLOURS[kind.id] }}
+                      >
                         <DuetIcon name={kind.icon} size={19} stroke={1.9} />
                       </span>
                       {kind.label}
@@ -422,7 +599,7 @@ function MakeFan({
         aria-controls="make-kinds"
         aria-expanded={fanned}
         aria-label={fanned ? "Close" : "Make something"}
-        className="absolute right-4 bottom-[calc(var(--duet-tab-space,0px)+14px)] z-30 grid size-14 place-items-center rounded-full bg-duet-black text-duet-on-black shadow-duet-raised transition-[filter,transform] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
+        className="absolute right-4 bottom-[calc(var(--duet-tab-space,0px)+14px)] z-30 grid size-[var(--make-plus-size)] place-items-center rounded-full bg-duet-black text-duet-on-black shadow-duet-raised transition-[filter,transform] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
         onClick={() => onToggle(!fanned)}
         type="button"
       >
@@ -435,6 +612,6 @@ function MakeFan({
           <DuetIcon name="plus" size={26} stroke={2.4} />
         </span>
       </button>
-    </>
+    </div>
   );
 }

@@ -67,6 +67,22 @@ export function listedQuestion(row: {
       }
     : null;
 }
+/** Acceptance answers the captured questions even while the task turn is still queued. */
+export function pendingPersonQuestion(owner: string) {
+  return and(
+    eq(workItems.kind, "person.question"),
+    sql`${workItems.payload}->>'actorId' = ${owner}`,
+    isNull(workItems.finishedAt),
+    sql`not exists (
+      select 1 from ${workItems} accepted_answer
+      where accepted_answer.kind = 'proactive.task'
+        and accepted_answer.payload->>'ownerUserId' = ${owner}
+        and accepted_answer.payload->>'followup' = 'true'
+        and accepted_answer.payload->'questionIds' @> jsonb_build_array(${workItems.key})
+    )`,
+  );
+}
+
 export type ApprovalQuestions = ReturnType<typeof createApprovalQuestions>;
 export function createApprovalQuestions(
   database: Database,
@@ -83,7 +99,7 @@ export function createApprovalQuestions(
       const rows = await database
         .select()
         .from(workItems)
-        .where(and(owned(owner), isNull(workItems.finishedAt)))
+        .where(pendingPersonQuestion(owner))
         .orderBy(desc(workItems.createdAt))
         .limit(100);
       return rows.map(listedQuestion).filter((row) => row !== null);
@@ -110,7 +126,14 @@ export function createApprovalQuestions(
           .for("update")
           .limit(1);
         if (!row) throw new ApprovalNotFoundError();
-        if (row.finishedAt)
+        // Read acceptance after the lock: READ COMMITTED gives this statement a fresh snapshot,
+        // including task replies committed while the preceding lock statement was waiting.
+        const [pending] = await tx
+          .select({ key: workItems.key })
+          .from(workItems)
+          .where(and(pendingPersonQuestion(owner), eq(workItems.key, id)))
+          .limit(1);
+        if (!pending)
           throw new ApprovalRefusedError("You already answered this question.");
         await tx
           .insert(workItems)

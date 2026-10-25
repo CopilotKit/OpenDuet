@@ -28,6 +28,7 @@ import {
   useReportChatPresence,
 } from "@/components/shell/chat-presence";
 import { ShellHeader } from "@/components/shell/header";
+import type { ApprovalRequest } from "@/lib/approvals";
 import { authKeys } from "@/lib/auth/queries";
 import { settleReactWork } from "./settle-react-work";
 
@@ -73,6 +74,31 @@ function called(id: string, name: string, result?: string): Message[] {
 
 const SEARCH = "mcp__exa__web_search_exa";
 const FETCH = "mcp__exa__web_fetch_exa";
+
+test("a refused email stops being named before the tool result arrives", () => {
+  const request: ApprovalRequest = {
+    id: "refused",
+    status: "denied",
+    decision: "deny",
+    createdAt: "2026-10-23T00:00:00Z",
+    action: {
+      botId: "openduet",
+      threadId: "thread",
+      toolCallId: "send",
+      toolRef: "google-workspace/gmail_send_reply",
+      effect: "write",
+      scope: "external",
+      args: {},
+      target: {},
+    },
+  };
+  const messages = [
+    asked("u1", "Reply to Ana"),
+    ...called("send", "mcp__google-workspace__gmail_send_reply"),
+  ];
+  expect(stepFor(messages, true)).toBe("Sending your email");
+  expect(stepFor(messages, true, [request])).toBe(THINKING);
+});
 
 describe("the step the pill names", () => {
   test("a step still running is named as its line names it", () => {

@@ -1,5 +1,5 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { client } from "@/lib/client";
+import { client } from "../client";
 
 /**
  * A channel as the browser sees it.
@@ -50,10 +50,8 @@ export type ChannelSummary = AgentChannel & {
   /**
    * Whether a turn is running in this channel right now.
    *
-   * Socket-only and transient: the server never persists it and the roster query never returns it,
-   * so it is undefined until a busy event arrives and is dropped whenever the roster is refetched.
-   * A headless turn — a handoff hop, a relay — sets it, which is how the roster shows work the
-   * browser never streamed.
+   * Returned by roster reads and patched by run/expiry events, including for headless turns that
+   * this browser never streamed. Absent on a row the browser optimistically created itself.
    */
   busy?: boolean;
 };
@@ -84,12 +82,13 @@ export function channelListQueryOptions() {
   return infiniteQueryOptions({
     queryKey: channelKeys.list(),
     initialPageParam: "",
-    queryFn: async ({ pageParam }): Promise<ChannelPage> => {
+    queryFn: async ({ pageParam, signal }): Promise<ChannelPage> => {
       const suffix = pageParam
         ? `?cursor=${encodeURIComponent(pageParam as string)}`
         : "";
       const response = await client(`/api/channels${suffix}`, {
         fallback: "Couldn't load your conversations.",
+        signal,
       });
       return (await response.json()) as ChannelPage;
     },

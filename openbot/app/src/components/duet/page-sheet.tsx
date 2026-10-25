@@ -1,5 +1,9 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
-import { useQuery } from "@tanstack/react-query";
+import {
+  CURRENT_SLIDE_LAYOUT,
+  type SlideLayoutVersion,
+} from "@openbot/shared/slide-fit";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCanGoBack,
   useNavigate,
@@ -8,13 +12,21 @@ import {
 } from "@tanstack/react-router";
 import { type PointerEvent, useEffect, useRef, useState } from "react";
 import { useConversationSend } from "@/components/channels/conversation-send";
+import { NewTaskSheet } from "@/components/shell/new-task-sheet";
+import { agentListQueryOptions } from "@/lib/agents/queries";
+import {
+  checkPageMutationOptions,
+  deletePageMutationOptions,
+} from "@/lib/pages/mutations";
 import {
   blocksOf,
   type PageSlide,
   pageQueryOptions,
   slidesOf,
 } from "@/lib/pages/queries";
+import { pageThemeStyle } from "@/lib/pages/theme";
 import { searchText } from "@/lib/search-text";
+import { startTaskMutationOptions } from "@/lib/tasks/mutations";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
 import { PageCardFace } from "./page-card";
@@ -71,11 +83,31 @@ export function PageSheet({
   onListItem?: OnListItem | undefined;
 }) {
   const page = useQuery(pageQueryOptions(pageId));
+  const queryClient = useQueryClient();
+  const router = useRouter({ warn: false });
+  const agents = useQuery({
+    ...agentListQueryOptions(),
+    enabled: Boolean(page.data?.botId),
+  });
+  const bot = agents.data?.find((bot) => bot.id === page.data?.botId);
+  const check = useMutation(checkPageMutationOptions(queryClient, pageId));
+  const remove = useMutation(deletePageMutationOptions(queryClient, pageId));
+  const start = useMutation(startTaskMutationOptions(queryClient));
+  const [actions, setActions] = useState(false);
+  const [revise, setRevise] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
+  const openTask = (id: string) => {
+    if (router)
+      void router.navigate({ to: "/tasks/$taskId", params: { taskId: id } });
+    else onClose();
+  };
   const popup = useRef<HTMLDivElement>(null);
   const morph = useSheetMorph(pageId, onClose, (summary, size) => (
     <PageCardFace page={summary} size={size} />
   ));
   const title = page.data?.title ?? "";
+  const checklistRevision = page.data?.checklistRevision ?? "";
   return (
     <DialogPrimitive.Root
       onOpenChange={(next) => {
@@ -87,7 +119,7 @@ export function PageSheet({
         <DialogPrimitive.Popup
           aria-modal="true"
           className={cn(
-            "duet-veil duet-face group fixed inset-0 z-50 flex flex-col text-duet-ink outline-none",
+            "duet-face group fixed inset-0 z-50 flex flex-col bg-duet-surface text-duet-ink outline-none",
             // The veil fades in and out with reduced motion too: a fade is the reduced transition.
             "transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0",
             morph.fading && "opacity-0",
@@ -96,14 +128,15 @@ export function PageSheet({
           // The sheet takes focus, not ×, so a stray Enter does not close what was just opened.
           initialFocus={popup}
           ref={popup}
-          style={
-            morph.fading ? { transitionDuration: `${FADE_MS}ms` } : undefined
-          }
+          style={{
+            ...pageThemeStyle(page.data?.theme),
+            ...(morph.fading ? { transitionDuration: `${FADE_MS}ms` } : {}),
+          }}
         >
-          <div className="mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col px-2.5 pt-[max(env(safe-area-inset-top),12px)] pb-[max(env(safe-area-inset-bottom),10px)]">
+          <div className="mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col px-3 pt-[max(env(safe-area-inset-top),12px)] pb-[max(env(safe-area-inset-bottom),10px)]">
             <div
               className={cn(
-                "flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] bg-duet-card shadow-duet-raised motion-reduce:transition-none",
+                "flex min-h-0 flex-1 flex-col overflow-hidden motion-reduce:transition-none",
                 morph.morphing
                   ? "transition-opacity duration-150 ease-out"
                   : "transition-transform duration-300 ease-out motion-safe:group-data-starting-style:translate-y-6",
@@ -112,26 +145,126 @@ export function PageSheet({
               data-morph-hidden={morph.hidden || undefined}
               ref={morph.sheetRef}
             >
-              <header className="grid h-14 shrink-0 grid-cols-[44px_1fr_44px] items-center px-2">
+              <header className="relative grid min-h-14 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-2 py-1">
                 <button
-                  aria-label="Close"
+                  aria-label="Back"
                   className="grid size-11 place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
                   onClick={morph.close}
                   type="button"
                 >
-                  <DuetIcon name="x" size={22} stroke={2.1} />
+                  <DuetIcon name="chevronLeft" size={22} stroke={2.1} />
                 </button>
-                <DialogPrimitive.Title className="type-row truncate px-1 text-center font-semibold">
+                <DialogPrimitive.Title className="type-row min-w-0 justify-self-center rounded-full bg-duet-card px-4 py-2 text-center font-semibold [overflow-wrap:anywhere]">
                   {title}
                 </DialogPrimitive.Title>
-                <span aria-hidden />
+                <button
+                  aria-label="Page actions"
+                  aria-expanded={actions}
+                  className="grid size-11 place-items-center rounded-full bg-duet-card text-duet-ink"
+                  onClick={() => setActions(!actions)}
+                  type="button"
+                >
+                  …
+                </button>
+                {actions ? (
+                  <div className="absolute top-full right-0 z-20 flex min-w-48 flex-col rounded-2xl bg-duet-card p-2 shadow-duet-raised">
+                    <button
+                      className="min-h-11 rounded-xl px-3 text-left hover:bg-duet-tile"
+                      type="button"
+                      onClick={async () => {
+                        setActionError("");
+                        try {
+                          await navigator.clipboard.writeText(
+                            new URL(
+                              `/make/${encodeURIComponent(pageId)}`,
+                              window.location.origin,
+                            ).href,
+                          );
+                          setNotice("Link copied");
+                          setActions(false);
+                        } catch {
+                          setActionError("Couldn't copy the link. Try again.");
+                        }
+                      }}
+                    >
+                      Share
+                    </button>
+                    <button
+                      className="min-h-11 rounded-xl px-3 text-left hover:bg-duet-tile disabled:opacity-50"
+                      disabled={!bot}
+                      type="button"
+                      onClick={() => {
+                        setRevise(true);
+                        setActions(false);
+                      }}
+                    >
+                      Revise
+                    </button>
+                    <button
+                      className="min-h-11 rounded-xl px-3 text-left hover:bg-duet-tile disabled:opacity-50"
+                      disabled={!page.data?.botId || start.isPending}
+                      type="button"
+                      onClick={() => {
+                        if (!page.data?.botId) return;
+                        start.mutate(
+                          {
+                            botId: page.data.botId,
+                            instruction: `Read saved page ${pageId} with read_page, then carry out the plan in “${page.data.title}”. Ask before any external action that needs approval.`,
+                          },
+                          { onSuccess: (task) => openTask(task.id) },
+                        );
+                      }}
+                    >
+                      Turn into a task
+                    </button>
+                    <button
+                      className="min-h-11 rounded-xl px-3 text-left text-duet-red hover:bg-duet-tile disabled:opacity-50"
+                      disabled={remove.isPending}
+                      type="button"
+                      onClick={() =>
+                        remove.mutate(undefined, { onSuccess: onClose })
+                      }
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ) : null}
               </header>
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-1 pb-10">
-                {page.isPending ? null : page.error ? (
-                  <p className="type-sub text-duet-red" role="alert">
-                    Couldn't open this page. Close it and try again.
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-10">
+                {notice ? (
+                  <p className="type-label mb-3 text-duet-green" role="status">
+                    {notice}
                   </p>
-                ) : (
+                ) : null}
+                {actionError || check.error || remove.error || start.error ? (
+                  <p className="type-label mb-3 text-duet-red" role="alert">
+                    {actionError ||
+                      check.error?.message ||
+                      remove.error?.message ||
+                      start.error?.message}
+                  </p>
+                ) : null}
+                {page.error ? (
+                  <p className="type-label mb-3 text-duet-red" role="alert">
+                    {page.data
+                      ? "Couldn't refresh this page. Showing the saved version."
+                      : "Couldn't open this page. Try again."}
+                  </p>
+                ) : null}
+                {check.error || page.error ? (
+                  <button
+                    className="type-label mb-3 min-h-11 rounded-xl bg-duet-card px-3 disabled:opacity-50"
+                    type="button"
+                    disabled={page.isFetching}
+                    onClick={async () => {
+                      const refreshed = await page.refetch();
+                      if (!refreshed.isError) check.reset();
+                    }}
+                  >
+                    Refresh page
+                  </button>
+                ) : null}
+                {page.data ? (
                   <>
                     <p className="type-label mb-4 font-medium text-duet-ink-3">
                       {dateLine(page.data.updatedAt)}
@@ -140,18 +273,54 @@ export function PageSheet({
                       <SlideDeck
                         onListItem={onListItem}
                         slides={slidesOf(page.data)}
+                        layoutVersion={
+                          "slides" in page.data.content
+                            ? (page.data.content.layoutVersion ?? 1)
+                            : CURRENT_SLIDE_LAYOUT
+                        }
+                        onCheck={(slide, block, item, checked) =>
+                          check.mutate({
+                            slide,
+                            block,
+                            item,
+                            checked,
+                            expectedChecklistRevision: checklistRevision,
+                          })
+                        }
                       />
                     ) : (
                       <PageBlocks
                         blocks={blocksOf(page.data)}
+                        onCheck={(block, item, checked) =>
+                          check.mutate({
+                            block,
+                            item,
+                            checked,
+                            expectedChecklistRevision: checklistRevision,
+                          })
+                        }
                         {...(onListItem ? { onListItem } : {})}
                       />
                     )}
                   </>
-                )}
+                ) : null}
               </div>
             </div>
           </div>
+          {revise && bot ? (
+            <NewTaskSheet
+              bot={bot}
+              onClose={() => setRevise(false)}
+              onAdded={(where, task) => {
+                setRevise(false);
+                if (where === "active" && task) openTask(task.id);
+                else setNotice("Revision saved for Up next");
+              }}
+              question="What should change?"
+              instructionPrefix={`Read saved page ${pageId} with read_page before revising it. Save changes with make_page using the same page id.`}
+              starter={`Revise “${title}”: …`}
+            />
+          ) : null}
           {morph.ghost}
         </DialogPrimitive.Popup>
       </DialogPrimitive.Portal>
@@ -166,27 +335,48 @@ export function PageSheet({
  */
 export function SlideDeck({
   slides,
+  layoutVersion = CURRENT_SLIDE_LAYOUT,
   onListItem,
+  onCheck,
 }: {
   slides: readonly PageSlide[];
+  layoutVersion?: SlideLayoutVersion;
+  onCheck?:
+    | ((slide: number, block: number, item: string, checked: boolean) => void)
+    | undefined;
   onListItem?: OnListItem | undefined;
 }) {
-  const [index, setIndex] = useState(0);
+  const [selectedIndex, setIndex] = useState(0);
   const count = slides.length;
+  const lastIndex = Math.max(0, count - 1);
+  const index = Math.min(selectedIndex, lastIndex);
+  // Commit the clamped selection so a later revision cannot restore a removed slide.
+  if (selectedIndex !== index) setIndex(index);
   const go = (step: number) =>
-    setIndex((current) => Math.min(count - 1, Math.max(0, current + step)));
+    setIndex((current) => Math.min(lastIndex, Math.max(0, current + step)));
   const goRef = useRef(go);
   goRef.current = go;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey || event.metaKey) return;
+      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
       const target = event.target;
       if (
         target instanceof Element &&
         target.closest("input, textarea, [contenteditable='true']")
       )
         return;
+      // A focused rich block (or its content) owns its native horizontal scrolling.
+      for (
+        let element = target;
+        element instanceof Element;
+        element = element.parentElement
+      ) {
+        if (element.scrollWidth <= element.clientWidth) continue;
+        const overflow = getComputedStyle(element).overflowX;
+        if (overflow === "auto" || overflow === "scroll") return;
+      }
       if (event.key === "ArrowRight") {
         event.preventDefault();
         goRef.current(1);
@@ -247,6 +437,13 @@ export function SlideDeck({
             >
               <SlideCard
                 slide={slide}
+                layoutVersion={layoutVersion}
+                onCheck={
+                  onCheck
+                    ? (block, item, checked) =>
+                        onCheck(at, block, item, checked)
+                    : undefined
+                }
                 {...(onListItem ? { onListItem } : {})}
               />
             </div>

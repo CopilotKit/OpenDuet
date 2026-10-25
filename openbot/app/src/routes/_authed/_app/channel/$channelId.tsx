@@ -8,6 +8,8 @@ import {
 import { useMemo, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ComputerViewPanel } from "@/components/computer/computer-panel";
+import { DuetIcon } from "@/components/duet/icons";
+import { useServerWork } from "@/components/shell/chat-presence";
 import { MoreDisc } from "@/components/shell/header";
 import { usePageChrome } from "@/components/shell/page-chrome";
 import {
@@ -16,7 +18,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { DuetIcon } from "@/components/duet/icons";
 import {
   Sheet,
   SheetClose,
@@ -24,18 +25,17 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { tryClient } from "@/lib/client";
 import {
   conversationTitle,
   firstMessageQueryOptions,
   NEW_CONVERSATION,
 } from "@/lib/channels/conversation-title";
-import { useServerWork } from "@/components/shell/chat-presence";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import {
   channelListQueryOptions,
   channelQueryOptions,
 } from "@/lib/channels/queries";
+import { tryClient } from "@/lib/client";
 
 /**
  * A conversation other than Chat's one thread, opened from the menu or from a link on another page.
@@ -103,6 +103,7 @@ function RouteComponent() {
    */
   const summary = listed?.summary;
   const title = useHeldTitle(
+    channelId,
     !channel.data || roster.isPending || (!summary && !first.isFetched)
       ? null
       : !listed && !summary && !first.data
@@ -112,6 +113,7 @@ function RouteComponent() {
             firstMessage: first.data,
             lastMessage: listed?.lastMessage,
           }),
+    Boolean(summary || first.data),
   );
   // The server's own work in this conversation, such as the run after Allow once.
   const serverWork = useServerWork(listed?.busy === true, threadId);
@@ -147,14 +149,33 @@ function RouteComponent() {
 }
 
 /**
- * The first real title this visit found, kept for the rest of it. "New conversation" is not held:
- * it gives way to the first message once there is one.
+ * The first summary or first-message title this channel visit found, kept for the rest of it. A
+ * fallback stays provisional so a recovering history read can still name the conversation.
  */
-function useHeldTitle(title: string | null): string | null {
-  const [held, setHeld] = useState<string | null>(null);
-  if (held === null && title !== null && title !== NEW_CONVERSATION)
-    setHeld(title);
-  return held ?? title;
+function useHeldTitle(
+  channelId: string,
+  title: string | null,
+  resolved: boolean,
+): string | null {
+  const [held, setHeld] = useState<{ channelId: string; title: string | null }>(
+    {
+      channelId,
+      title: null,
+    },
+  );
+  // Parameter-only navigation preserves this component, but starts a new conversation visit.
+  if (held.channelId !== channelId) {
+    setHeld({ channelId, title: null });
+    return title;
+  }
+  if (
+    resolved &&
+    held.title === null &&
+    title !== null &&
+    title !== NEW_CONVERSATION
+  )
+    setHeld({ channelId, title });
+  return held.title ?? title;
 }
 
 /** A sentence where the conversation would be, under the page's chrome. */

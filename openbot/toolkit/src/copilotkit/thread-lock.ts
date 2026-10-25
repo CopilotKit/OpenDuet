@@ -42,7 +42,11 @@ export function createIntelligenceThreadLock(options: {
       userId: string;
     }) => Promise<string | undefined>;
   };
-  onRunBusy?: (input: { threadId: string; busy: boolean }) => void;
+  onRunBusy?: (input: {
+    threadId: string;
+    runId: string;
+    busy: boolean;
+  }) => void | Promise<void>;
 }): ThreadLock {
   const { client, learning, onRunBusy } = options;
   return {
@@ -57,10 +61,13 @@ export function createIntelligenceThreadLock(options: {
           ...input,
           ...(learningContainerId ? { learningContainerId } : {}),
         });
-        // A run started on this thread. Side effect only, never awaited: a channel showing it is
-        // working is worth nothing next to the lock the run depends on.
+        // Await the announcement so release cannot overtake it. A failed signal never costs the lock.
         try {
-          onRunBusy?.({ threadId: input.threadId, busy: true });
+          await onRunBusy?.({
+            threadId: input.threadId,
+            runId: held.runId,
+            busy: true,
+          });
         } catch {}
         /*
          * The run id only. The lock also hands back a join token, which is what a browser presents
@@ -101,7 +108,11 @@ export function createIntelligenceThreadLock(options: {
       // The run on this thread is over. Cleared here rather than trusting a browser: the run may
       // have outlived the tab that started it, and this is where the platform is told it ended.
       try {
-        onRunBusy?.({ threadId: input.threadId, busy: false });
+        await onRunBusy?.({
+          threadId: input.threadId,
+          runId: input.runId,
+          busy: false,
+        });
       } catch {}
       await client.ɵcleanupThreadLock(input);
     },

@@ -27,6 +27,7 @@ import {
   useState,
 } from "react";
 import { attachmentModality } from "@/components/channels/chat-messages";
+import { DuetIcon } from "@/components/duet/icons";
 import { IconWaveform } from "@/components/icons/waveform";
 import {
   attachmentUrl,
@@ -37,7 +38,6 @@ import {
   shouldClaimPaste,
 } from "@/lib/channels/attachments";
 import { newId } from "@/lib/new-id";
-import { DuetIcon } from "@/components/duet/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
 import { AttachmentStrip } from "./attachment-strip";
@@ -1400,7 +1400,7 @@ export function Composer({
   const actionClassName = cn(
     "rounded-full p-0",
     compact
-      ? "size-9 self-end bg-duet-black text-duet-on-black hover:bg-duet-black hover:brightness-125 disabled:opacity-30"
+      ? "size-[44px] shrink-0 self-end bg-duet-black text-duet-on-black hover:bg-duet-black hover:brightness-125 disabled:opacity-30"
       : "size-7",
   );
   const primaryAction = canStop ? (
@@ -1623,7 +1623,7 @@ export function Composer({
                 {attachmentsEnabled ? (
                   <Button
                     aria-label="Attach a file"
-                    className="size-9 self-end rounded-full text-duet-ink-2"
+                    className="size-[44px] shrink-0 self-end rounded-full text-duet-ink-2"
                     // The button stays, and stays labelled: a conversation that cannot take another
                     // message has not lost the ability to attach, it has lost the message. Swapping it
                     // for the "unavailable" placeholder would say the wrong thing about why.
@@ -1638,7 +1638,7 @@ export function Composer({
                 ) : (
                   <Button
                     aria-label="More message options unavailable"
-                    className="size-9 self-end rounded-full text-duet-ink-2 disabled:opacity-100"
+                    className="size-[44px] shrink-0 self-end rounded-full text-duet-ink-2 disabled:opacity-100"
                     disabled
                     size="icon"
                     type="button"
@@ -1650,7 +1650,7 @@ export function Composer({
                 <PromptArea
                   aria-label="Message"
                   className={cn(
-                    "min-w-0 flex-1 self-center border-0 bg-transparent p-0 py-[6.5px] text-[17px] text-duet-ink leading-[23px] tracking-[-0.011em] shadow-none",
+                    "duet-composer-editor min-w-0 flex-1 self-center border-0 bg-transparent p-0 py-[6.5px] text-[1.0625rem] text-duet-ink leading-[1.4375rem] tracking-[-0.011em] shadow-none",
                     editorClassName,
                   )}
                   disabled={disabled}

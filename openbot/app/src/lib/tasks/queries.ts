@@ -19,6 +19,10 @@ export type TaskStatus =
   | "ready_for_review";
 
 export type TaskRecord = {
+  thumbnail?: string | null;
+  queuedReplies?: { messageId: string; text: string }[];
+  /** Questions already answered in accepted replies, including turns that failed. */
+  answeredQuestionIds?: string[];
   id: string;
   botId: string;
   /** The task's own conversation. */

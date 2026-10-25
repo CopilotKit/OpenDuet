@@ -26,12 +26,13 @@ import {
   ConversationSendContext,
   latestTurnToolCalls,
 } from "@/components/channels/conversation-send";
+import { PageSheetHost } from "@/components/duet/page-sheet";
 import {
   stepFor,
   useReportChatPresence,
 } from "@/components/shell/chat-presence";
-import { PageSheetHost } from "@/components/duet/page-sheet";
 import { ChatSuggestionCard } from "@/components/shell/chat-suggestion";
+import type { ApprovalRequest } from "@/lib/approvals";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { isThreadBusyError } from "@/lib/channels/run-lifecycle";
 import { useFocusMessage } from "@/lib/tasks/focus-message";
@@ -42,6 +43,7 @@ export function ConversationView({
   busy = false,
   notice,
   queuedNotice,
+  serverQueued = [],
   agents = [],
   commands,
   channelId,
@@ -56,6 +58,7 @@ export function ConversationView({
   onStop,
   voiceCall,
   inShell = false,
+  approvals,
   placeholder,
   lead,
   folded = false,
@@ -69,6 +72,8 @@ export function ConversationView({
    * A caller sets it when the turn it waits behind has gone quiet.
    */
   queuedNotice?: string;
+  /** Read from the server queue, so another tab and reload show the same accepted replies. */
+  serverQueued?: { messageId: string; text: string }[];
   agents?: readonly AgentOption[];
   /**
    * The `/` menu for this Bot's granted skills, supplied by the route that owns grant loading.
@@ -125,6 +130,8 @@ export function ConversationView({
    * composer sits on the tab bar, behind a fade, as the launch film lays them out.
    */
   inShell?: boolean;
+  /** Saved decisions let the activity pill stop naming a refused call before its result arrives. */
+  approvals?: readonly ApprovalRequest[];
   /** The composer's empty-state text, e.g. "Message OpenDuet". */
   placeholder?: string;
   /** Drawn above the first message; see `ChatTranscript`. */
@@ -220,7 +227,7 @@ export function ConversationView({
     failed: Boolean(stopped),
     // Read off the messages on every render, as the transcript reads them, because the agent
     // grows the same array in place. Only Chat's conversation has a pill to say it in.
-    step: inShell ? stepFor(messages, working) : null,
+    step: inShell ? stepFor(messages, working, approvals) : null,
   });
 
   /**
@@ -446,7 +453,9 @@ export function ConversationView({
    * sent one is, so while anything is parked no tool call is in the latest turn.
    */
   const latestTurn = JSON.stringify(
-    queued.length > 0 ? [] : latestTurnToolCalls(messages),
+    queued.length > 0 || serverQueued.length > 0
+      ? []
+      : latestTurnToolCalls(messages),
   );
   const conversationSend = useMemo<ConversationSend>(() => {
     const current = new Set<string>(JSON.parse(latestTurn));
@@ -575,10 +584,27 @@ export function ConversationView({
               .map((command) => command.name)
               .join(",")}
             messages={messages}
-            onRemoveQueued={(id) => {
-              apply({ id, type: "remove" });
-            }}
-            queued={queued}
+            onRemoveQueued={
+              serverQueued.length
+                ? undefined
+                : (id) => {
+                    apply({ id, type: "remove" });
+                  }
+            }
+            queued={[
+              ...queued,
+              ...serverQueued
+                .filter(
+                  (row) =>
+                    !messages.some((message) => message.id === row.messageId),
+                )
+                .map((row) => ({
+                  id: row.messageId,
+                  text: row.text,
+                  attachments: [],
+                  commandIds: [],
+                })),
+            ]}
             restoring={restoring}
             {...(stopped ? { stopped } : {})}
           />

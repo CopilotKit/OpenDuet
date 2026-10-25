@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { frameTaskBrief } from "@openbot/shared/task-brief";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
+import { ThreadLockBusyError } from "@openbot/toolkit/lease";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import { plainFailure, taskStatus } from "../src/openduet/task-store";
 import { createTaskTurn } from "../src/openduet/task-threads";
@@ -20,7 +21,12 @@ function turnWith(
   runTurn: TurnRunner,
   options: { final?: boolean; failWhile?: string } = {},
 ) {
-  const said: { text: string; agentId: string | null; id: string }[] = [];
+  const said: {
+    text: string;
+    agentId: string | null;
+    id: string;
+    needsInput?: boolean;
+  }[] = [];
   const busy: boolean[] = [];
   const run = createTaskTurn({
     channels: {
@@ -30,6 +36,7 @@ function turnWith(
           text: activity.text,
           agentId: activity.agentId,
           id: source?.id ?? "",
+          ...(activity.needsInput ? { needsInput: true } : {}),
         });
       },
       signalBusy: async (threadId, value) => {
@@ -85,9 +92,19 @@ describe("a task's turn", () => {
     await turn.start();
     expect(turn.said.at(-1)).toEqual({
       text: "Shall I send draft A?",
+      needsInput: true,
       agentId: "openduet",
       id: "task-1:reply",
     });
+  });
+
+  test("reply chips mark a finished answer as waiting even without a question mark", async () => {
+    const turn = turnWith(async () => ({
+      replyText: "Choose a direction below.",
+      replyChips: true,
+    }));
+    await turn.start();
+    expect(turn.said.at(-1)?.needsInput).toBe(true);
   });
 
   test("that stops for Allow once ends waiting on the person, not failed", async () => {
@@ -116,6 +133,21 @@ describe("a task's turn", () => {
     expect(turn.said).toEqual([
       { text: ASK, agentId: null, id: "task-1:input" },
     ]);
+  });
+
+  test("initial contention on the final attempt does not announce a terminal failure", async () => {
+    const error = new ThreadLockBusyError(new Error("Thread lock denied"));
+    const turn = turnWith(
+      async () => {
+        throw error;
+      },
+      { final: true },
+    );
+    await expect(turn.start()).rejects.toBe(error);
+    expect(turn.said).toEqual([
+      { text: ASK, agentId: null, id: "task-1:input" },
+    ]);
+    expect(turn.busy).toEqual([true, false]);
   });
 
   test("that fails on its last run says so in the conversation, in plain words", async () => {

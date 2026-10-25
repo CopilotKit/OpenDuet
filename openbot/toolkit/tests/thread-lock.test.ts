@@ -127,7 +127,9 @@ describe("taking a conversation's lock", () => {
 
     await lock.acquire(INPUT);
 
-    expect(busy).toEqual([{ threadId: "thread-1", busy: true }]);
+    expect(busy).toEqual([
+      { threadId: "thread-1", runId: "platform-run", busy: true },
+    ]);
   });
 
   test("a busy signal that throws does not cost the run its lock", async () => {
@@ -165,7 +167,9 @@ describe("keeping and giving back the lock", () => {
 
     await lock.release({ threadId: "thread-1", runId: "platform-run" });
 
-    expect(busy).toEqual([{ threadId: "thread-1", busy: false }]);
+    expect(busy).toEqual([
+      { threadId: "thread-1", runId: "platform-run", busy: false },
+    ]);
     expect(calls).toEqual([
       {
         method: "cleanup",
@@ -185,4 +189,42 @@ describe("keeping and giving back the lock", () => {
 
     expect(calls.map((call) => call.method)).toEqual(["cleanup"]);
   });
+});
+
+test("a delayed busy announcement settles before the lock is released", async () => {
+  let started!: () => void;
+  const announcementStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let announced!: () => void;
+  const announcement = new Promise<void>((resolve) => {
+    announced = resolve;
+  });
+  const events: boolean[] = [];
+  const { lock } = harness({
+    onRunBusy: async ({ busy }) => {
+      if (busy) {
+        started();
+        await announcement;
+      }
+      events.push(busy);
+    },
+  });
+  let acquisitionCompleted = false;
+  const released = lock.acquire(INPUT).then(async (held) => {
+    acquisitionCompleted = true;
+    if (!held) throw new Error("The uncontended lock was not acquired");
+    await lock.release({ threadId: INPUT.threadId, runId: held.runId });
+  });
+  try {
+    await announcementStarted;
+    // Let every runnable acquisition/release continuation drain while the announcement stays blocked.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(acquisitionCompleted).toBe(false);
+    expect(events).toEqual([]);
+  } finally {
+    announced();
+    await released;
+  }
+  expect(events).toEqual([true, false]);
 });

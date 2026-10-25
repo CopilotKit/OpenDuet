@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { frameTaskBrief } from "@openbot/shared/task-brief";
+import { frameTaskBrief, frameTaskReply } from "@openbot/shared/task-brief";
 import { Hono } from "hono";
 import {
   buildTaskReport,
@@ -210,6 +210,69 @@ describe("a task's decisions and updates", () => {
       "update: I asked Sam in his thread. @ null",
       "reply: Great @ null",
       "update: Sam says double-wall boxes. @ 2026-10-23T09:42:19.000Z",
+    ]);
+  });
+
+  test("successive corrections keep their own words and a replay adds no human reply", () => {
+    const ask = "Draft a reply to Rosa.";
+    const firstCorrection = frameTaskReply(ask, "Use the Oat Satin glaze.");
+    const messages: ReportMessage[] = [
+      { id: "initial", role: "user", content: frameTaskBrief(ask) },
+      { id: "failed", role: "assistant", content: "I could not finish." },
+      { id: "retry", role: "user", content: firstCorrection },
+      { id: "failed-again", role: "assistant", content: "Still unavailable." },
+    ];
+    const report = () => buildTaskReport(input({ messages, approvals: [] }));
+    expect(report().entries.filter((entry) => entry.kind === "reply")).toEqual([
+      {
+        kind: "reply",
+        id: "retry",
+        text: "Use the Oat Satin glaze.",
+        at: null,
+      },
+    ]);
+    messages.push(
+      {
+        id: "retry-again",
+        role: "user",
+        content: frameTaskReply(firstCorrection, "Ask for delivery on Friday."),
+      },
+      { id: "drafted", role: "assistant", content: "Drafted." },
+      { id: "replay", role: "user", content: frameTaskBrief(ask) },
+      { id: "done", role: "assistant", content: "Checked the draft." },
+    );
+    expect(report().entries).toEqual([
+      {
+        kind: "update",
+        id: "failed",
+        text: "I could not finish.",
+        at: "2026-10-23T09:41:12.000Z",
+      },
+      {
+        kind: "reply",
+        id: "retry",
+        text: "Use the Oat Satin glaze.",
+        at: null,
+      },
+      {
+        kind: "update",
+        id: "failed-again",
+        text: "Still unavailable.",
+        at: null,
+      },
+      {
+        kind: "reply",
+        id: "retry-again",
+        text: "Ask for delivery on Friday.",
+        at: null,
+      },
+      { kind: "update", id: "drafted", text: "Drafted.", at: null },
+      {
+        kind: "update",
+        id: "done",
+        text: "Checked the draft.",
+        at: "2026-10-23T09:42:19.000Z",
+      },
     ]);
   });
 

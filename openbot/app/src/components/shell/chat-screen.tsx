@@ -28,7 +28,7 @@ import { botAttentionQueryOptions } from "@/lib/bot-lifecycle/queries";
 import { CheckInArrivalContext } from "@/lib/channels/check-in";
 import { frameFirstDay } from "@/lib/channels/first-day";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
-import { createChannelMutationOptions } from "@/lib/channels/mutations";
+import { client } from "@/lib/client";
 import { ONGOING_SEARCH_LIMIT, ongoingChannel } from "@/lib/channels/ongoing";
 import {
   type AgentChannel,
@@ -58,13 +58,14 @@ export function ChatScreen() {
     channels.hasNextPage &&
     !channels.isFetchNextPageError &&
     (channels.data?.length ?? 0) < ONGOING_SEARCH_LIMIT;
-  const { fetchNextPage, isFetchingNextPage } = channels;
+  const { fetchNextPage, isFetching } = channels;
 
   // The roster is paged; a person with many other conversations may have this one further back.
+  // A socket recovery can replace a page request with a refresh; resume once either finishes.
   useEffect(() => {
-    if (bot && searching && !isFetchingNextPage)
+    if (bot && searching && !isFetching)
       void fetchNextPage({ cancelRefetch: false });
-  }, [bot, searching, isFetchingNextPage, fetchNextPage]);
+  }, [bot, searching, isFetching, fetchNextPage]);
 
   // Nothing while the first answers load: a placeholder inside a local round trip is a flicker.
   if (agents.isPending || channels.isPending) return null;
@@ -87,7 +88,7 @@ export function ChatScreen() {
    * conversation.
    */
   if (channel && !started && channel.lastMessageAt === null)
-    return <FirstMessage bot={bot} existing={channel} onStarted={setStarted} />;
+    return <FirstMessage bot={bot} onStarted={setStarted} />;
   if (channel)
     return (
       <OngoingChat
@@ -143,9 +144,9 @@ function OngoingChat({
  * takes over in place.
  *
  * The Bot speaks first. Chat sends the first-day request itself, framed so the model knows nobody
- * typed it, and the transcript draws the Bot's greeting where it sits. The composer stays usable
- * throughout: a message the person sends, or starts typing, before the greeting goes wins, and no
- * greeting is sent.
+ * typed it, and the transcript draws the Bot's greeting where it sits. A message the person sends,
+ * or starts typing, before the greeting goes wins, and no greeting is sent. Once either starts,
+ * Send waits for routing, channel creation and the handoff to the ongoing conversation.
  *
  * WHAT IT ASKS FOR DEPENDS ON WHAT THE BOT CAN READ. The greeting waits for the app-access state of
  * Gmail and Calendar on this Bot, the answer the checklist and the chat card draw. Only `ready` sends
@@ -155,26 +156,43 @@ function OngoingChat({
  */
 function FirstMessage({
   bot,
-  existing,
   onStarted,
 }: {
   bot: AgentProfile;
-  /** A conversation with the Bot that has no messages yet, to start in instead of making one. */
-  existing?: AgentChannel;
   onStarted: (channel: AgentChannel) => void;
 }) {
   const queryClient = useQueryClient();
-  const createChannel = useMutation(createChannelMutationOptions(queryClient));
+  const createChannel = useMutation({
+    mutationFn: (input: { agentId: string; greeting?: string }) =>
+      client<{ channel: AgentChannel; claimed: boolean }>(
+        "/api/channels/first-day",
+        "start",
+        {
+          method: "POST",
+          body: input,
+          fallback: "Couldn't start the conversation. Try again.",
+        },
+      ),
+  });
   const me = useQuery(currentUserQueryOptions());
   const [sent, setSent] = useState<Message | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  /** Held before the first await, including until the handoff unmounts this composer. */
+  const startingRef = useRef(false);
   /** A first message has gone from this screen: the greeting, or the person's own. */
   const begun = useRef(false);
   /** The person has typed into the composer. */
   const typed = useRef(false);
 
   /** Sends the first message, from the composer or as the greeting. Throws when it fails. */
-  const start = async (text: string) => {
+  const start = async (text: string, greeting = false) => {
+    if (startingRef.current)
+      throw new Error(
+        "The conversation is still starting. Try again in a moment.",
+      );
+    startingRef.current = true;
+    setStarting(true);
     begun.current = true;
     setError(null);
     setSent(seedMessage(text, newId()));
@@ -184,14 +202,25 @@ function FirstMessage({
         text,
         record: routeMessage,
         start: async (agentId, first) => {
-          const channel =
-            existing ?? (await createChannel.mutateAsync([agentId]));
+          const result = await createChannel.mutateAsync({
+            agentId,
+            ...(greeting ? { greeting: first } : {}),
+          });
+          const channel = result.channel;
+          if (greeting) {
+            setSent(null);
+            queryClient.setQueryData(channelKeys.detail(channel.id), channel);
+            onStarted(channel);
+            return;
+          }
           queryClient.setQueryData(channelKeys.detail(channel.id), channel);
           stashFirstMessage(channel.id, first);
           onStarted(channel);
         },
       });
     } catch (caught) {
+      startingRef.current = false;
+      setStarting(false);
       setSent(null);
       setError(
         caught instanceof Error
@@ -218,6 +247,7 @@ function FirstMessage({
         canReadMail
           ? frameFirstDay(FIRST_DAY_REQUEST)
           : frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+        true,
       ),
   });
 
@@ -236,7 +266,7 @@ function FirstMessage({
         }
         // The composer keeps the draft for another try when this throws.
         onSubmit={(draft) => start(draft.text)}
-        pending={createChannel.isPending}
+        pending={starting}
         placeholder={`Message ${bot.name}`}
       />
     </>
