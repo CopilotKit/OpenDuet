@@ -50,8 +50,8 @@ export function OnboardingFrame({
   children: ReactNode;
 }) {
   return (
-    <div className="duet-face flex h-svh w-full flex-col bg-duet-surface text-duet-ink">
-      <header className="relative flex h-[68px] shrink-0 items-center justify-center px-4 pt-[env(safe-area-inset-top)]">
+    <div className="duet-face flex h-svh min-w-0 w-full flex-col bg-duet-surface text-duet-ink">
+      <header className="relative flex h-[68px] shrink-0 items-center justify-center px-[76px] pt-[env(safe-area-inset-top)]">
         {/*
          * Not drawn on the first step, rather than drawn disabled: there is nowhere behind it, and a
          * control that does nothing is one more thing a screen reader stops on.
@@ -59,7 +59,7 @@ export function OnboardingFrame({
         {index > 0 ? (
           <button
             aria-label="Back"
-            className="duet-glass absolute left-4 grid size-11 place-items-center rounded-full text-duet-ink shadow-duet-glass outline-none transition-transform focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
+            className="duet-glass absolute left-4 grid size-[44px] place-items-center rounded-full text-duet-ink shadow-duet-glass outline-none transition-transform focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
             data-onboarding-back=""
             onClick={onBack}
             type="button"
@@ -77,7 +77,7 @@ export function OnboardingFrame({
        */}
       <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div
-          className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-start px-4 pt-1.5 pb-6"
+          className="mx-auto flex min-h-full w-full min-w-0 max-w-2xl flex-col justify-start px-4 pt-1.5 pb-6"
           data-onboarding-content=""
         >
           {children}
@@ -102,7 +102,7 @@ export function OnboardingFrame({
           <div className="flex flex-col gap-2">
             <button
               className={cn(
-                "type-row flex h-[52px] w-full items-center justify-center gap-2 rounded-full font-semibold outline-none transition-[filter,transform,opacity,background-color,color] focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50 disabled:hover:brightness-100 motion-reduce:transition-none",
+                "type-row flex min-h-[52px] w-full items-center justify-center gap-2 rounded-full px-4 py-3 font-semibold outline-none transition-[filter,transform,opacity,background-color,color] focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50 disabled:hover:brightness-100 motion-reduce:transition-none",
                 primary.done
                   ? "bg-duet-green-soft text-duet-green"
                   : "bg-duet-black text-duet-on-black hover:brightness-125",
@@ -128,7 +128,7 @@ export function OnboardingFrame({
             </button>
             {secondary ? (
               <button
-                className="type-row h-[52px] w-full rounded-full bg-duet-surface font-semibold text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] outline-none transition-[background-color,transform] hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98]"
+                className="type-row min-h-[52px] px-4 py-3 w-full rounded-full bg-duet-surface font-semibold text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] outline-none transition-[background-color,transform] hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98]"
                 data-onboarding-secondary=""
                 onClick={secondary.onClick}
                 type="button"
@@ -163,14 +163,14 @@ export function StepDashes({ index, total }: { index: number; total: number }) {
       aria-valuemin={1}
       aria-valuenow={index + 1}
       aria-valuetext={`Step ${index + 1} of ${total}`}
-      className="flex items-center gap-1.5"
+      className="flex min-w-0 w-full max-w-[228px] items-center gap-[6px]"
       role="progressbar"
     >
       {Array.from({ length: total }, (_, at) => (
         <span
           aria-hidden
           className={cn(
-            "h-1 w-5 rounded-full transition-colors duration-300 motion-reduce:transition-none",
+            "h-1 min-w-0 flex-1 rounded-full transition-colors duration-300 motion-reduce:transition-none",
             at === index ? "bg-duet-ink" : "bg-duet-ink-3/35",
           )}
           data-current={at === index ? "" : undefined}

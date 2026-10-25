@@ -133,7 +133,7 @@ function AppRow({
   const body = (
     <>
       <GmailAndCalendarLogos size={26} />
-      <span className="min-w-0 flex-1 text-left">
+      <span className="min-w-0 flex-1 basis-[9rem] text-left">
         <span className="type-row block text-duet-ink">{name}</span>
         {note ? (
           <span className="type-label mt-0.5 block text-duet-ink-3">
@@ -161,7 +161,7 @@ function AppRow({
   );
 
   const shape =
-    "flex min-h-[60px] w-full items-center gap-3 rounded-[30px] bg-duet-card px-4 py-2.5 shadow-[inset_0_0_0_1px_var(--duet-hair)]";
+    "flex flex-wrap min-h-[60px] w-full items-center gap-3 rounded-[30px] bg-duet-card px-4 py-2.5 shadow-[inset_0_0_0_1px_var(--duet-hair)]";
 
   return (
     <li data-app-row={GOOGLE_WORKSPACE} data-state={state}>

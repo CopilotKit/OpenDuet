@@ -10,7 +10,13 @@ import {
 import type { Message } from "@ag-ui/core";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react";
 import { type ReactNode, StrictMode } from "react";
 import * as ChannelChatModule from "@/components/channels/channel-chat";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
@@ -34,6 +40,7 @@ import { type AuthenticatedUser, authKeys } from "@/lib/auth/queries";
 import { frameFirstDay } from "@/lib/channels/first-day";
 import { firstDayClaimKey } from "@/lib/channels/first-day-claim";
 import { type ChannelSummary, channelKeys } from "@/lib/channels/queries";
+import { updateChannelEventCache } from "@/lib/channels/use-channel-events";
 import { queryClient as appQueryClient } from "@/query-client";
 import { FIRST_DAY_FRAME } from "@openbot/shared/first-day";
 import { settleReactWork } from "./settle-react-work";
@@ -55,6 +62,15 @@ type Request = { method: string; path: string; body: unknown };
 let requests: Request[] = [];
 let answerMe: () => Promise<Response>;
 let answerCreate: () => Promise<Response>;
+const routeAnswer = () =>
+  Response.json({
+    agentId: BOT.id,
+    name: BOT.name,
+    reason: "named by the person asking",
+    fallback: false,
+    viaMention: true,
+  });
+let answerRoute: () => Promise<Response> = async () => routeAnswer();
 /** What app access says about Gmail and Calendar on the Bot. Ready unless a test says otherwise. */
 let answerGmail: () => Promise<Response> = async () =>
   Response.json({ app: { key: "google-workspace", state: "ready" } });
@@ -110,6 +126,7 @@ afterEach(() => {
   cleanup();
   global.fetch = originalFetch;
   requests = [];
+  answerRoute = async () => routeAnswer();
   window.localStorage.clear();
   appQueryClient.removeQueries({ queryKey: authKeys.currentUser() });
   answerGmail = async () =>
@@ -130,15 +147,15 @@ function serve() {
     requests.push({ method, path, body });
     if (path === "/api/me") return answerMe();
     if (path === GMAIL_PATH) return answerGmail();
-    if (path === "/api/route" && method === "POST")
+    if (path === "/api/route" && method === "POST") return answerRoute();
+    if (path === "/api/channels/first-day" && method === "POST") {
+      const response = await answerCreate();
+      if (!response.ok) return response;
+      const body = await response.json();
       return Response.json({
-        agentId: BOT.id,
-        name: BOT.name,
-        reason: "named by the person asking",
-        fallback: false,
-        viaMention: true,
+        start: body.start ?? { channel: body.channel, claimed: true },
       });
-    if (path === "/api/channels" && method === "POST") return answerCreate();
+    }
     if (path.startsWith("/api/channels"))
       return Response.json({ channels: [], nextCursor: null });
     return Response.json({});
@@ -148,7 +165,9 @@ function serve() {
 const routed = () =>
   requests.filter((r) => r.path === "/api/route" && r.method === "POST");
 const created = () =>
-  requests.filter((r) => r.path === "/api/channels" && r.method === "POST");
+  requests.filter(
+    (r) => r.path === "/api/channels/first-day" && r.method === "POST",
+  );
 
 /** Chat in the shell, with its Bot and its roster already loaded, as the app opens it. */
 function openChat(
@@ -156,14 +175,21 @@ function openChat(
   {
     user,
     strict = false,
-  }: { user: AuthenticatedUser | "loading"; strict?: boolean },
+    nextCursor = null,
+    transport,
+  }: {
+    user: AuthenticatedUser | "loading";
+    strict?: boolean;
+    nextCursor?: string | null;
+    transport?: typeof fetch;
+  },
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
   client.setQueryData(agentKeys.list(false), [BOT]);
   client.setQueryData(channelKeys.list(), {
-    pages: [{ channels, nextCursor: null }],
+    pages: [{ channels, nextCursor }],
     pageParams: [""],
   });
   if (user === "loading") {
@@ -173,6 +199,7 @@ function openChat(
     client.setQueryData(authKeys.currentUser(), user);
     serve();
   }
+  if (transport) global.fetch = transport;
   const screen: ReactNode = (
     <QueryClientProvider client={client}>
       <ChatPresenceProvider>
@@ -387,6 +414,173 @@ describe("the transcript on the first day", () => {
 });
 
 describe("Chat on the first day", () => {
+  test("resumes finding its conversation after a busy event interrupts pagination", async () => {
+    const other = { ...summary("other", null), agentIds: ["another-bot"] };
+    const target = summary("later-chat", "2026-10-22T10:00:00.000Z");
+    const targetPage = { channels: [target], nextCursor: null };
+    const page = { channels: [{ ...other, busy: true }], nextCursor: "older" };
+    const [obsolete, refresh, next] = [held(), held(), held()];
+    let firstSignal: AbortSignal | null | undefined;
+    const transport = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path === "/api/bots/attention") return Response.json({ bots: [] });
+        if (path === "/api/channels") return refresh.promise;
+        if (path === "/api/channels?cursor=older") {
+          if (!firstSignal) {
+            firstSignal = init?.signal;
+            return obsolete.promise;
+          }
+          return next.promise;
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    const view = openChat([other], {
+      user: userNamed("interrupted-search", "Maya"),
+      nextCursor: "older",
+      transport,
+    });
+    try {
+      await waitFor(() => expect(firstSignal).toBeDefined());
+      await act(() => Bun.sleep(0));
+      await act(async () =>
+        updateChannelEventCache(view.client, {
+          channelId: other.id,
+          busy: true,
+          lastMessage: null,
+          lastMessageAt: null,
+          lastMessageAgentId: null,
+        }),
+      );
+      // Keep recovery pending through the observer notification and Chat's effect.
+      await act(() => Bun.sleep(0));
+      expect(firstSignal?.aborted).toBe(true);
+      expect(view.queryByTestId("ongoing-chat")).toBeNull();
+      await act(async () => obsolete.settle(Response.json(targetPage)));
+      await act(async () => {
+        refresh.settle(Response.json(page));
+        next.settle(Response.json(targetPage));
+      });
+      await waitFor(() => {
+        expect(
+          view.getByTestId("ongoing-chat").getAttribute("data-channel"),
+        ).toBe(target.id);
+        expect(view.client.isFetching()).toBe(0);
+      });
+      for (const query of view.client.getQueryCache().getAll()) {
+        expect(query.state.status).toBe("success");
+      }
+    } finally {
+      view.unmount();
+      for (const heldRequest of [obsolete, refresh, next])
+        heldRequest.settle(Response.json({ channels: [], nextCursor: null }));
+      await view.client.cancelQueries();
+      view.client.clear();
+      global.fetch = originalFetch;
+      await settleReactWork();
+    }
+  });
+
+  test("the greeting owns startup from routing through the channel handoff", async () => {
+    const routing = held();
+    const creating = held();
+    answerRoute = () => routing.promise;
+    answerCreate = () => creating.promise;
+    const view = openChat([], { user: userNamed("routing-greeting", "Maya") });
+
+    await waitFor(() => expect(routed()).toHaveLength(1));
+    expect(created()).toHaveLength(0);
+    const words = "Please send this first message";
+    await act(async () => typeInto(view.container, words));
+    const send = view.getByRole("button", {
+      name: "Send message",
+    });
+    if (!(send instanceof HTMLButtonElement))
+      throw new Error("The Send message control is not a button.");
+    expect(send.disabled).toBe(true);
+    const form = send.closest("form");
+    if (!form) throw new Error("The composer form is missing.");
+    await act(async () => {
+      send.click();
+      fireEvent.submit(form);
+    });
+    // Both the button and the submit handler refuse the draft: nothing was accepted or cleared.
+    expect(view.container.querySelector("[contenteditable]")?.textContent).toBe(
+      words,
+    );
+    expect(routed()).toHaveLength(1);
+
+    await act(async () => routing.settle(routeAnswer()));
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(send.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(routed()).toHaveLength(1);
+    await act(async () => creating.settle(Response.json({ channel: CREATED })));
+    const ongoing = await view.findByTestId("ongoing-chat");
+    expect(ongoing.getAttribute("data-channel")).toBe(CREATED.id);
+    expect(created()).toHaveLength(1);
+    expect(created()[0]?.body).toMatchObject({
+      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+    });
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
+  });
+
+  test("a failed greeting releases startup for an explicit first message", async () => {
+    const routing = held();
+    const creating = held();
+    answerRoute = () => routing.promise;
+    answerCreate = () => creating.promise;
+    const view = openChat([], { user: userNamed("routing-recovery", "Maya") });
+
+    await waitFor(() => expect(routed()).toHaveLength(1));
+    await act(async () => typeInto(view.container, "Try this message"));
+    const send = view.getByRole("button", {
+      name: "Send message",
+    });
+    if (!(send instanceof HTMLButtonElement))
+      throw new Error("The Send message control is not a button.");
+    expect(send.disabled).toBe(true);
+    // Routing records are advisory: rejection continues to creation, still owning startup.
+    await act(async () =>
+      routing.settle(
+        Response.json({ error: "Routing unavailable" }, { status: 503 }),
+      ),
+    );
+    await waitFor(() => expect(created()).toHaveLength(1));
+    expect(send.disabled).toBe(true);
+    await act(async () =>
+      creating.settle(
+        Response.json(
+          { error: "Couldn't start the conversation." },
+          { status: 503 },
+        ),
+      ),
+    );
+    expect((await view.findByRole("alert")).textContent).toBe(
+      "Couldn't start the conversation.",
+    );
+    expect(send.disabled).toBe(false);
+    expect(routed()).toHaveLength(1);
+
+    answerRoute = async () => routeAnswer();
+    answerCreate = async () => Response.json({ channel: CREATED });
+    await act(async () => send.click());
+    await view.findByTestId("ongoing-chat");
+    expect(routed()).toHaveLength(2);
+    expect(routed()[1]?.body).toMatchObject({ text: "Try this message" });
+    expect(created()).toHaveLength(2);
+    expect(created().map((request) => request.body)).toEqual([
+      { agentId: BOT.id, greeting: frameFirstDay(FIRST_DAY_REQUEST) },
+      { agentId: BOT.id },
+    ]);
+    expect(takeFirstMessage(CREATED.id)).toBe("Try this message");
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
+  });
+
   test("with no conversation yet, it sends the first-day message once, StrictMode and all", async () => {
     answerCreate = async () => Response.json({ channel: CREATED });
     const view = openChat([], {
@@ -402,8 +596,11 @@ describe("Chat on the first day", () => {
       text: frameFirstDay(FIRST_DAY_REQUEST),
       agentId: BOT.id,
     });
-    // What the conversation is handed to send: the framed request, and only once.
-    expect(takeFirstMessage(CREATED.id)).toBe(frameFirstDay(FIRST_DAY_REQUEST));
+    // The server owns greeting delivery; a browser remount cannot send it again.
+    expect(created()[0]?.body).toMatchObject({
+      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+    });
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
     await settleReactWork();
     expect(routed()).toHaveLength(1);
   });
@@ -421,9 +618,10 @@ describe("Chat on the first day", () => {
     expect(routed()[0]?.body).toMatchObject({
       text: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
     });
-    expect(takeFirstMessage(CREATED.id)).toBe(
-      frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
-    );
+    expect(created()[0]?.body).toMatchObject({
+      greeting: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+    });
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
 
   test("draws the plan without mail while that conversation is being made", async () => {
@@ -448,9 +646,10 @@ describe("Chat on the first day", () => {
     const view = openChat([], { user: userNamed("gmail-unread", "Maya") });
 
     await view.findByTestId("ongoing-chat");
-    expect(takeFirstMessage(CREATED.id)).toBe(
-      frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
-    );
+    expect(created()[0]?.body).toMatchObject({
+      greeting: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+    });
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
 
   test("waits for whether it can read mail before it greets", async () => {
@@ -467,7 +666,10 @@ describe("Chat on the first day", () => {
       ),
     );
     await view.findByTestId("ongoing-chat");
-    expect(takeFirstMessage(CREATED.id)).toBe(frameFirstDay(FIRST_DAY_REQUEST));
+    expect(created()[0]?.body).toMatchObject({
+      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+    });
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
 
   test("draws the greeting while the conversation is being made, with no Get to know me button", async () => {
@@ -487,13 +689,26 @@ describe("Chat on the first day", () => {
 
   test("with a conversation that has never had a message, it greets into that one", async () => {
     const quiet = summary("quiet-channel", null);
+    answerCreate = async () => Response.json({ channel: quiet });
     const view = openChat([quiet], { user: userNamed("quiet", "Maya") });
 
     const ongoing = await view.findByTestId("ongoing-chat");
     expect(ongoing.getAttribute("data-channel")).toBe(quiet.id);
-    expect(created()).toHaveLength(0);
+    expect(created()).toHaveLength(1);
     expect(routed()).toHaveLength(1);
-    expect(takeFirstMessage(quiet.id)).toBe(frameFirstDay(FIRST_DAY_REQUEST));
+    expect(created()[0]?.body).toMatchObject({
+      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+    });
+    expect(takeFirstMessage(quiet.id)).toBeNull();
+  });
+
+  test("another device's server claim opens its conversation without seeding a second greeting", async () => {
+    answerCreate = async () =>
+      Response.json({ start: { channel: CREATED, claimed: false } });
+    const view = openChat([], { user: userNamed("second-device", "Maya") });
+    const ongoing = await view.findByTestId("ongoing-chat");
+    expect(ongoing.getAttribute("data-channel")).toBe(CREATED.id);
+    expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
 
   test("with a conversation that already has a message, it sends nothing", async () => {

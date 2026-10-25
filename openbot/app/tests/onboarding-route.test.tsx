@@ -57,12 +57,14 @@ const BOT = {
 const originalFetch = globalThis.fetch;
 let saved: number;
 let saves: number[];
+let completed: boolean;
 
 beforeEach(() => {
   // Another file's screens may have cached the signed-in person in the app's one query client.
   queryClient.clear();
   saved = 0;
   saves = [];
+  completed = false;
   (globalThis as { Notification?: unknown }).Notification = {
     permission: "default",
     requestPermission: async () => "default",
@@ -79,11 +81,24 @@ beforeEach(() => {
             email: "maya@example.com",
             name: "Maya",
             role: "admin",
-            onboarding: { step: saved, completedAt: null },
+            onboarding: {
+              step: saved,
+              completedAt: completed ? "2026-10-23T00:00:00Z" : null,
+            },
           },
         });
       if (path === "/api/me/onboarding" && method === "POST") {
-        const body = JSON.parse(String(init?.body)) as { step: number };
+        const body = JSON.parse(String(init?.body)) as {
+          step?: number;
+          completed?: boolean;
+        };
+        if (body.completed) {
+          completed = true;
+          return Response.json({
+            onboarding: { step: saved, completedAt: "2026-10-23T00:00:00Z" },
+          });
+        }
+        if (body.step === undefined) throw new Error("Missing onboarding step");
         saves.push(body.step);
         saved = body.step;
         return Response.json({
@@ -182,6 +197,45 @@ test("Next adds a step to the address and to history, and saves it", async () =>
   expect(searchOf(view).step).toBe("computer");
   expect(view.history.length).toBe(2);
   await waitFor(() => expect(saves).toContain(2));
+});
+
+test("Next and Back start the visible step at the top of the scroll container", async () => {
+  const view = open("/onboarding?step=computer");
+  await heading(view, "Each Bot has its own computer");
+  const main = view.getByRole("main");
+  main.scrollTop = 120;
+
+  fireEvent.click(view.getByRole("button", { name: "Next" }));
+
+  const roster = await heading(view, "Pick a Bot or make your own");
+  await waitFor(() => expect(document.activeElement).toBe(roster));
+  expect(view.getByRole("main")).toBe(main);
+  expect(main.scrollTop).toBe(0);
+
+  main.scrollTop = 120;
+  fireEvent.click(view.getByRole("button", { name: "Back" }));
+
+  const computer = await heading(view, "Each Bot has its own computer");
+  await waitFor(() => expect(document.activeElement).toBe(computer));
+  expect(view.getByRole("main")).toBe(main);
+  expect(main.scrollTop).toBe(0);
+});
+
+test("updating the current step keeps its scroll position", async () => {
+  const view = open("/onboarding?step=apps");
+  await heading(view, "Connect your apps");
+  fireEvent.click(view.getByRole("button", { name: "Not now" }));
+  await heading(view, "Get notified");
+  const main = view.getByRole("main");
+  main.scrollTop = 120;
+
+  fireEvent.click(view.getByRole("button", { name: "Turn on notifications" }));
+
+  await view.findByText("You can turn them on later in Settings.");
+  expect(view.getByRole("button", { name: "Next" })).toBeTruthy();
+  expect(searchOf(view).step).toBe("notify");
+  expect(view.getByRole("main")).toBe(main);
+  expect(main.scrollTop).toBe(120);
 });
 
 test("browser Back goes to the step before, not out of onboarding", async () => {
@@ -304,4 +358,24 @@ test("the failed line goes once the person moves on, and doesn't come back with 
   expect(await heading(view, "Connect your apps")).toBeTruthy();
   await settleReactWork();
   expect(view.queryByRole("alert")).toBeNull();
+});
+
+test("finishing plays the orb's finish before entering Chat", async () => {
+  const view = open("/onboarding?step=setup");
+  await heading(view, "Check your setup");
+  fireEvent.click(view.getByRole("button", { name: "Start using OpenDuet" }));
+  await waitFor(() =>
+    expect(
+      view.container.querySelector(
+        '[data-onboarding-finish] [data-state="finished"]',
+      ),
+    ).not.toBeNull(),
+  );
+  expect(view.queryByText("Home")).toBeNull();
+  expect(
+    view.getByRole("button", { name: "Saving…" }).hasAttribute("disabled"),
+  ).toBe(true);
+  await waitFor(() => expect(view.getByText("Home")).toBeTruthy(), {
+    timeout: 3000,
+  });
 });

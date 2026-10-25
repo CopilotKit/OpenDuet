@@ -7,24 +7,21 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { AbstractAvatar } from "@/components/agents/abstract-avatar";
 import { HarnessMark } from "@/components/agents/harness-mark";
-import { MicOrb } from "@/components/duet/mic-orb";
 import { Composer } from "@/components/channels/composer";
-import { DesktopIllustration } from "@/components/computer/desktop-illustration";
-import { ComputerPlaceholder } from "@/components/computer/placeholder";
+import { FINISH_MS, MicOrb } from "@/components/duet/mic-orb";
 import { SELF_HOST_URL } from "@/components/layout/self-host-banner";
-import { IllustrationFrame } from "@/components/onboarding/illustration-frame";
+import { CapabilityDemo } from "@/components/onboarding/capability-demo";
 import { ConnectAppsStep } from "@/components/onboarding/connect-apps-step";
-import { LaptopIllustration } from "@/components/onboarding/laptop-illustration";
+import { IllustrationFrame } from "@/components/onboarding/illustration-frame";
 import { useNotifyStep } from "@/components/onboarding/notify-step";
 import {
   type OnboardingStep,
   OnboardingWizard,
 } from "@/components/onboarding/onboarding-wizard";
-import { OrganizationFlow } from "@/components/onboarding/organization-flow";
 import { SetupChecklist } from "@/components/onboarding/setup-checklist";
 import { buttonVariants } from "@/components/ui/button";
 import { primaryBot } from "@/lib/agents/primary-bot";
@@ -157,12 +154,12 @@ export const Route = createFileRoute("/_authed/onboarding")({
 function WelcomeStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
-      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center">
+      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         Welcome to {appConfig.brand.productName}
       </h1>
       <div className="h-8" />
       <IllustrationFrame
-        className="flex flex-col items-center px-8 pt-16 pb-10"
+        className="flex min-w-0 flex-col items-center px-4 pt-12 pb-8"
         label="A message box where you hand off tasks to your Bots"
       >
         <MicOrb size={72} />
@@ -185,7 +182,7 @@ function WelcomeStep() {
         <div className="max-w-md w-full mx-auto mt-10">
           <Composer
             compact
-            className="scale-90"
+            className="min-w-0"
             editorClassName="text-base"
             initialValue="Hand off tasks to your team of Bots"
           />
@@ -198,14 +195,11 @@ function WelcomeStep() {
 function ComputerUseStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
-      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center">
+      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         Each Bot has its own computer
       </h1>
       <div className="h-8" />
-      <div className="relative aspect-5/3 w-full max-w-lg rounded-2xl overflow-hidden border border-border">
-        <ComputerPlaceholder className="absolute inset-0 h-full w-full" />
-        <DesktopIllustration />
-      </div>
+      <CapabilityDemo kind="search" />
     </div>
   );
 }
@@ -247,13 +241,14 @@ function RosterStep() {
 
   return (
     <div className="w-full flex flex-col items-center justify-center">
-      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center">
+      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         Pick a Bot or make your own
       </h1>
       <div className="h-8" />
+      <CapabilityDemo kind="handoff" />
       <IllustrationFrame
-        className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6"
-        label={`Bots you can work with, such as ${roster.map((a) => a.name).join(", ")}, and one of your own`}
+        className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 p-4"
+        label={`Bot roster: ${roster.map((a) => `${a.name} (${a.example ? "example" : "available"})`).join(", ")}, and one of your own`}
       >
         {roster.map((a) => {
           return (
@@ -300,7 +295,7 @@ function RosterStep() {
 function LocalStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
-      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center">
+      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         It runs on your machine
       </h1>
       {/*
@@ -313,12 +308,7 @@ function LocalStep() {
         what you send to your model leaves it.
       </p>
       <div className="h-8" />
-      <IllustrationFrame
-        className="flex items-center justify-center px-8 py-12"
-        label={`A laptop running ${appConfig.brand.productName}`}
-      >
-        <LaptopIllustration />
-      </IllustrationFrame>
+      <CapabilityDemo kind="approval" />
     </div>
   );
 }
@@ -329,15 +319,16 @@ const FRAMEWORKS = WEB_HARNESSES.filter((harness) => harness.id !== "byo-url");
 function AgentsStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
-      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center">
+      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         Bring the agents you already have
       </h1>
       <p className="mt-3 max-w-md text-center text-muted-foreground">
         Any AG-UI agent can join as a Bot. Add one from Bots, then New Bot.
       </p>
       <div className="h-8" />
+      <CapabilityDemo kind="brief" />
       <IllustrationFrame
-        className="flex flex-wrap justify-center gap-2 p-6"
+        className="mt-4 flex flex-wrap justify-center gap-2 p-4"
         label={`Frameworks that work as Bots: ${FRAMEWORKS.map((harness) => harness.name).join(", ")}`}
       >
         {FRAMEWORKS.map((harness) => (
@@ -357,7 +348,7 @@ function AgentsStep() {
 function OrganizationStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
-      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center">
+      <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         Deploy it for your organization
       </h1>
       <p className="mt-3 max-w-md text-center text-muted-foreground">
@@ -365,18 +356,16 @@ function OrganizationStep() {
         people sign in with Google, Microsoft or Okta.
       </p>
       <div className="h-8" />
-      <IllustrationFrame
-        className="flex justify-center px-6 py-8"
-        label="Your people sign in with Google, Microsoft or Okta, and your organization gets its own rules, its own Bots and an audit trail"
-      >
-        <OrganizationFlow />
-      </IllustrationFrame>
+      <CapabilityDemo kind="task" />
       {/*
        * The one real control on these slides, so it sits outside the frame: a frame means picture.
        * A new tab, because following it must not cost this person their place in onboarding.
        */}
       <a
-        className={cn(buttonVariants({ variant: "outline" }), "mt-6")}
+        className={cn(
+          buttonVariants({ variant: "outline" }),
+          "mt-6 h-auto min-h-[44px] max-w-full whitespace-normal text-center",
+        )}
         href={SELF_HOST_URL}
         rel="noopener noreferrer"
         target="_blank"
@@ -397,7 +386,9 @@ function SetupStep({
   openPage,
   leaveFor,
   notice,
+  finished = false,
 }: {
+  finished?: boolean;
   openPage: (path: string) => void;
   leaveFor: (url: string) => void;
   notice?: string;
@@ -410,7 +401,9 @@ function SetupStep({
       <p className="type-sub mt-2.5 max-w-sm text-center text-duet-ink-2">
         See what's ready and what needs setting up.
       </p>
-      <div className="h-6" />
+      <div className="my-6" data-onboarding-finish={finished ? "" : undefined}>
+        <MicOrb size={56} state={finished ? "finished" : "idle"} />
+      </div>
       <SetupChecklist
         leaveFor={leaveFor}
         notice={notice}
@@ -508,8 +501,29 @@ function RouteComponent() {
   // The way out: set once the completion is saved, it fades the whole page and then navigates. The
   // destination is home, or the page a checklist row was opened for.
   const [leaving, setLeaving] = React.useState<string | null>(null);
-  const finish = (to = "/") =>
-    complete.mutate(undefined, { onSuccess: () => setLeaving(to) });
+  const [finishedTo, setFinishedTo] = React.useState<string | null>(null);
+  const reduced = useReducedMotion() === true;
+  const finish = (to = "/") => {
+    if (complete.isPending || finishedTo !== null) return;
+    complete.mutate(undefined, { onSuccess: () => setFinishedTo(to) });
+  };
+  React.useEffect(() => {
+    if (finishedTo === null) return;
+    const timer = setTimeout(
+      () => setLeaving(finishedTo),
+      reduced ? 150 : FINISH_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [finishedTo, reduced]);
+  React.useEffect(() => {
+    if (leaving === null) return;
+    // Navigation must also complete in a background tab, where animation frames may pause.
+    const timer = setTimeout(
+      () => navigate({ to: leaving as "/" }),
+      reduced ? 0 : 300,
+    );
+    return () => clearTimeout(timer);
+  }, [leaving, navigate, reduced]);
 
   /*
    * The three local slides, before the checklist, are for somebody evaluating OpenBot locally, never
@@ -559,6 +573,7 @@ function RouteComponent() {
       id: "setup",
       render: () => (
         <SetupStep
+          finished={finishedTo !== null}
           notice={
             failedOn === "setup"
               ? "Couldn't connect your Gmail and Calendar. Try again."
@@ -610,17 +625,12 @@ function RouteComponent() {
       animate={{ opacity: leaving ? 0 : 1 }}
       className={`min-h-svh w-full ${leaving ? "pointer-events-none" : ""}`}
       initial={false}
-      onAnimationComplete={() => {
-        if (leaving) {
-          navigate({ to: leaving as "/" });
-        }
-      }}
-      transition={{ duration: 0.5, ease: "easeInOut" }}
+      transition={{ duration: reduced ? 0 : 0.3, ease: "easeOut" }}
     >
       {waiting ? null : (
         <OnboardingWizard
           finishLabel={`Start using ${appConfig.brand.productName}`}
-          finishing={complete.isPending}
+          finishing={complete.isPending || finishedTo !== null}
           onMove={move}
           stepId={current}
           notice={

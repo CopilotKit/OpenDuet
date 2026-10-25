@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { createApp } from "../src/app";
 import { loadConfig } from "../src/config";
 import type { CredentialStatus } from "../src/credentials";
 import type { ModelCheckOutcome } from "../src/model-availability-check";
+import { createComputerCheck } from "../src/openduet/computer-check";
 import {
   createSetupSources,
   intelligenceFact,
@@ -43,6 +44,7 @@ const READY: SetupFacts = {
   gmail: { state: "ready", unavailable: null },
   primaryBot: "openduet",
   computer: true,
+  computerStatus: "ready",
   apps: { configured: true, provider: "composio" },
   chat: true,
 };
@@ -588,6 +590,7 @@ function appWith(input: {
   modelCheck?: () => ModelCheckOutcome;
   entitlements?: () => Promise<RuntimeEntitlementResponse>;
   computer?: boolean;
+  computerCheck?: () => Promise<"ready" | "needs_setup" | "not_checked">;
   apps?: boolean;
   chat?: boolean;
   signedIn?: boolean;
@@ -633,6 +636,7 @@ function appWith(input: {
     },
     primaryBot: "openduet",
     computer: input.computer ?? Boolean(config.computer),
+    computerCheck: input.computerCheck ?? (async () => "ready"),
     apps: { configured: input.apps ?? false, provider: "composio" },
     chat: input.chat ?? false,
   });
@@ -949,4 +953,197 @@ describe("GET /api/openduet/setup", () => {
       }
     }
   });
+});
+
+test("healthy sequential computer pushes keep their own deadlines in the checklist", async () => {
+  const first = Promise.withResolvers<void>();
+  const second = Promise.withResolvers<void>();
+  const recheckStarted = Promise.withResolvers<void>();
+  const replies = [
+    Promise.withResolvers<Response>(),
+    Promise.withResolvers<Response>(),
+  ];
+  const requested: string[] = [];
+  let listings = 0;
+  let entitlements = 0;
+  jest.useFakeTimers();
+  try {
+    const app = appWith({
+      environment: {},
+      who: "admin",
+      computer: true,
+      entitlements: async () => {
+        if (++entitlements === 2) recheckStarted.resolve();
+        return ENTITLED;
+      },
+      computerCheck: createComputerCheck({
+        provider: {
+          list: async () => {
+            listings += 1;
+            return [
+              { botId: "one", status: "running", url: "http://one.local" },
+              { botId: "two", status: "running", url: "http://two.local" },
+              {
+                botId: "sleeping",
+                status: "stopped",
+                url: "http://sleep.local",
+              },
+            ];
+          },
+        },
+        controls: () => ({
+          policyForBot: async () => ({ mode: "allow_all", rules: [] }),
+        }),
+        fetchImpl: Object.assign(
+          async (url: string | URL | Request) => {
+            requested.push(String(url));
+            const index = requested.length - 1;
+            (index === 0 ? first : second).resolve();
+            return replies[index]!.promise;
+          },
+          { preconnect() {} },
+        ),
+      }),
+    });
+    const answer = checklistFrom(app);
+    await first.promise;
+    const recheck = checklistFrom(app, "POST");
+    await recheckStarted.promise;
+    jest.advanceTimersByTime(3_000);
+    replies[0]!.resolve(new Response(null, { status: 204 }));
+    await second.promise;
+    jest.advanceTimersByTime(3_000);
+    replies[1]!.resolve(new Response(null, { status: 204 }));
+    expect(row((await answer).checklist.rows, "computer").status).toBe("ready");
+    expect(row((await recheck).checklist.rows, "computer").status).toBe(
+      "ready",
+    );
+    expect(listings).toBe(1);
+    expect(requested).toEqual([
+      "http://one.local/egress-policy",
+      "http://two.local/egress-policy",
+    ]);
+  } finally {
+    for (const reply of replies) reply.resolve(new Response());
+    jest.useRealTimers();
+  }
+});
+
+test("a configured computer that refuses its policy is Needs setup, then recovers on recheck", async () => {
+  let ready = false;
+  const tokens: Array<string | null> = [];
+  const app = appWith({
+    environment: {},
+    who: "admin",
+    computer: true,
+    computerCheck: createComputerCheck({
+      provider: {
+        list: async () => [
+          { botId: "one", status: "running", url: "http://one.local" },
+        ],
+      },
+      controls: () => ({
+        policyForBot: async () => ({ mode: "allow_all", rules: [] }),
+      }),
+      token: "configured-computer-token",
+      fetchImpl: Object.assign(
+        async (_url: string | URL | Request, init?: RequestInit) => {
+          tokens.push(
+            new Headers(init?.headers).get("x-openbot-computer-token"),
+          );
+          return new Response(null, { status: ready ? 204 : 401 });
+        },
+        { preconnect() {} },
+      ),
+    }),
+  });
+  const response = await app.request("/api/openduet/setup");
+  const first = await response.json();
+  expect(row(first.checklist.rows, "computer").status).toBe("needs_setup");
+  ready = true;
+  const after = await app.request("/api/openduet/setup/check", {
+    method: "POST",
+  });
+  expect(row((await after.json()).checklist.rows, "computer").status).toBe(
+    "ready",
+  );
+  expect(tokens).toEqual([
+    "configured-computer-token",
+    "configured-computer-token",
+  ]);
+});
+
+test.each(["list", "policy", "push"] as const)(
+  "a hung computer %s fails the checklist without stacking rechecks",
+  async (stage) => {
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const calls: string[] = [];
+    const enter = async (step: typeof stage) => {
+      calls.push(step);
+      if (step === stage) {
+        started.resolve();
+        await release.promise;
+      }
+    };
+    jest.useFakeTimers();
+    try {
+      const app = appWith({
+        environment: {},
+        who: "admin",
+        computer: true,
+        computerCheck: createComputerCheck({
+          provider: {
+            list: async () => {
+              await enter("list");
+              return [
+                { botId: "one", status: "running", url: "http://one.local" },
+              ];
+            },
+          },
+          controls: () => ({
+            policyForBot: async () => {
+              await enter("policy");
+              return { mode: "allow_all", rules: [] };
+            },
+          }),
+          fetchImpl: Object.assign(
+            async () => {
+              await enter("push");
+              return new Response(null, { status: 204 });
+            },
+            { preconnect() {} },
+          ),
+        }),
+      });
+      await started.promise;
+      jest.advanceTimersByTime(5_000);
+      expect(
+        row((await checklistFrom(app)).checklist.rows, "computer").status,
+      ).toBe("needs_setup");
+      expect(
+        row((await checklistFrom(app, "POST")).checklist.rows, "computer")
+          .status,
+      ).toBe("needs_setup");
+      expect(calls).toEqual(
+        ["list", "policy", "push"].slice(
+          0,
+          ["list", "policy", "push"].indexOf(stage) + 1,
+        ),
+      );
+    } finally {
+      release.resolve();
+      jest.useRealTimers();
+    }
+  },
+);
+
+test("a configured computer without a reachability verdict is not yet checked", () => {
+  const { computerStatus: _, ...facts } = READY;
+  expect(
+    row(
+      setupRows(facts, { productName: PRODUCT, audience: "admin" }),
+      "computer",
+    ).status,
+  ).toBe("not_checked");
 });

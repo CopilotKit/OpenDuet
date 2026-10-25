@@ -156,6 +156,7 @@ export type SetupFacts = {
   primaryBot: string;
   /** A Bot computer is configured. Absent, its routes are not mounted at all. */
   computer: boolean;
+  computerStatus?: SetupStatus;
   /** A broker for apps beyond the ones an admin adds, and which one this deployment would use. */
   apps: { configured: boolean; provider: BrokerProvider };
   /** The OpenTag pairing that carries Slack and Microsoft Teams. */
@@ -253,9 +254,11 @@ export function setupRows(
     gmailRow(facts, { product, admin, googleReady }),
     deployment({
       id: "computer",
-      title: "Bot computers",
+      title: "Bot computer",
       required: false,
-      status: facts.computer ? "ready" : "needs_setup",
+      status: facts.computer
+        ? (facts.computerStatus ?? "not_checked")
+        : "needs_setup",
       readyDetail: "Bots can browse the web and work with files.",
       gapDetail: "Without it, Bots can't browse the web or work with files.",
       fix: {
@@ -609,6 +612,8 @@ export function createSetupSources(input: {
   /** The Bot the first day runs on. See {@link primaryBotIdOf}. */
   primaryBot: string;
   computer: boolean;
+  /** Authenticated reachability and policy delivery, with per-operation deadlines and no wake. */
+  computerCheck?: () => Promise<SetupStatus>;
   apps: { configured: boolean; provider: BrokerProvider };
   chat: boolean;
 }): SetupSources {
@@ -624,6 +629,17 @@ export function createSetupSources(input: {
       intelligenceFact,
     );
 
+  const askComputer = async (): Promise<SetupStatus> => {
+    if (!input.computer) return "needs_setup";
+    if (!input.computerCheck) return "not_checked";
+    try {
+      // The fleet check owns its operation deadlines; one push's budget cannot cover the fleet.
+      return await input.computerCheck();
+    } catch {
+      return "needs_setup";
+    }
+  };
+  let computerStatus = askComputer();
   let intelligence = askIntelligence();
   let modelCheck: Promise<
     { outcome: ModelCheckOutcome; stamp: string | null } | undefined
@@ -636,18 +652,20 @@ export function createSetupSources(input: {
     productName: input.productName,
     localEvaluation: input.config.singleUser,
     facts: async (userId) => {
-      const [key, check, intelligenceNow, servers, gmail] = await Promise.all([
-        modelKeyOf(keyFacts),
-        modelCheck,
-        intelligence,
-        input.plugins.listServers(),
-        input.plugins.inspectApp({
-          app: GOOGLE_WORKSPACE,
-          agentId: input.primaryBot,
-          userId,
-          composioConfigured: input.apps.configured,
-        }),
-      ]);
+      const [key, check, intelligenceNow, servers, gmail, computerNow] =
+        await Promise.all([
+          modelKeyOf(keyFacts),
+          modelCheck,
+          intelligence,
+          input.plugins.listServers(),
+          input.plugins.inspectApp({
+            app: GOOGLE_WORKSPACE,
+            agentId: input.primaryBot,
+            userId,
+            composioConfigured: input.apps.configured,
+          }),
+          computerStatus,
+        ]);
       const google = servers.find((server) => server.id === GOOGLE_WORKSPACE);
       return {
         intelligence: intelligenceNow,
@@ -667,6 +685,7 @@ export function createSetupSources(input: {
           : null,
         primaryBot: input.primaryBot,
         computer: input.computer,
+        computerStatus: computerNow,
         apps: input.apps,
         chat: input.chat,
       };
@@ -676,6 +695,7 @@ export function createSetupSources(input: {
       if (lastRecheck && now - lastRecheck.at < RECHECK_INTERVAL_MS)
         return lastRecheck.done;
       intelligence = askIntelligence();
+      computerStatus = askComputer();
       const check = input.model.check;
       if (check) {
         modelCheck = (async () => {
@@ -683,7 +703,9 @@ export function createSetupSources(input: {
           return stamp === null ? undefined : { outcome: await check(), stamp };
         })().catch(() => undefined);
       }
-      const done = Promise.all([intelligence, modelCheck]).then(() => {});
+      const done = Promise.all([intelligence, modelCheck, computerStatus]).then(
+        () => {},
+      );
       lastRecheck = { at: now, done };
       return done;
     },

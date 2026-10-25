@@ -12,7 +12,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$PWD"
+ROOT="$(pwd -P)"
 LOGS="$ROOT/.logs"
 mkdir -p "$LOGS"
 
@@ -56,8 +56,32 @@ SUPERVISOR_PORT="$(setting SUPERVISOR_PORT 4500)"
 # was ignored: the supervisor was still started and the server still told to use it.
 ONE_COMPUTER_EACH="$(setting OPENBOT_ONE_COMPUTER_EACH true)"
 export APP_PORT SERVER_PORT
+
+# Whether this run changed a secret that something already running may not have.
+#
+# A process that is answering is not necessarily a process holding the current configuration, and
+# the two are easy to confuse because one is observable and the other is not. Everything below that
+# skips work because a service "is already up" has to consult this first.
+SECRETS_ROTATED=false
+
 SUPERVISOR_TOKEN="$(setting SUPERVISOR_TOKEN openbot-dev-supervisor-token)"
 COMPUTER_TOKEN="$(setting COMPUTER_TOKEN openbot-dev-computer-token)"
+# Keep the file and Compose in agreement even when someone later starts Bun directly.
+# An empty example value used to leave the API unauthenticated after that restart.
+STORED_COMPUTER_TOKEN="$(grep -E '^COMPUTER_TOKEN=' "$ROOT/.env" | tail -1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/" || true)"
+if [ "$STORED_COMPUTER_TOKEN" != "$COMPUTER_TOKEN" ]; then
+  token_env="$(mktemp)"
+  grep -vE '^COMPUTER_TOKEN=' "$ROOT/.env" > "$token_env" || true
+  printf '\nCOMPUTER_TOKEN=%s\n' "$COMPUTER_TOKEN" >> "$token_env"
+  chmod 600 "$token_env"
+  mv "$token_env" "$ROOT/.env"
+fi
+unset STORED_COMPUTER_TOKEN
+# File equality cannot detect a token edited before this run. Record only its digest, tied below
+# to the owned API listener's PID and start time; a direct restart cannot inherit an old stamp.
+COMPUTER_TOKEN_FINGERPRINT="$(printf '%s' "$COMPUTER_TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f1)"
+COMPUTER_STATE_FILE="$LOGS/server-computer.state"
+
 # A fixed default is fine here, unlike `AGENT_TOOL_TOKEN` below, but not because of where the server
 # listens — it binds no hostname, so this port is reachable from the network like any other. It is
 # fine because this is a dev-only default on a machine's own dev stack, and the endpoint it guards
@@ -82,13 +106,6 @@ WORKER_SHARED_SECRET="$(setting WORKER_SHARED_SECRET openbot-dev-worker-secret)"
 # inherit a URL that points at a process the image does not contain.
 MANAGED_AGENT_AG_UI_URL="$(setting MANAGED_AGENT_AG_UI_URL "http://localhost:${LANGGRAPH_PORT}/ag-ui")"
 export MANAGED_AGENT_AG_UI_URL
-
-# Whether this run minted a secret that something already running may not have.
-#
-# A process that is answering is not necessarily a process holding the current configuration, and
-# the two are easy to confuse because one is observable and the other is not. Everything below that
-# skips work because a service "is already up" has to consult this first.
-SECRETS_ROTATED=false
 
 MANAGED_AGENT_TOKEN="$(setting MANAGED_AGENT_TOKEN "")"
 if [ -z "$MANAGED_AGENT_TOKEN" ]; then
@@ -212,10 +229,45 @@ wait_for() {
   exit 1
 }
 
-stop_server_processes_for_restart() {
-  stop_matching "bun --env-file=../.env src/production-entry.ts"
-  stop_matching "bun --env-file=../.env src/index.ts"
+# The worker handoff probe says nothing about the API's computer credential. Reuse requires a
+# stamp from a successful launch with this token AND this same owned listener. The start time
+# prevents a recycled PID from making a stale stamp look current. Never inspect process secrets.
+server_computer_state() {
+  local pid started owned
+  pid="$(port_pids "$SERVER_PORT")"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  owned="$(openbot_matching_pids "bun --env-file=../.env src/production-entry.ts" "$ROOT/server")
+$(openbot_matching_pids "bun --env-file=../.env src/index.ts" "$ROOT/server")"
+  printf '%s\n' "$owned" | grep -Fxq "$pid" || return 1
+  if [ "${OS:-}" = Windows_NT ]; then
+    started="$(OPENBOT_PID="$pid" openbot_powershell '
+      Get-Process -Id $env:OPENBOT_PID -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.StartTime.ToUniversalTime().Ticks }')"
+  else
+    started="$(ps -p "$pid" -o lstart= 2>/dev/null)" || return 1
+  fi
+  [ -n "$started" ] || return 1
+  printf 'v1\n%s\n%s\n%s\n' "$COMPUTER_TOKEN_FINGERPRINT" "$pid" "$started"
 }
+
+stop_server_processes_for_restart() {
+  stop_matching "bun --env-file=../.env src/production-entry.ts" "$ROOT/server"
+  stop_matching "bun --env-file=../.env src/index.ts" "$ROOT/server"
+}
+
+# A pre-fix Windows launch has no absolute entry path, and CIM cannot tell us its cwd. Refuse
+# to guess which deployment owns it, including before reusing a stale API or duplicating a worker.
+if [ "${OS:-}" = Windows_NT ]; then
+  for pattern in "bun --env-file=../.env src/production-entry.ts" \
+    "bun --env-file=../.env src/index.ts" "bun worker/src/index.ts"; do
+    UNSCOPED_PIDS="$(openbot_windows_matching "$pattern" "$ROOT" unscoped)"
+    if [ -n "$UNSCOPED_PIDS" ]; then
+      red "A legacy Bun process uses a relative entry path; its deployment cannot be verified (PIDs: $(printf '%s' "$UNSCOPED_PIDS" | tr '\n' ' '))."
+      red "Stop that process in Task Manager, then rerun bash scripts/start.sh in its checkout."
+      exit 1
+    fi
+  done
+fi
 
 # The product's name, from the tenant package the server will load, so a renamed fork prints its own.
 # The server resolves a relative TENANT_PACKAGE_DIR from server/, so this does the same.
@@ -314,16 +366,29 @@ fi
 
 info "2/4  Server"
 require_free_or_ours "$SERVER_PORT" server
+COMPUTER_TOKEN_CHANGED=false
+if identifies_as_openbot "$SERVER_PORT" server; then
+  if ! CURRENT_COMPUTER_STATE="$(server_computer_state)"; then
+    red "  server: cannot verify listener ownership and launch time for this checkout"
+    red "  Stop that API yourself, then rerun bash scripts/start.sh in its checkout."
+    exit 1
+  fi
+  # A pre-stamp API is unknown, so restart it once. Never stamp a reused process whose actual
+  # launch credential is unknown, even when today's .env and Compose already agree.
+  if [ ! -r "$COMPUTER_STATE_FILE" ] || [ "$(cat "$COMPUTER_STATE_FILE")" != "$CURRENT_COMPUTER_STATE" ]; then
+    COMPUTER_TOKEN_CHANGED=true
+  fi
+fi
 #
-# A running server is left alone UNLESS this run minted a secret, because it read its environment
-# once at startup and has no way to notice the file changed underneath it.
+# A running server is left alone when its computer-token stamp matches and no other secret was
+# generated this run. It read its environment once at startup and cannot notice later file edits.
 #
 # Skipping it on "already answering" is the same mistake the Bot containers had: answering proves the
 # process is alive, not that it agrees with the deployment. A server holding the previous
 # `AGENT_TOOL_TOKEN` refuses every callback its own Bots make, which reaches a person as "no results"
 # rather than as an error.
-if [ "$SECRETS_ROTATED" = "true" ]; then
-  info "  a secret was generated this run, so the server is restarted to pick it up"
+if [ "$SECRETS_ROTATED" = "true" ] || [ "$COMPUTER_TOKEN_CHANGED" = "true" ]; then
+  info "  server: its computer credential is unverified or a secret changed, so it is restarted"
   stop_server_processes_for_restart
   sleep 1
 fi
@@ -360,48 +425,55 @@ if identifies_as_openbot "$SERVER_PORT" server; then
       ;;
   esac
 fi
+SERVER_LAUNCHED=false
 if ! identifies_as_openbot "$SERVER_PORT" server; then
+  rm -f "$COMPUTER_STATE_FILE"
+  SERVER_LAUNCHED=true
   if [ "$ONE_COMPUTER_EACH" = "true" ]; then
     (cd server && PORT="$SERVER_PORT" \
       COMPUTER_SUPERVISOR_URL="http://localhost:$SUPERVISOR_PORT" \
       SUPERVISOR_TOKEN="$SUPERVISOR_TOKEN" \
       COMPUTER_TOKEN="$COMPUTER_TOKEN" \
       WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
-      bun --env-file=../.env src/production-entry.ts >"$LOGS/server.log" 2>&1 &)
+      bun --env-file=../.env "$ROOT/server/src/production-entry.ts" >"$LOGS/server.log" 2>&1 &)
   else
     (cd server && PORT="$SERVER_PORT" \
       WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
-      bun --env-file=../.env src/production-entry.ts >"$LOGS/server.log" 2>&1 &)
+      bun --env-file=../.env "$ROOT/server/src/production-entry.ts" >"$LOGS/server.log" 2>&1 &)
   fi
 fi
 wait_for_openbot "$SERVER_PORT" server
+if [ "$SERVER_LAUNCHED" = "true" ]; then
+  if ! CURRENT_COMPUTER_STATE="$(server_computer_state)"; then
+    red "  server: cannot verify the launched listener's ownership and start time"
+    exit 1
+  fi
+  state_tmp="$(mktemp "$LOGS/server-computer.XXXXXX")"
+  chmod 600 "$state_tmp"
+  printf '%s\n' "$CURRENT_COMPUTER_STATE" > "$state_tmp"
+  mv "$state_tmp" "$COMPUTER_STATE_FILE"
+elif [ "$COMPUTER_TOKEN_CHANGED" = "true" ]; then
+  red "  server: the old API is still answering; its computer credential was not refreshed"
+  exit 1
+fi
 
 # The worker: a local stand-in for the routines CronJob, looping the same sweep
 # (`offerDueRoutines`/`dispatchClaimedRoutines`) a cluster would run on a schedule instead. Started
 # only now, because dispatching a claimed routine is one HTTP call to this server's own
 # /internal/routines/run, and the wait_for above is what confirms that call has somewhere to land.
 #
-# Guarded by a pgrep check rather than an HTTP health check, the same way the restart guard above
-# matches the server's own command line with `pkill -f`: the worker loop has no HTTP endpoint of its
-# own to ask, so "is a matching process already running" is the only signal a rerun of this script
-# has for "leave it alone."
-#
-# Launched from `$ROOT` with `bun worker/src/index.ts`, not `cd worker && bun src/index.ts`: on a
-# Linux host, container processes are visible to `pgrep` too, and `server/Dockerfile`,
-# `agent-computer/Dockerfile`, and `supervisor/Dockerfile` all run `bun src/index.ts` as their argv.
-# The old pattern matched those containers, the guard false-positived, and the worker silently never
-# started. `bun worker/src/index.ts` matches nothing else in the repo. Running from `$ROOT` is safe:
-# relative imports resolve from the importing file, not from the process's cwd.
-if ! running "bun worker/src/index.ts"; then
+# The worker has no HTTP endpoint, so only a matching process owned by this checkout is reused.
+# Its absolute entry path also distinguishes deployments on Windows, where CIM cannot report cwd.
+if ! running "bun worker/src/index.ts" "$ROOT"; then
   WORKER_DATABASE_URL="$(setting DATABASE_URL postgres://openbot:openbot@localhost:5432/openbot)"
   (cd "$ROOT" && \
     DATABASE_URL="$WORKER_DATABASE_URL" \
     SERVER_INTERNAL_URL="http://localhost:$SERVER_PORT" \
     WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
-    bun worker/src/index.ts >"$LOGS/worker.log" 2>&1 &)
+    bun "$ROOT/worker/src/index.ts" >"$LOGS/worker.log" 2>&1 &)
   info "  worker: started (routine sweep loop)"
   sleep 1
-  if ! running "bun worker/src/index.ts"; then
+  if ! running "bun worker/src/index.ts" "$ROOT"; then
     red "  worker: did not stay up, check $LOGS/worker.log"
   fi
 else
