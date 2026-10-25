@@ -109,6 +109,10 @@ function harness(options: {
   };
 
   const channelStore: ChannelStore = {
+    firstDay: () => unreachable("channels.firstDay"),
+    direct: () => unreachable("channels.direct"),
+    signalBusy: () => unreachable("channels.signalBusy"),
+    signalChannelBusy: () => unreachable("channels.signalChannelBusy"),
     create: () => unreachable("channels.create"),
     list: () => unreachable("channels.list"),
     setPinned: () => unreachable("channels.setPinned"),
@@ -166,7 +170,7 @@ describe("createRoutineRunner", () => {
       "Three people are blocked.",
     );
     expect(recorded.activity[0]?.activity.agentId).toBe(CONTEXT.agentId);
-    expect(recorded.finished).toEqual([
+    expect(recorded.finished).toStrictEqual([
       { runId: RUN_ID, status: "succeeded", error: undefined },
     ]);
     expect(recorded.enabled).toEqual([]);
@@ -269,7 +273,7 @@ describe("createRoutineRunner", () => {
 
     await runner.run(RUN_ID);
 
-    expect(recorded.finished).toEqual([
+    expect(recorded.finished).toStrictEqual([
       { runId: RUN_ID, status: "succeeded", error: undefined },
     ]);
   });

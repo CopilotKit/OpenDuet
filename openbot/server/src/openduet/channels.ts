@@ -141,7 +141,7 @@ export type DuetChannelStore = ReturnType<typeof createDuetChannelStore>;
 /** Every read and write is the person's own: another person's channel is the same as none. */
 export function createDuetChannelStore(deps: {
   database: Database;
-  channels: Pick<ChannelStore, "create" | "softDelete">;
+  channels: Pick<ChannelStore, "create">;
   /** Absent, a new channel opens silent. */
   hello?: ChannelHelloStarter;
   now?: () => Date;
@@ -280,31 +280,32 @@ export function createDuetChannelStore(deps: {
      * arrive.
      */
     async create(actor: AgentActor, input: NewChannel): Promise<ChannelRecord> {
-      const channel = await deps.channels.create(actor, [input.botId]);
-      try {
+      // direct() and Everything exclude workstreams by this metadata row. Publish the channel
+      // and its look together so neither reader can adopt a half-created workstream as Chat.
+      const channel = await database.transaction(async (transaction) => {
+        const channel = await deps.channels.create(
+          actor,
+          [input.botId],
+          transaction,
+        );
         const at = now();
-        await database.transaction(async (transaction) => {
-          await transaction
-            .update(channels)
-            .set({
-              name: input.name,
-              description: input.purpose,
-              updatedAt: at,
-            })
-            .where(eq(channels.id, channel.id));
-          await transaction.insert(openduetChannels).values({
-            channelId: channel.id,
-            icon: input.icon,
-            colour: input.colour,
-            createdAt: at,
+        await transaction
+          .update(channels)
+          .set({
+            name: input.name,
+            description: input.purpose,
             updatedAt: at,
-          });
+          })
+          .where(eq(channels.id, channel.id));
+        await transaction.insert(openduetChannels).values({
+          channelId: channel.id,
+          icon: input.icon,
+          colour: input.colour,
+          createdAt: at,
+          updatedAt: at,
         });
-      } catch (error) {
-        // Never leave a bare conversation behind: it would show up as a channel nobody named.
-        await deps.channels.softDelete(actor, channel.id).catch(() => {});
-        throw error;
-      }
+        return channel;
+      });
       if (deps.hello) {
         const run = deps
           .hello({
@@ -490,7 +491,9 @@ export function createChannelHello(deps: {
         { text: said, agentId, at: new Date() },
         { id },
       );
-    await deps.channels.signalBusy(channel.threadId, true).catch(() => {});
+    await deps.channels
+      .signalBusy(channel.threadId, true, runId)
+      .catch(() => {});
     try {
       const result = await deps.runTurn({
         ownerUserId,
@@ -507,7 +510,9 @@ export function createChannelHello(deps: {
       if (!(error instanceof HeadlessToolSuspension)) throw error;
       await record(error.message, `${runId}:waiting`);
     } finally {
-      await deps.channels.signalBusy(channel.threadId, false).catch(() => {});
+      await deps.channels
+        .signalBusy(channel.threadId, false, runId)
+        .catch(() => {});
     }
   };
 }

@@ -66,6 +66,7 @@ export function createPersonResponseTick(deps: {
         leaseMs: 10 * 60_000,
         limit: 1,
         maxAttempts: 1,
+        serialBy: "taskId",
       });
       if (!item) return;
       try {

@@ -4,6 +4,7 @@ import {
   beforeAll,
   expect,
   type Mock,
+  mock,
   spyOn,
   test,
 } from "bun:test";
@@ -14,7 +15,8 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode } from "react";
+import { type ComponentProps, StrictMode } from "react";
+import { z } from "zod";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { stashFirstMessage } from "@/components/channels/transcript-messages";
 import type { ApprovalInboxData, ApprovalRequest } from "@/lib/approvals";
@@ -50,6 +52,10 @@ let onConnect: (call: number) => Response;
 let onAsk: () => Response;
 let storedMessages: Message[] = [];
 let inbox: ApprovalInboxData;
+const busyRequestSchema = z.object({ busy: z.boolean(), runId: z.string() });
+type BusyRequest = z.infer<typeof busyRequestSchema>;
+let busyRequests: BusyRequest[] = [];
+let onBusy: (input: BusyRequest) => Response | Promise<Response>;
 
 function sse(events: unknown[]) {
   return new NativeResponse(
@@ -150,7 +156,14 @@ beforeAll(() => {
         runRequests.push(body);
         return onRun(body);
       }
-      if (/\/api\/channels\/[^/]+\/(activity|busy)$/.test(url.pathname))
+      if (/\/api\/channels\/[^/]+\/busy$/.test(url.pathname)) {
+        const request =
+          input instanceof Request ? input : new Request(url, init);
+        const body = busyRequestSchema.parse(await request.json());
+        busyRequests.push(body);
+        return onBusy(body);
+      }
+      if (/\/api\/channels\/[^/]+\/activity$/.test(url.pathname))
         return new NativeResponse(null, { status: 204 });
       if (url.pathname === "/api/voice/sessions")
         return NativeResponse.json({ sessions: [], nextCursor: null });
@@ -162,9 +175,15 @@ beforeAll(() => {
   );
 });
 let muted: Mock<typeof console.error> | undefined;
+let warned: Mock<typeof console.warn> | undefined;
 /** The SDK logs a refused run loudly; these tests refuse runs on purpose. */
 function quiet() {
   muted = spyOn(console, "error").mockImplementation(() => {});
+}
+/** Busy failures stay in diagnostics, without adding a user-facing turn failure. */
+function captureWarnings() {
+  warned = spyOn(console, "warn").mockImplementation(() => {});
+  return warned;
 }
 afterEach(() => {
   cleanup();
@@ -172,6 +191,8 @@ afterEach(() => {
   forgetSeedClaims();
   muted?.mockRestore();
   muted = undefined;
+  warned?.mockRestore();
+  warned = undefined;
 });
 afterAll(() => {
   GlobalRegistrator.unregister();
@@ -201,6 +222,8 @@ function reset({
   connectCalls = 0;
   storedMessages = stored;
   inbox = emptyInbox;
+  busyRequests = [];
+  onBusy = () => new NativeResponse(null, { status: 204 });
   onConnect = join;
   onAsk = () => NativeResponse.json({ threadId: "t", joinToken: "token" });
   onRun = (input) =>
@@ -211,7 +234,10 @@ function reset({
     ]);
 }
 
-function tree(channel: AgentChannel) {
+function tree(
+  channel: AgentChannel,
+  frontendTools?: ComponentProps<typeof CopilotKitProvider>["frontendTools"],
+) {
   queryClient.setQueryData(channelKeys.list(), {
     pages: [
       {
@@ -233,7 +259,10 @@ function tree(channel: AgentChannel) {
   });
   return (
     <QueryClientProvider client={queryClient}>
-      <CopilotKitProvider runtimeUrl="http://localhost/api/copilotkit">
+      <CopilotKitProvider
+        frontendTools={frontendTools}
+        runtimeUrl="http://localhost/api/copilotkit"
+      >
         <ChannelChat channel={channel} runtimeAgentId={BOT} />
       </CopilotKitProvider>
     </QueryClientProvider>
@@ -302,6 +331,98 @@ function approval(channel: AgentChannel, status: string): ApprovalRequest {
 }
 
 const LOCK_OR_ID = /locked|lock denied|[0-9a-f]{8}-[0-9a-f]{4}-|HTTP \d{3}/i;
+
+test.each(["fulfills", "rejects"])(
+  "a delayed busy start that %s is released with the same owner after unmount",
+  async (outcome) => {
+    const channel = freshChannel();
+    const started = Promise.withResolvers<Response>();
+    const running = heldJoin();
+    const failure = new TypeError("Response lost after busy claim committed");
+    reset();
+    const warnings = captureWarnings();
+    onBusy = ({ busy }) =>
+      busy ? started.promise : new NativeResponse(null, { status: 204 });
+    onRun = () => running.response;
+    const view = render(tree(channel));
+    await waitFor(() => expect(connectCalls).toBe(1));
+    await type(view, "Hello there");
+    await waitFor(() => expect(runRequests).toHaveLength(1));
+    expect(busyRequests).toHaveLength(1);
+    const owner = busyRequests[0]!.runId;
+    expect(owner).not.toBe("");
+    view.unmount();
+
+    await act(async () => {
+      const input = runRequests[0]!;
+      running.push([
+        { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+        ...said("hello-back", "Hello back."),
+        { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+      ]);
+      running.end();
+    });
+    // The turn can finish independently, but its release must wait for the start to settle.
+    expect(busyRequests).toEqual([{ busy: true, runId: owner }]);
+    if (outcome === "rejects") {
+      started.reject(failure);
+    } else {
+      started.resolve(new NativeResponse(null, { status: 204 }));
+    }
+    await waitFor(() =>
+      expect(busyRequests).toEqual([
+        { busy: true, runId: owner },
+        { busy: false, runId: owner },
+      ]),
+    );
+    if (outcome === "rejects")
+      expect(warnings).toHaveBeenCalledWith(
+        "Could not report channel busy state.",
+        failure,
+      );
+  },
+);
+
+test.each([
+  { notification: "start", failsWhenBusy: true },
+  { notification: "release", failsWhenBusy: false },
+])(
+  "a rejected busy $notification does not fail the turn or its next send",
+  async ({ failsWhenBusy }) => {
+    const channel = freshChannel();
+    reset();
+    const warnings = captureWarnings();
+    const failure = new TypeError("Busy notification connection dropped");
+    onBusy = ({ busy }) => {
+      if (busy === failsWhenBusy) throw failure;
+      return new NativeResponse(null, { status: 204 });
+    };
+    const view = render(tree(channel));
+    await waitFor(() => expect(connectCalls).toBe(1));
+    for (const turn of [1, 2]) {
+      await type(view, `Hello ${turn}`);
+      expect(await view.findByText(`Reply ${turn}`)).toBeTruthy();
+      await waitFor(() =>
+        expect(view.queryByRole("button", { name: "Stop the Bot" })).toBeNull(),
+      );
+      await waitFor(() => expect(busyRequests).toHaveLength(turn * 2));
+      const start = busyRequests[(turn - 1) * 2]!;
+      expect(start.busy).toBe(true);
+      expect(busyRequests[(turn - 1) * 2 + 1]).toEqual({
+        busy: false,
+        runId: start.runId,
+      });
+      expect(view.queryByText("Couldn't reach the Bot. Try again.")).toBeNull();
+      expect(warnings).toHaveBeenCalledTimes(turn);
+      expect(warnings).toHaveBeenLastCalledWith(
+        "Could not report channel busy state.",
+        failure,
+      );
+    }
+    expect(runRequests).toHaveLength(2);
+    expect(busyRequests[0]!.runId).not.toBe(busyRequests[2]!.runId);
+  },
+);
 
 test("a message sent after a turn that asked before acting is run, not dropped", async () => {
   const channel = freshChannel();
@@ -582,6 +703,84 @@ test.each([
     expect(runRequests).toHaveLength(2);
   },
   15_000,
+);
+
+test.each(["network failure", "thread conflict"])(
+  "a failed frontend-tool continuation (%s) restores the draft after the intermediate run finishes",
+  async (failure) => {
+    reset();
+    quiet();
+    const message =
+      failure === "thread conflict"
+        ? "The Bot couldn't continue because another turn started. Review what it already did before trying again."
+        : "Couldn't reach the Bot. Try again.";
+    const result = Promise.withResolvers<string>();
+    const tool = mock(() => result.promise);
+    const succeed = onRun;
+    onRun = (input) => {
+      if (runRequests.length === 2) {
+        if (failure === "thread conflict")
+          return NativeResponse.json(
+            { error: "Thread lock denied" },
+            { status: 409 },
+          );
+        throw new TypeError("Failed to fetch");
+      }
+      if (runRequests.length !== 1) return succeed(input);
+      return sse([
+        { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+        {
+          type: "TOOL_CALL_START",
+          toolCallId: "look",
+          toolCallName: "look",
+          parentMessageId: "looking",
+        },
+        { type: "TOOL_CALL_ARGS", toolCallId: "look", delta: "{}" },
+        { type: "TOOL_CALL_END", toolCallId: "look" },
+        { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+      ]);
+    };
+    const view = render(
+      tree(freshChannel(), [
+        { name: "look", handler: tool, parameters: z.object({}) },
+      ]),
+    );
+    await waitFor(() => expect(connectCalls).toBe(1));
+    await type(view, "Look at my screen");
+    await waitFor(() => expect(tool).toHaveBeenCalledTimes(1));
+    expect(view.getByRole("button", { name: "Stop the Bot" })).toBeTruthy();
+    expect(busyRequests).toHaveLength(1);
+    await act(async () => result.resolve("Looked."));
+    expect(await view.findByText(message)).toBeTruthy();
+    await waitFor(() =>
+      expect(view.getByRole("textbox", { name: "Message" }).textContent).toBe(
+        "Look at my screen",
+      ),
+    );
+    expect(
+      runRequests[1]!.messages.filter((message) => message.role === "tool"),
+    ).toMatchObject([{ toolCallId: "look", content: "Looked." }]);
+    await waitFor(() => expect(busyRequests).toHaveLength(2));
+    expect(busyRequests[1]).toEqual({
+      busy: false,
+      runId: busyRequests[0]!.runId,
+    });
+    expect(view.queryByRole("button", { name: "Stop the Bot" })).toBeNull();
+    expect(view.queryByText("Queued")).toBeNull();
+    expect(view.getAllByText("Look at my screen")).toHaveLength(2);
+    expect(runRequests).toHaveLength(2);
+    const user = userEvent.setup({ document: view.container.ownerDocument });
+    await user.click(view.getByRole("textbox", { name: "Message" }));
+    await user.keyboard("{Enter}");
+    expect(await view.findByText("Reply 3")).toBeTruthy();
+    expect(runRequests).toHaveLength(3);
+    expect(lastUserText(runRequests[2])).toBe("Look at my screen");
+    expect(runRequests[2]!.messages.slice(0, -1)).toEqual(
+      runRequests[1]!.messages,
+    );
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect(view.queryByText(message)).toBeNull();
+  },
 );
 
 test("a reload mid-run draws the stored transcript at once, keeps Stop past the join deadline, and lands the answer in the same tab", async () => {

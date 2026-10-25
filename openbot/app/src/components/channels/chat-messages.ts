@@ -2,13 +2,21 @@ import type { ActivityMessage, Message, ToolCall } from "@ag-ui/core";
 import { classifyAttachment } from "@/lib/channels/attachments";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import { readChannelHello } from "@/lib/channels/channel-hello";
+import { readTaskFrame } from "@openbot/shared/task-brief";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
  */
 
 export type VisibleChatItem =
-  | { kind: "text"; id: string; role: "user" | "assistant"; text: string }
+  | {
+      kind: "text";
+      id: string;
+      role: "user" | "assistant";
+      text: string;
+      /** One accepted reply may open several executions, each retaining its own row ID. */
+      taskInput?: { id: string; replay: boolean };
+    }
   | {
       kind: "tool";
       id: string;
@@ -286,8 +294,20 @@ function isReadableToolCall(toolCall: unknown): toolCall is ToolCall {
   return typeof (called as { name?: unknown }).name === "string";
 }
 
-/** A tool result, as it arrives, its own message, pointing back at the call it answers. */
-type ToolResultMessage = { role: "tool"; toolCallId: string; content?: string };
+/**
+ * Tool rows and their renderers consume text, while AG-UI permits multipart results. Concatenate
+ * text parts as AG-UI's `contentToText` does, without inserting characters into JSON or markers.
+ * Media has no renderer here and is omitted. An empty result still completes the call; only a
+ * missing result message means it is pending. Guard live content too, since it bypasses validation.
+ */
+function toolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => (isReadablePart(part) ? readText(part) : null))
+    .filter((part) => part !== null)
+    .join("");
+}
 
 /**
  * A MESSAGE THAT IS AN OBJECT AT ALL AND CARRIES AN ID, which is a lower bar than any guard above
@@ -295,8 +315,8 @@ type ToolResultMessage = { role: "tool"; toolCallId: string; content?: string };
  *
  * Every other guard in this file defends the INSIDE of a message — a bad part, a bad tool call, a
  * `content` that is not what it claims. This defends the message itself, and it has to, because a
- * hole in the array throws EARLIER than any of them: `isToolResult` reads `.role` in the
- * results-gathering pass that runs before the projection begins, so `[null]` cost the whole array
+ * hole in the array throws EARLIER than any of them: the results-gathering pass reads `.role`
+ * before the projection begins, so `[null]` cost the whole array
  * rather than the one hole in it, and every careful skip below was bypassed on the way past.
  *
  * Same stakes the rest of the file was written for, and the same answer: `toVisibleChatItems` runs
@@ -358,24 +378,20 @@ function isDrawableMessage(message: Readonly<Message>): boolean {
   return typeof id === "string" && id !== "";
 }
 
-function isToolResult(
-  message: Readonly<Message>,
-): message is Readonly<Message> & ToolResultMessage {
-  return message.role === "tool" && "toolCallId" in message;
-}
-
 export function toVisibleChatItems(
   messages: ReadonlyArray<Readonly<Message>>,
 ): VisibleChatItem[] {
   // Gather results first so calls render with their current completion state in the same pass.
-  const results = new Map<string, string | undefined>();
+  const results = new Map<string, string>();
   for (const message of messages) {
     // Both passes over this array are guarded, not just this one: a guard on only the first would
     // move the throw into the flatMap below rather than remove it.
     if (!isReadableMessage(message)) continue;
-    if (isToolResult(message)) results.set(message.toolCallId, message.content);
+    if (message.role === "tool" && typeof message.toolCallId === "string")
+      results.set(message.toolCallId, toolResultText(message.content));
   }
 
+  const acceptedInputs = new Set<string>();
   return messages.flatMap((message): VisibleChatItem[] => {
     if (!isReadableMessage(message)) return [];
     // Every row built below is keyed on `message.id`, including the one that keys on it by string
@@ -451,18 +467,39 @@ export function toVisibleChatItems(
       return [];
     }
 
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .map((part) => (isReadablePart(part) ? readText(part) : null))
+            .filter((part) => part !== null)
+            .join("\n");
     if (typeof message.content === "string") {
-      const text = message.content;
       // A new channel's hello: sent for the person, never by them. The Bot speaks first, so nothing
       // is drawn where their bubble would be (shared/channel-hello.ts).
       if (readChannelHello(text) !== null) return [];
-      return text ? [{ kind: "text", id: message.id, role: "user", text }] : [];
     }
-
-    const text = message.content
-      .map((part) => (isReadablePart(part) ? readText(part) : null))
-      .filter((part) => part !== null)
-      .join("\n");
+    const inputId = readTaskFrame(text)?.inputId;
+    const taskInput = inputId
+      ? { id: inputId, replay: acceptedInputs.has(inputId) }
+      : undefined;
+    if (inputId) acceptedInputs.add(inputId);
+    else if (message.id.startsWith("person-response:"))
+      acceptedInputs.add(message.id);
+    const words: VisibleChatItem[] = text
+      ? [
+          {
+            kind: "text",
+            id: message.id,
+            role: "user",
+            text,
+            ...(taskInput ? { taskInput } : {}),
+          },
+        ]
+      : [];
+    // Keep each execution boundary for tool/card grouping, but do not resend its attachments or
+    // present it as another human submission. The transcript draws a replay as an event.
+    if (typeof message.content === "string" || taskInput?.replay) return words;
 
     /*
      * ATTACHMENTS FIRST, THEN THE CAPTION, which is the order they are read in and the order every
@@ -563,7 +600,7 @@ export function toVisibleChatItems(
       });
     }
 
-    if (text) items.push({ kind: "text", id: message.id, role: "user", text });
+    items.push(...words);
 
     return items;
   });
@@ -661,6 +698,22 @@ export function repliesLast(
       return true;
     }
   };
+  const pageId = (item: VisibleChatItem): string | undefined => {
+    if (
+      item.kind !== "tool" ||
+      item.toolCall.function.name !== MAKE_PAGE ||
+      !item.result
+    )
+      return;
+    try {
+      let value = JSON.parse(item.result);
+      if (typeof value === "string") value = JSON.parse(value);
+      const id = value?.page?.id ?? value?.id;
+      return typeof id === "string" ? id : undefined;
+    } catch {
+      return;
+    }
+  };
   let ordered: VisibleChatItem[] = [];
   let pages: VisibleChatItem[] = [];
   let replies: { item: VisibleChatItem; ready: boolean }[] = [];
@@ -692,6 +745,8 @@ export function repliesLast(
         continue;
       }
       sinceRefusal = null;
+      const id = pageId(item);
+      if (id) pages = pages.filter((previous) => pageId(previous) !== id);
       pages.push(item);
       continue;
     }

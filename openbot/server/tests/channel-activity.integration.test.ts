@@ -1,4 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { frameFirstDay } from "@openbot/shared/first-day";
+import { FIRST_DAY_KIND } from "../src/channels/first-day";
 import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import {
@@ -17,8 +19,14 @@ import {
   agents,
   channels,
   intelligenceChannelMappings,
+  openduetChannels,
+  openduetTasks,
   users,
+  workItems,
 } from "../src/db/schema";
+import { createDuetChannelStore } from "../src/openduet/channels";
+import { createTaskStore } from "../src/openduet/task-store";
+import { createTaskThreads } from "../src/openduet/task-threads";
 import { TEST_POOL, testDatabaseUrl } from "./support/database";
 
 const databaseUrl = testDatabaseUrl();
@@ -43,6 +51,7 @@ afterEach(async () => {
     await database
       .delete(intelligenceChannelMappings)
       .where(eq(intelligenceChannelMappings.channelId, channelId));
+    await database.delete(workItems).where(eq(workItems.key, channelId));
     await database.delete(channels).where(eq(channels.id, channelId));
   }
   for (const agentId of createdAgentIds.splice(0)) {
@@ -250,6 +259,7 @@ describe("channel activity", () => {
     expect((await store.list(owner)).channels).toEqual([
       {
         ...channel,
+        busy: false,
         // Nothing has named this conversation: the sweep that does runs outside this store.
         summary: null,
         lastMessage: "Categorized three expenses.",
@@ -553,4 +563,427 @@ describe("finding or making a person's channel with one Bot", () => {
     expect(found.id).not.toBe(shared.id);
     expect(found.agentIds).toEqual([agentId]);
   });
+});
+
+test("simultaneous first-day starts share one conversation and only one greeting claim", async () => {
+  const owner = await createUser();
+  const bot = await createAgent(owner);
+  const starts = await Promise.all([
+    store.firstDay(owner, bot, frameFirstDay("Get to know me.")),
+    store.firstDay(owner, bot, frameFirstDay("Get to know me.")),
+  ]);
+  createdChannelIds.push(starts[0]!.channel.id);
+  expect(new Set(starts.map((start) => start.channel.id)).size).toBe(1);
+  expect(starts.filter((start) => start.claimed)).toHaveLength(1);
+  expect((await store.firstDay(owner, bot)).claimed).toBe(false);
+  const greetings = await database
+    .select()
+    .from(workItems)
+    .where(eq(workItems.key, starts[0]!.channel.id));
+  expect(greetings).toHaveLength(1);
+  expect(greetings[0]?.kind).toBe(FIRST_DAY_KIND);
+});
+
+for (const deletionAt of ["before hydration", "before claim"] as const) {
+  test(`first-day starts share one replacement when their selected conversation is deleted ${deletionAt}`, async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const previous = await createChannel(owner, [bot]);
+    const selected = Promise.withResolvers<void>();
+    const releaseReads = Promise.withResolvers<void>();
+    let waiting = 0;
+    const replicas = Array.from({ length: 2 }, () => {
+      const replica = createChannelStore(
+        database,
+        profileStore,
+        createThreadIdentity("test-deployment"),
+      );
+      const waitForDeletion = async () => {
+        waiting += 1;
+        if (waiting === 2) selected.resolve();
+        await releaseReads.promise;
+      };
+      // Only scheduling is controlled: lookup, claim, and deletion use PostgreSQL.
+      if (deletionAt === "before hydration") {
+        const get = replica.get;
+        replica.get = async (actor, channelId) => {
+          if (channelId === previous.id) await waitForDeletion();
+          return get(actor, channelId);
+        };
+      } else {
+        const direct = replica.direct;
+        let held = false;
+        replica.direct = async (actor, agentId) => {
+          const channel = await direct(actor, agentId);
+          if (channel.id === previous.id && !held) {
+            held = true;
+            await waitForDeletion();
+          }
+          return channel;
+        };
+      }
+      return replica;
+    });
+    const starts = Promise.all(
+      replicas.map(async (replica) => {
+        const start = await replica.firstDay(
+          owner,
+          bot,
+          frameFirstDay("Get to know me."),
+        );
+        createdChannelIds.push(start.channel.id);
+        return start;
+      }),
+    );
+    void starts.catch(selected.reject);
+    const timeout = setTimeout(
+      () =>
+        selected.reject(new Error("Both callers did not select the channel.")),
+      3_000,
+    );
+    try {
+      await selected.promise;
+      expect(await store.softDelete(owner, previous.id)).toBe(true);
+      releaseReads.resolve();
+      const [first, second] = await starts;
+      if (!first || !second)
+        throw new Error("Both first-day starts must finish.");
+
+      expect(first.channel.id).not.toBe(previous.id);
+      expect(second.channel.id).toBe(first.channel.id);
+      expect(second.channel.threadId).toBe(first.channel.threadId);
+      expect([first, second].filter((start) => start.claimed)).toHaveLength(1);
+      expect(
+        (await store.list(owner)).channels.map((channel) => channel.id),
+      ).toEqual([first.channel.id]);
+      const greetings = await database
+        .select({ key: workItems.key, kind: workItems.kind })
+        .from(workItems)
+        .where(
+          inArray(workItems.key, [
+            previous.id,
+            first.channel.id,
+            second.channel.id,
+          ]),
+        );
+      expect(greetings).toEqual([
+        { key: first.channel.id, kind: FIRST_DAY_KIND },
+      ]);
+      if (deletionAt === "before claim") {
+        const [deleted] = await database
+          .select({ startedAt: channels.firstDayStartedAt })
+          .from(channels)
+          .where(eq(channels.id, previous.id));
+        expect(deleted?.startedAt).toBeNull();
+        expect(await replicas[0]!.get(owner, first.channel.id)).toMatchObject({
+          id: first.channel.id,
+        });
+        expect(await replicas[1]!.get(owner, second.channel.id)).toMatchObject({
+          id: second.channel.id,
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      releaseReads.resolve();
+      await starts;
+    }
+  });
+}
+
+describe("creating a task or workstream conversation", () => {
+  function threadsFor(connection = database) {
+    return createTaskThreads({
+      database: connection,
+      store: createTaskStore(connection),
+      channels: createChannelStore(
+        connection,
+        createAgentProfileStore(
+          connection,
+          new URL("https://managed.example.test/ag-ui"),
+        ),
+        createThreadIdentity("test-deployment"),
+      ),
+      actorFor: async (id) => ({ id, role: "user" }),
+      scopeFor: async () => null,
+    });
+  }
+
+  function taskInput(owner: AgentActor, bot: string) {
+    return {
+      ownerUserId: owner.id,
+      agentId: bot,
+      title: "Prepare visit notes",
+      why: null,
+      origin: "asked" as const,
+      suggestionId: null,
+      sourceApp: null,
+      sourceLink: null,
+    };
+  }
+
+  for (const kind of ["task", "workstream"] as const) {
+    for (const outcome of ["commits", "rolls back"] as const) {
+      test(`${kind} creation ${outcome} without exposing an unclassified conversation`, async () => {
+        const owner = await createUser();
+        const bot = await createAgent(owner);
+        const applicationName = `conversation-creation-${randomUUID()}`;
+        const namedUrl = new URL(databaseUrl);
+        namedUrl.searchParams.set("application_name", applicationName);
+        // One connection catches a transaction that accidentally writes outside its own connection.
+        const creationDatabase = createDatabase(namedUrl.toString(), {
+          max: 1,
+        });
+        const hellos: string[] = [];
+        const workstreams = createDuetChannelStore({
+          database: creationDatabase,
+          channels: createChannelStore(
+            creationDatabase,
+            createAgentProfileStore(
+              creationDatabase,
+              new URL("https://managed.example.test/ag-ui"),
+            ),
+            createThreadIdentity("test-deployment"),
+          ),
+          hello: async ({ channel }) => {
+            hellos.push(channel.id);
+          },
+        });
+        const locked = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const table = kind === "task" ? openduetTasks : openduetChannels;
+        const tableName =
+          kind === "task" ? "openduet_tasks" : "openduet_channels";
+        const blocker = database.transaction(async (transaction) => {
+          // Readers still run: only the classification insert waits, after the channel is written.
+          await transaction.execute(sql`lock table ${table} in share mode`);
+          locked.resolve();
+          await release.promise;
+        });
+        void blocker.catch(locked.reject);
+        let opening:
+          | Promise<
+              PromiseSettledResult<{ channelId: string; taskId: string | null }>
+            >
+          | undefined;
+        try {
+          await locked.promise;
+          const creation =
+            kind === "task"
+              ? threadsFor(creationDatabase)
+                  .open(taskInput(owner, bot))
+                  .then((task) => ({
+                    channelId: task.channelId,
+                    taskId: task.id,
+                  }))
+              : workstreams
+                  .create(owner, {
+                    botId: bot,
+                    name: "Kiln move",
+                    purpose: "Moving the kiln to the new studio.",
+                    icon: "home",
+                    colour: "green",
+                  })
+                  .then((channel) => ({ channelId: channel.id, taskId: null }));
+          // Capture the result immediately; each outcome below explicitly checks success or failure.
+          opening = creation.then(
+            (value) => {
+              createdChannelIds.push(value.channelId);
+              return { status: "fulfilled" as const, value };
+            },
+            (reason: unknown) => ({ status: "rejected" as const, reason }),
+          );
+          const deadline = Date.now() + 3_000;
+          let blockedPid: number | undefined;
+          while (Date.now() < deadline) {
+            const waiting = await database.execute<{ pid: number }>(sql`
+              select pid from pg_stat_activity
+              where application_name = ${applicationName}
+                and wait_event_type = 'Lock'
+                and query ilike ${`insert into "${tableName}"%`}
+            `);
+            if (waiting[0]) {
+              blockedPid = waiting[0].pid;
+              break;
+            }
+            await Bun.sleep(10);
+          }
+          expect(blockedPid).toBeDefined();
+          expect(hellos).toEqual([]);
+          if (outcome === "rolls back") {
+            // A real PostgreSQL failure at the classification insert, without mutating table schema.
+            await database.execute(
+              sql`select pg_cancel_backend(${blockedPid})`,
+            );
+            expect(await opening).toMatchObject({
+              status: "rejected",
+              reason: { cause: { errno: "57014" } },
+            });
+            const rows = await database
+              .select({ id: channels.id })
+              .from(channels)
+              .innerJoin(
+                intelligenceChannelMappings,
+                eq(intelligenceChannelMappings.channelId, channels.id),
+              )
+              .where(eq(intelligenceChannelMappings.userId, owner.id));
+            createdChannelIds.push(...rows.map((row) => row.id));
+            // Read raw rows, including soft-deleted ones: compensating deletion is not rollback.
+            expect(rows).toHaveLength(0);
+            expect(hellos).toEqual([]);
+            return;
+          }
+
+          // Reader completion must be observed while classification is still held.
+          // A deadline fails the test; cleanup must never turn a late read into success.
+          const readers = [
+            store.firstDay(owner, bot, frameFirstDay("Get to know me.")),
+            store.firstDay(owner, bot, frameFirstDay("Get to know me.")),
+            store.direct(owner, bot).then((channel) => {
+              createdChannelIds.push(channel.id);
+              return channel;
+            }),
+          ] as const;
+          const timedOut = Promise.withResolvers<never>();
+          const readTimeout = setTimeout(
+            () =>
+              timedOut.reject(
+                new Error(
+                  "Readers did not finish while classification was held.",
+                ),
+              ),
+            3_000,
+          );
+          const [first, second, direct] = await Promise.race([
+            Promise.all(readers),
+            timedOut.promise,
+          ]).finally(async () => {
+            clearTimeout(readTimeout);
+            release.resolve();
+            await Promise.allSettled(readers);
+          });
+          expect(first.channel.id).toBe(direct.id);
+          expect(second.channel.id).toBe(direct.id);
+          expect([first, second].filter((start) => start.claimed)).toHaveLength(
+            1,
+          );
+
+          await blocker;
+          const result = await opening;
+          if (result.status === "rejected") throw result.reason;
+          const conversation = result.value;
+          expect(conversation.channelId).not.toBe(direct.id);
+          expect((await store.direct(owner, bot)).id).toBe(direct.id);
+          expect(
+            (await store.get(owner, conversation.channelId))?.agentIds,
+          ).toEqual([bot]);
+          if (kind === "task") {
+            const page = await store.list(owner);
+            expect(
+              page.channels.find((row) => row.id === conversation.channelId)
+                ?.taskId,
+            ).toBe(conversation.taskId);
+          } else {
+            expect(
+              await workstreams.get(owner.id, conversation.channelId),
+            ).toMatchObject({ dressed: true, name: "Kiln move" });
+            expect((await workstreams.list(owner.id, bot)).everythingId).toBe(
+              direct.id,
+            );
+            await workstreams.idle();
+            expect(hellos).toEqual([conversation.channelId]);
+          }
+          const greetings = await database
+            .select()
+            .from(workItems)
+            .where(eq(workItems.key, direct.id));
+          expect(greetings).toHaveLength(1);
+          expect(greetings[0]?.kind).toBe(FIRST_DAY_KIND);
+          expect(
+            await database
+              .select()
+              .from(workItems)
+              .where(eq(workItems.key, conversation.channelId)),
+          ).toHaveLength(0);
+        } finally {
+          release.resolve();
+          try {
+            await blocker;
+            await opening;
+          } finally {
+            await creationDatabase.$client.close();
+          }
+        }
+      });
+    }
+  }
+
+  test("a rejected task insert leaves no conversation for Chat to adopt", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    await expect(
+      threadsFor().open({
+        ...taskInput(owner, bot),
+        // A real foreign-key rejection after the channel has been inserted.
+        suggestionId: `missing-${randomUUID()}`,
+      }),
+    ).rejects.toMatchObject({ cause: { errno: "23503" } });
+    const page = await store.list(owner);
+    createdChannelIds.push(...page.channels.map((channel) => channel.id));
+    expect(page.channels).toHaveLength(0);
+  });
+});
+
+test("a refused second tab clears only its own busy claim", async () => {
+  const owner = await createUser();
+  const bot = await createAgent(owner);
+  const channel = await createChannel(owner, [bot]);
+  await store.signalChannelBusy(owner, channel.id, true, "tab-a");
+  await store.signalChannelBusy(owner, channel.id, true, "tab-b");
+  await store.signalChannelBusy(owner, channel.id, false, "tab-b");
+  const [row] = await database
+    .select({ claims: channels.busyClaims })
+    .from(channels)
+    .where(eq(channels.id, channel.id));
+  expect(Object.keys(row!.claims)).toEqual(["tab-a"]);
+});
+
+test("a __proto__ run owns a busy claim until it releases it", async () => {
+  const owner = await createUser();
+  const bot = await createAgent(owner);
+  const channel = await createChannel(owner, [bot]);
+  const runId = "__proto__";
+
+  await store.signalChannelBusy(owner, channel.id, true, runId);
+  const [started] = await database
+    .select({ claims: channels.busyClaims })
+    .from(channels)
+    .where(eq(channels.id, channel.id));
+  expect(Object.keys(started!.claims)).toEqual([runId]);
+  expect(started!.claims[runId]).toEqual(expect.any(Number));
+  expect((await store.list(owner)).channels[0]?.busy).toBe(true);
+
+  await store.signalChannelBusy(owner, channel.id, false, runId);
+  const [finished] = await database
+    .select({ claims: channels.busyClaims })
+    .from(channels)
+    .where(eq(channels.id, channel.id));
+  expect(finished!.claims).toEqual({});
+  expect((await store.list(owner)).channels[0]?.busy).toBe(false);
+});
+
+test("an explicit non-question result keeps a stripped draft tail from asking the person", async () => {
+  const owner = await createUser();
+  const bot = await createAgent(owner);
+  const channel = await createChannel(owner, [bot]);
+  await store.recordActivity(owner, channel.id, {
+    text: "Should we ship Friday?",
+    agentId: bot,
+    at: new Date(),
+    needsInput: false,
+  });
+  const [row] = await database
+    .select({ needsInput: channels.lastMessageNeedsInput })
+    .from(channels)
+    .where(eq(channels.id, channel.id));
+  expect(row?.needsInput).toBe(false);
 });

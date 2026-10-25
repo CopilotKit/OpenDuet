@@ -7,6 +7,7 @@ import { clockTime } from "@/lib/approval-view";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
 import { channelQueryOptions } from "@/lib/channels/queries";
 import {
+  replyToTaskMutationOptions,
   resolveTaskMutationOptions,
   tryTaskAgainMutationOptions,
 } from "@/lib/tasks/mutations";
@@ -74,7 +75,7 @@ export function TaskSheet({
               <header className="grid min-h-16 shrink-0 grid-cols-[44px_1fr_44px] items-center px-2 py-1">
                 <button
                   aria-label="Close"
-                  className="grid size-11 place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
+                  className="grid size-[44px] place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
                   onClick={onClose}
                   type="button"
                 >
@@ -131,6 +132,7 @@ function TaskBody({ task }: { task: TaskRecord }) {
   const busy = useConversationBusy(task.channelId);
   const status = liveStatus(task.status, busy);
   const resolve = useMutation(resolveTaskMutationOptions(queryClient));
+  const reply = useMutation(replyToTaskMutationOptions(queryClient));
   const again = useMutation(tryTaskAgainMutationOptions(queryClient));
   const conversation = useQuery(channelQueryOptions(task.channelId));
   const report = useQuery(taskReportQueryOptions(task.id, status));
@@ -150,7 +152,15 @@ function TaskBody({ task }: { task: TaskRecord }) {
    * the person's words as their own message, with the ask beside them, as the task's own turn.
    */
   const replyRunsTask = task.failure !== null && !serverTurn;
-  const error = resolve.error ?? again.error;
+  const [contextError, setContextError] = useState<Error | null>(null);
+  const error = contextError ?? resolve.error ?? again.error ?? reply.error;
+  function clearActionErrors() {
+    setContextError(null);
+    // A new action owns the notice; keep pending mutations attached so their busy state survives.
+    for (const mutation of [resolve, again, reply]) {
+      if (mutation.error) mutation.reset();
+    }
+  }
   // A turn in the conversation just ended: what it said and did belongs in the report now.
   const wasBusy = useRef(busy);
   useEffect(() => {
@@ -162,20 +172,23 @@ function TaskBody({ task }: { task: TaskRecord }) {
   }, [busy, task.id]);
   return (
     <>
-      <div className="flex shrink-0 flex-col gap-2 border-duet-hair-2 border-b px-5 pt-0.5 pb-3">
-        <p className="type-sub line-clamp-2 text-duet-ink-2">
+      <div className="flex max-h-[50%] shrink-0 flex-col gap-2 overflow-y-auto border-duet-hair-2 border-b px-5 pt-0.5 pb-3">
+        <p className="type-sub line-clamp-2 shrink-0 text-duet-ink-2">
           {noticedLine(task)}
         </p>
-        <div className="flex items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
             <TaskStatusPill status={status} />
             <ChannelTagOf channelId={task.fromChannelId} />
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             <TaskButton
               busy={resolve.isPending}
               label={done ? "Reopen this task" : "Mark this task done"}
-              onClick={() => resolve.mutate({ id: task.id, done: !done })}
+              onClick={() => {
+                clearActionErrors();
+                resolve.mutate({ id: task.id, done: !done });
+              }}
               primary={!done && !failed}
             >
               {done ? "Reopen" : "Mark done"}
@@ -184,7 +197,10 @@ function TaskBody({ task }: { task: TaskRecord }) {
               <TaskButton
                 busy={again.isPending}
                 label="Try this task again"
-                onClick={() => again.mutate({ id: task.id })}
+                onClick={() => {
+                  clearActionErrors();
+                  again.mutate({ id: task.id });
+                }}
                 primary
               >
                 Try again
@@ -238,17 +254,49 @@ function TaskBody({ task }: { task: TaskRecord }) {
             runtimeAgentId={task.botId}
             task={{
               busy: serverTurn,
-              ...(replyRunsTask
-                ? {
-                    send: async ({ text, messageId }) => {
-                      await again.mutateAsync({
-                        id: task.id,
-                        reply: text,
-                        messageId,
-                      });
-                    },
+              queued: task.queuedReplies ?? [],
+              durable: !replyRunsTask,
+              send: async ({ text, messageId, ...context }) => {
+                clearActionErrors();
+                if (replyRunsTask) {
+                  // A draft may have acquired files or skills before a background turn failed.
+                  // The retry endpoint carries words only; preserve the draft instead of dropping context.
+                  if (
+                    context.attachmentIds?.length ||
+                    context.skillIds?.length
+                  ) {
+                    const error = new Error(
+                      "This task now needs a retry. Remove attachments and skills before sending again.",
+                    );
+                    setContextError(error);
+                    throw error;
                   }
-                : {}),
+                  try {
+                    await again.mutateAsync({
+                      id: task.id,
+                      reply: text,
+                      messageId,
+                    });
+                    return;
+                  } catch (error) {
+                    if (
+                      !(error instanceof Error) ||
+                      !/already running|couldn't finish can be tried/i.test(
+                        error.message,
+                      )
+                    )
+                      throw error;
+                    // The durable reply now owns this send, including any failure it reports.
+                    again.reset();
+                  }
+                }
+                await reply.mutateAsync({
+                  ...context,
+                  id: task.id,
+                  reply: text,
+                  messageId,
+                });
+              },
             }}
           />
         )}

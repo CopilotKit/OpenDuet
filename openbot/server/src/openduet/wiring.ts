@@ -1,5 +1,5 @@
-import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import { randomUUID } from "node:crypto";
+import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import { eq } from "drizzle-orm";
 import type { AuditInitiator } from "../audit";
 import type { Database } from "../db/client";
@@ -218,6 +218,7 @@ export function createOpenDuetTools(deps: {
         }),
     }),
     ...pageTools({
+      get: (id) => pages.get(actorId, id),
       save: (input) => pages.save(actorId, botId, input),
       initiator,
     }),

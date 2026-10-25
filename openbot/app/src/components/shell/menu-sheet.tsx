@@ -1,11 +1,7 @@
 import { IconArchive, IconChevronRight, IconStack2 } from "@tabler/icons-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  conversationTitle,
-  firstMessageQueryOptions,
-} from "@/lib/channels/conversation-title";
 import { Link, type LinkOptions, useNavigate } from "@tanstack/react-router";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import { BotsNavBadge } from "@/components/bot-profile/attention";
 import { ChannelGlyph } from "@/components/duet/channel-look";
 import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
@@ -16,8 +12,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useOnScreen } from "@/hooks/use-on-screen";
 import { signOutMutationOptions } from "@/lib/auth/mutations";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import {
+  conversationTitle,
+  firstMessageQueryOptions,
+} from "@/lib/channels/conversation-title";
 import { deploymentCapabilitiesQueryOptions } from "@/lib/deployment/queries";
 import { archiveDuetChannelMutationOptions } from "@/lib/duet-channels/mutations";
 import type { DuetChannel } from "@/lib/duet-channels/queries";
@@ -486,15 +487,18 @@ function EarlierLink({
   const agentId =
     conversation.agentIds.length === 1 ? conversation.agentIds[0] : undefined;
   const said = conversation.lastMessageAt !== null;
+  const row = useRef<HTMLSpanElement>(null);
+  const wanted = Boolean(
+    !conversation.summary && conversation.threadId && agentId && said,
+  );
+  const onScreen = useOnScreen(row, wanted);
   const first = useQuery({
     ...firstMessageQueryOptions(
       conversation.threadId ?? "",
       agentId ?? "",
       said,
     ),
-    enabled: Boolean(
-      !conversation.summary && conversation.threadId && agentId && said,
-    ),
+    enabled: wanted && onScreen,
   });
   const title = conversationTitle({
     summary: conversation.summary,
@@ -509,7 +513,10 @@ function EarlierLink({
       params={{ channelId: conversation.id }}
       to="/channel/$channelId"
     >
-      <span className="block min-w-0 flex-1 truncate font-normal text-[16px] text-duet-ink">
+      <span
+        className="block min-w-0 flex-1 truncate font-normal text-[16px] text-duet-ink"
+        ref={row}
+      >
         {title}
       </span>
     </Link>

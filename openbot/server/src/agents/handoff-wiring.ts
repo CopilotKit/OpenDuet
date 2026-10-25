@@ -118,7 +118,8 @@ export async function startHandoffDelivery(deps: {
       },
       // The asking conversation shown as working while a hop runs in it. Keyed by thread, resolved
       // to its channel by the store; a scratch thread maps to none and signals nowhere.
-      setBusy: (input) => channelStore.signalBusy(input.threadId, input.busy),
+      setBusy: (input) =>
+        channelStore.signalBusy(input.threadId, input.busy, input.runId),
       newRunId: () => randomUUID(),
       // The same address and the same token the runtime uses. Assembling either from configuration
       // produced a runner every join was refused for, because the thread's active run is a lock the

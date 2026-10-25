@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { memo, type RefObject, useEffect, useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { DuetIcon } from "@/components/duet/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,17 +17,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useOnScreen } from "@/hooks/use-on-screen";
+import {
+  conversationTitle,
+  firstMessageQueryOptions,
+  plainText,
+} from "@/lib/channels/conversation-title";
 import {
   deleteChannelMutationOptions,
   setChannelPinnedMutationOptions,
 } from "@/lib/channels/mutations";
 import type { MessageListEmphasis } from "@/lib/settings/message-list";
 import { useTypedReveal } from "@/lib/typed-reveal";
-import {
-  conversationTitle,
-  firstMessageQueryOptions,
-  plainText,
-} from "@/lib/channels/conversation-title";
 import { ChannelItemContent } from "./channel-item-content";
 
 /**
@@ -240,29 +241,3 @@ export const Channel = memo(function Channel({
     </>
   );
 });
-
-/**
- * Whether an element is on screen. False where nothing can tell (no IntersectionObserver), so a row
- * never reads its thread unless it is known to be seen.
- */
-function useOnScreen(
-  element: RefObject<HTMLElement | null>,
-  /** Whether to watch at all: a row with a summary has its title already. */
-  watch: boolean,
-): boolean {
-  const [onScreen, setOnScreen] = useState(false);
-  useEffect(() => {
-    const target = element.current;
-    if (!watch || !target || typeof IntersectionObserver === "undefined")
-      return;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry?.isIntersecting) {
-        setOnScreen(true);
-        observer.disconnect();
-      }
-    });
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [element, watch]);
-  return onScreen;
-}

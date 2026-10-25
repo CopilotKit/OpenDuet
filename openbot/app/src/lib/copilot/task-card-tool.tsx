@@ -21,6 +21,7 @@ const parameters = z.object({ title: z.string().optional() });
 
 const startedSchema = z.object({
   taskId: z.string().min(1),
+  thumbnail: z.string().nullable().optional(),
   channelId: z.string().min(1),
   title: z.string(),
 });
@@ -72,6 +73,7 @@ export function ChatTaskCard({ started }: { started: StartedTask }) {
       }
       status={status}
       title={task?.title ?? started.title}
+      thumbnail={task?.thumbnail ?? started.thumbnail}
     />
   );
 }

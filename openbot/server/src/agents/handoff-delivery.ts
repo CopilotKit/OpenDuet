@@ -120,7 +120,11 @@ export function createHandoffDelivery(options: {
    * busy signal, so this leaves that leg alone rather than double it. Best-effort and paired in a
    * `finally`, so a channel never stays lit because a run threw.
    */
-  setBusy?: (input: { threadId: string; busy: boolean }) => Promise<void>;
+  setBusy?: (input: {
+    threadId: string;
+    runId: string;
+    busy: boolean;
+  }) => Promise<void>;
   newRunId: () => string;
   /**
    * How long one delivery may take before it is given up on.
@@ -265,10 +269,13 @@ export function createHandoffDelivery(options: {
        * addressed Bot thinking, off-screen, on behalf of a channel the person is watching.
        */
       const lightsAskingChannel = !work.answerIn;
+      const busyOwner = `handoff:${crypto.randomUUID()}`;
       if (lightsAskingChannel) {
-        await setBusy?.({ threadId: work.threadId, busy: true }).catch(
-          () => {},
-        );
+        await setBusy?.({
+          threadId: work.threadId,
+          runId: busyOwner,
+          busy: true,
+        }).catch(() => {});
       }
       try {
         /*
@@ -453,9 +460,11 @@ export function createHandoffDelivery(options: {
         }
       } finally {
         if (lightsAskingChannel) {
-          await setBusy?.({ threadId: work.threadId, busy: false }).catch(
-            () => {},
-          );
+          await setBusy?.({
+            threadId: work.threadId,
+            runId: busyOwner,
+            busy: false,
+          }).catch(() => {});
         }
       }
 

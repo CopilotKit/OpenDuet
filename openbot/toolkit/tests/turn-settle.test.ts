@@ -53,6 +53,42 @@ describe("settle", () => {
     });
   });
 
+  test("only accepted reply chips mark a completed turn as needing a choice", () => {
+    const chips: Message = {
+      id: "a",
+      role: "assistant",
+      content: "Pick a direction below.",
+      toolCalls: [
+        {
+          id: "chips",
+          type: "function",
+          function: {
+            name: "suggest_replies",
+            arguments: '{"replies":["First","Second"]}',
+          },
+        },
+      ],
+    };
+    const result = (content: string): Message => ({
+      id: "result",
+      role: "tool",
+      toolCallId: "chips",
+      content,
+    });
+    expect(
+      settle(
+        evidence({ added: [chips, result("The buttons are on screen.")] }),
+      ),
+    ).toMatchObject({ kind: "completed", replyChips: true });
+    expect(
+      settle(
+        evidence({
+          added: [chips, result("Refused. The turn is waiting for approval.")],
+        }),
+      ),
+    ).not.toHaveProperty("replyChips");
+  });
+
   test("falls back to the streamed chunks when nothing was added", () => {
     expect(settle(evidence({ chunks: ["One.", "Two."] }))).toEqual({
       kind: "completed",

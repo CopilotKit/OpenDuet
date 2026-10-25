@@ -7,6 +7,7 @@ import {
   test,
 } from "bun:test";
 import type { Message } from "@ag-ui/core";
+import { frameTaskInput, frameTaskReply } from "@openbot/shared/task-brief";
 import { CopilotKitContext } from "@copilotkit/react-core/v2/context";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -110,6 +111,54 @@ describe("Seen", () => {
   test("only on the newest of the person's messages", () => {
     const again: Message = { id: "u2", role: "user", content: "And Sam?" };
     expect(seen([asked, answer, again])).toBe("u2");
+  });
+
+  test("task retries keep execution outcomes without another person submission", () => {
+    const words = "Friday";
+    const messages: Message[] = [];
+    const counts: number[] = [];
+    const outcomes = [
+      "Outcome A",
+      "Outcome automatic",
+      "Outcome retry",
+      "Outcome B",
+    ];
+    const runs = ["accepted-a", "automatic-a", "try-again-a", "accepted-b"];
+    for (const [index, run] of runs.entries()) {
+      messages.push({
+        id: run,
+        role: "user",
+        content: frameTaskInput(frameTaskReply("Move the kiln", words), {
+          id: index === 3 ? "input-b" : "input-a",
+          text: words,
+        }),
+      });
+      const view = draw(messages, true);
+      counts.push(view.getAllByText(words).length);
+      expect(counts).toEqual([1, 1, 1, 2].slice(0, index + 1));
+      // Seen reads the real projection before this execution has answered.
+      expect(seenMessageId(toVisibleChatItems(messages))).toBe(
+        index === 0 || index === 3 ? run : null,
+      );
+      expect(
+        Array.from(
+          view.container.querySelectorAll('[data-scroll-anchor="true"]'),
+          (row) => row.getAttribute("data-message-id"),
+        ),
+      ).toEqual(index === 3 ? ["accepted-a", "accepted-b"] : ["accepted-a"]);
+      cleanup();
+      messages.push({
+        id: `outcome-${run}`,
+        role: "assistant",
+        content: outcomes[index],
+      });
+    }
+    expect(counts).toEqual([1, 1, 1, 2]);
+    const view = draw(messages);
+    expect(
+      view.getAllByText(/^Outcome /).map((node) => node.textContent),
+    ).toEqual(outcomes);
+    expect(view.getAllByText(words)).toHaveLength(2);
   });
 
   test("is drawn once the thread holds still, and survives a reload mid-turn", async () => {

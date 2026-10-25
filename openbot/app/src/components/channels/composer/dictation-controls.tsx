@@ -34,7 +34,7 @@ export function DictationButton({
           ? "Dictate a message"
           : "Dictation needs a supported browser and a secure (HTTPS) connection"
       }
-      className="h-9 w-[30px] shrink-0 self-end rounded-full text-duet-ink-2"
+      className="size-[44px] shrink-0 self-end rounded-full text-duet-ink-2"
       // Opening the voice sheet, it stays enabled under it, so × can hand the focus back.
       disabled={
         disabled || !dictation.supported || (dictation.busy && !onStart)

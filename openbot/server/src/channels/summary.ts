@@ -24,7 +24,11 @@ import {
   workItems,
 } from "../db/schema";
 import { DEFAULT_MAX_ATTEMPTS, type WorkQueue } from "../work/queue";
-import { CHANNEL_ACTIVITY_TOPIC, type ChannelActivityEvent } from "./events";
+import type { ChannelActivityEvent } from "./events";
+import {
+  announceChannelActivity,
+  MAX_CHANNEL_EVENT_TEXT_BYTES,
+} from "./notifications";
 import { oneLine } from "./text";
 
 export const CHANNEL_SUMMARY_KIND = "channel.summary";
@@ -251,7 +255,11 @@ async function summariseOne(
   const answer = await options.title(excerpt);
   if (!answer) return "nothing to name it with";
 
-  const title = oneLine(stripWrappingQuotes(answer), MAX_SUMMARY_GRAPHEMES);
+  const title = oneLine(
+    stripWrappingQuotes(answer),
+    MAX_SUMMARY_GRAPHEMES,
+    MAX_CHANNEL_EVENT_TEXT_BYTES,
+  );
   if (!title) return "nothing to name it with";
 
   return await options.database.transaction<Attempt>(
@@ -281,9 +289,7 @@ async function summariseOne(
         lastMessageAgentId: null,
         summary: title,
       };
-      await transaction.execute(
-        sql`select pg_notify(${CHANNEL_ACTIVITY_TOPIC}, ${JSON.stringify(event)})`,
-      );
+      await announceChannelActivity(transaction, event);
       return "written";
     },
     { isolationLevel: "read committed" },

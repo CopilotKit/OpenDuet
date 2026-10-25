@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +28,13 @@ async function writeExecutable(path: string, contents: string) {
  * all.
  */
 type Run = {
+  script?: "start" | "stop";
+  worker?: "own" | "other";
+  server?: "own" | "other";
+  serverStops?: boolean;
+  runningComputerToken?: string;
+  computerStamp?: "current" | "missing" | "previous-process";
+  repeatStart?: boolean;
   shell?: "bash" | "sh";
   omitFromEnv?: readonly string[];
   settings?: Record<string, string>;
@@ -28,8 +43,15 @@ type Run = {
 };
 
 async function runStartWithStaleServerProbe(
-  status: 401 | 404,
+  status: 400 | 401 | 404,
   {
+    script = "start",
+    worker = "own",
+    server = "own",
+    serverStops = true,
+    runningComputerToken,
+    computerStamp = "current",
+    repeatStart = false,
     shell = "bash",
     omitFromEnv = [],
     settings = {},
@@ -39,14 +61,37 @@ async function runStartWithStaleServerProbe(
 ) {
   const root =
     await Bun.$`mktemp -d ${tmpdir()}/openbot-start-guard-XXXXXX`.text();
-  const directory = root.trim();
+  const directory = await realpath(root.trim());
   const fakeBin = join(directory, "bin");
   const scripts = join(directory, "scripts");
-  const logPath = join(directory, "pkill.log");
+  const logPath = join(directory, "signals.log");
   const dockerLogPath = join(directory, "docker.log");
   const curlLogPath = join(directory, "curl.log");
   await mkdir(fakeBin, { recursive: true });
   await mkdir(scripts, { recursive: true });
+  await mkdir(join(directory, "server"));
+  await mkdir(join(directory, ".logs"));
+  const storedToken = (settings.COMPUTER_TOKEN ?? "computer-token")
+    .replace(/^"(.*)"$/, "$1")
+    .replace(/^'(.*)'$/, "$1");
+  const runtimeToken = runningComputerToken ?? storedToken;
+  await writeFile(join(directory, "server-computer-token"), runtimeToken);
+  if (computerStamp !== "missing") {
+    const fingerprint = createHash("sha256").update(runtimeToken).digest("hex");
+    await writeFile(
+      join(directory, ".logs/server-computer.state"),
+      `v1\n${fingerprint}\n91000001\n${computerStamp === "previous-process" ? "previous-start" : "fixture-start"}\n`,
+    );
+  }
+  await writeFile(
+    join(directory, "bash-env"),
+    `kill() {
+  printf '%s\\n' "$*" >> "$SIGNAL_LOG"
+  if [ "$SERVER_STOPS" = 1 ]; then
+    case "$1" in 91000001|91000002) : > "$SERVER_STOPPED" ;; esac
+  fi
+}\n`,
+  );
   const environment = [
     "APP_PORT=3010",
     "SERVER_PORT=3001",
@@ -73,10 +118,10 @@ async function runStartWithStaleServerProbe(
   );
   await writeFile(join(directory, ".env"), `${environment.join("\n")}\n`);
   await writeFile(
-    join(scripts, "start.sh"),
-    await readFile("scripts/start.sh"),
+    join(scripts, `${script}.sh`),
+    await readFile(`scripts/${script}.sh`),
   );
-  await chmod(join(scripts, "start.sh"), 0o755);
+  await chmod(join(scripts, `${script}.sh`), 0o755);
   // Copied beside it because `start.sh` sources it by its own directory, so a temp root without it
   // would fail on a missing file rather than on whatever the test is about.
   await writeFile(
@@ -90,7 +135,26 @@ async function runStartWithStaleServerProbe(
 
   await writeExecutable(
     join(fakeBin, "lsof"),
-    '#!/usr/bin/env bash\necho "p123"\necho "cbun"\necho "n*:3001"\n',
+    `#!/usr/bin/env bash
+if [ "$1" = -a ]; then
+  case "$3" in
+    91000003) printf 'n%s/other/server\\n' "$STACK_ROOT" ;;
+    91000005)
+      if [ "$WORKER_OWNER" = own ] || [ -f "$WORKER_STARTED" ]; then
+        printf 'n%s\\n' "$STACK_ROOT"
+      else
+        printf 'n%s/other\\n' "$STACK_ROOT"
+      fi ;;
+    *) printf 'n%s/server\\n' "$STACK_ROOT" ;;
+  esac
+elif [ "$STOP_ONLY" != 1 ] && [ "$1" = -t ]; then
+  if [ -f "$SERVER_STARTED" ]; then echo 91000006
+  elif [ "$SERVER_OWNER" = own ]; then echo 91000001
+  else echo 91000003; fi
+elif [ "$STOP_ONLY" != 1 ]; then
+  printf 'p123\\ncbun\\nn*:3001\\n'
+fi
+`,
   );
   await writeExecutable(
     join(fakeBin, "curl"),
@@ -105,6 +169,7 @@ if [[ "$args" == *"/internal/routines/run"* ]]; then
   exit 0
 fi
 if [[ "$args" == *"/api/copilotkit/info"* ]]; then
+  if [ -f "$SERVER_STOPPED" ] && [ ! -f "$SERVER_STARTED" ]; then exit 7; fi
   printf '{"licenseStatus":"valid","mode":"test","agents":{"analyst":{}}}'
   exit 0
 fi
@@ -120,6 +185,7 @@ exit 0
     `#!/usr/bin/env bash
 args="$*"
 printf '%s\\n' "$args" >> "$DOCKER_LOG"
+if [[ "$args" == *"compose up"* ]]; then printf '%s' "$COMPUTER_TOKEN" > "$COMPOSE_COMPUTER_TOKEN"; fi
 if [[ "$args" == *"to_regclass('public.agent_profiles')"* ]]; then echo agent_profiles; fi
 if [[ "$args" == *"to_regclass('public.agent_preferences')"* ]]; then echo agent_preferences; fi
 exit 0
@@ -127,22 +193,80 @@ exit 0
   );
   await writeExecutable(
     join(fakeBin, "pgrep"),
-    "#!/usr/bin/env bash\nexit 0\n",
+    `#!/usr/bin/env bash
+if [[ "$*" == *worker/src/index.ts* ]]; then : > "$WORKER_CHECKED"; fi
+if [ -f "$SERVER_STARTED" ]; then echo 91000006; else printf '%s\\n' 91000001 91000002; fi
+printf '%s\\n' 91000003 91000004 91000005
+`,
+  );
+  await writeExecutable(
+    join(fakeBin, "ps"),
+    `#!/usr/bin/env bash
+case "$4" in
+  lstart=) echo fixture-start ;;
+  comm=) case "$2" in 91000004) echo /bin/bash ;; *) echo /opt/bun ;; esac ;;
+  args=)
+    case "$2" in
+      91000006) printf 'bun --env-file=../.env %s/server/src/production-entry.ts\\n' "$STACK_ROOT" ;;
+      91000001|91000003) echo 'bun --env-file=../.env src/production-entry.ts' ;;
+      91000002) echo 'bun --env-file=../.env src/index.ts' ;;
+      91000004) echo 'bash -c bun --env-file=../.env src/production-entry.ts' ;;
+      91000005) echo 'bun worker/src/index.ts' ;;
+    esac ;;
+esac
+`,
+  );
+  await writeExecutable(
+    join(fakeBin, "powershell.exe"),
+    `#!/usr/bin/env bash
+if [ -n "\${OPENBOT_PID:-}" ]; then
+  echo fixture-start
+elif [ "\${OPENBOT_ACTION:-}" = unscoped ]; then
+  if [ "\${LEGACY_WINDOWS_PROCESS:-}" = 1 ]; then echo 91000001; fi
+elif [ "\${OPENBOT_ACTION:-}" = stop ] && [ "\${OPENBOT_CWD:-}" = "$STACK_ROOT/server" ]; then
+  : > "$SERVER_STOPPED"
+elif [ "\${OPENBOT_PATTERN:-}" = 'bun worker/src/index.ts' ]; then
+  : > "$WORKER_CHECKED"
+  if [ -f "$WORKER_STARTED" ]; then echo 91000005; fi
+elif [ "\${OPENBOT_PATTERN:-}" = 'bun --env-file=../.env src/production-entry.ts' ]; then
+  if [ -f "$SERVER_STARTED" ]; then echo 91000006; else echo 91000001; fi
+fi
+`,
   );
   await writeExecutable(
     join(fakeBin, "pkill"),
-    '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$PKILL_LOG"\nexit 0\n',
+    '#!/usr/bin/env bash\nprintf "GLOBAL %s\\n" "$*" >> "$SIGNAL_LOG"\nexit 0\n',
   );
   await writeExecutable(
     join(fakeBin, "sleep"),
-    "#!/usr/bin/env bash\nexit 0\n",
+    `#!/usr/bin/env bash
+# The first pause follows the signal, before the new API is launched. Later pauses wait for
+# the fake background launch to acknowledge readiness, with a bounded fixture-only deadline.
+if [ -f "$SERVER_STOPPED" ] && [ ! -f "$SERVER_STARTED" ]; then
+  if [ -f "$SERVER_RESTART_PAUSED" ]; then
+    for ((attempt=0; attempt<200; attempt++)); do
+      [ -f "$SERVER_STARTED" ] && break
+      /bin/sleep 0.01
+    done
+  else
+    : > "$SERVER_RESTART_PAUSED"
+  fi
+fi
+# The worker readiness check follows its launch immediately.
+if [ -f "$WORKER_CHECKED" ] && [ ! -f "$WORKER_STARTED" ]; then
+  for ((attempt=0; attempt<200; attempt++)); do
+    [ -f "$WORKER_STARTED" ] && break
+    /bin/sleep 0.01
+  done
+fi
+`,
   );
   // The runtime health check is a script piped into `bun run -`, so that one invocation is the real
   // Bun: it is what decides whether the run carries on. Everything else Bun would start is faked.
   // The Learning container check answers with one line, which start.sh relays.
   await writeExecutable(
     join(fakeBin, "bun"),
-    '#!/usr/bin/env bash\nif [ "$1" = run ] && [ "$2" = - ]; then exec "$REAL_BUN" "$@"; fi\nif [ "$1" = scripts/setup-learning.ts ]; then echo "noise"; echo "LEARNING-CHECK $*"; fi\nexit 0\n',
+    '#!/usr/bin/env bash\nif [[ "$2" == *server/src/production-entry.ts ]]; then printf "%s" "$COMPUTER_TOKEN" > "$SERVER_COMPUTER_TOKEN"; printf "%s\\n" "$*" > "$SERVER_STARTED"; fi\nif [[ "$1" == *worker/src/index.ts ]]; then printf "%s\\n" "$*" > "$WORKER_STARTED"; fi\nif [ "$1" = run ] && [ "$2" = - ]; then exec "$REAL_BUN" "$@"; fi\nif [ "$1" = scripts/setup-learning.ts ]; then echo "noise"; echo "LEARNING-CHECK $*"; fi\nexit 0\n',
   );
   // What `python3` is on a stock Windows machine: the Microsoft Store alias, which runs nothing. A
   // script that still needed it would stop at the health check in every test in this file.
@@ -152,26 +276,41 @@ exit 0
   );
 
   try {
-    const child = Bun.spawn({
-      cmd: [shell, "scripts/start.sh"],
+    const spawnOptions = {
+      cmd: [shell, `scripts/${script}.sh`],
       cwd: directory,
       env: {
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         REAL_BUN: process.execPath,
-        PKILL_LOG: logPath,
+        OS: "",
+        STOP_ONLY: script === "stop" ? "1" : "0",
+        BASH_ENV: join(directory, "bash-env"),
+        STACK_ROOT: directory,
+        WORKER_OWNER: worker,
+        SERVER_OWNER: server,
+        SERVER_STOPS: serverStops ? "1" : "0",
+        SERVER_COMPUTER_TOKEN: join(directory, "server-computer-token"),
+        COMPOSE_COMPUTER_TOKEN: join(directory, "compose-computer-token"),
+        WORKER_STARTED: join(directory, "worker-started"),
+        WORKER_CHECKED: join(directory, "worker-checked"),
+        SERVER_STOPPED: join(directory, "server-stopped"),
+        SERVER_STARTED: join(directory, "server-started"),
+        SERVER_RESTART_PAUSED: join(directory, "server-restart-paused"),
+        SIGNAL_LOG: logPath,
         DOCKER_LOG: dockerLogPath,
         CURL_LOG: curlLogPath,
         ...processEnvironment,
       },
       stdout: "pipe",
       stderr: "pipe",
-    });
+    } as const;
+    const child = Bun.spawn(spawnOptions);
     const [exitCode, stdout, stderr] = await Promise.all([
       child.exited,
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    const pkillLog = await Bun.file(logPath)
+    const signalLog = await Bun.file(logPath)
       .text()
       .catch(() => "");
     const dockerLog = await Bun.file(dockerLogPath)
@@ -180,13 +319,66 @@ exit 0
     const curlLog = await Bun.file(curlLogPath)
       .text()
       .catch(() => "");
-    return { exitCode, stdout, stderr, pkillLog, dockerLog, curlLog };
+    const computerState = await Bun.file(
+      join(directory, ".logs/server-computer.state"),
+    )
+      .text()
+      .catch(() => "");
+    let repeated:
+      | { exitCode: number; stdout: string; stderr: string; signalLog: string }
+      | undefined;
+    if (repeatStart && exitCode === 0) {
+      await writeFile(logPath, "");
+      const next = Bun.spawn(spawnOptions);
+      const [nextExitCode, nextStdout, nextStderr] = await Promise.all([
+        next.exited,
+        new Response(next.stdout).text(),
+        new Response(next.stderr).text(),
+      ]);
+      repeated = {
+        exitCode: nextExitCode,
+        stdout: nextStdout,
+        stderr: nextStderr,
+        signalLog: await readFile(logPath, "utf8"),
+      };
+    }
+    return {
+      repeated,
+      computerState,
+      runtimeComputerToken: await readFile(
+        join(directory, "server-computer-token"),
+        "utf8",
+      ),
+      composeComputerToken: await Bun.file(
+        join(directory, "compose-computer-token"),
+      )
+        .text()
+        .catch(() => ""),
+      exitCode,
+      stdout,
+      stderr,
+      signalLog,
+      dockerLog,
+      curlLog,
+      serverLaunch: await Bun.file(join(directory, "server-started"))
+        .text()
+        .catch(() => ""),
+      workerLaunch: await Bun.file(join(directory, "worker-started"))
+        .text()
+        .catch(() => ""),
+      directory,
+      savedEnvironment: await Bun.file(join(directory, ".env")).text(),
+    };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 describe("start.sh server restart guard", () => {
+  function expectServerRestart(signalLog: string) {
+    expect(signalLog).toBe("91000001\n91000002\n");
+  }
+
   test.each([401, 404] as const)(
     "stops both current and legacy server launch patterns after handoff probe %s",
     async (status) => {
@@ -196,12 +388,206 @@ describe("start.sh server restart guard", () => {
         exitCode: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
-        pkillLog: result.pkillLog,
+        signalLog: result.signalLog,
       }).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(result.pkillLog).toContain(
-        "bun --env-file=../.env src/production-entry.ts",
+      expectServerRestart(result.signalLog);
+    },
+  );
+
+  test("a changed computer token restarts a healthy server whose worker secret still matches", async () => {
+    const result = await runStartWithStaleServerProbe(400, {
+      processEnvironment: { COMPUTER_TOKEN: "new-development-token" },
+    });
+
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(result.savedEnvironment).toMatch(
+      /^COMPUTER_TOKEN=new-development-token$/m,
+    );
+    expectServerRestart(result.signalLog);
+    expect(result.serverLaunch).toBe(
+      `--env-file=../.env ${result.directory}/server/src/production-entry.ts\n`,
+    );
+  });
+
+  test.each(["true", "false"])(
+    "an edited .env refreshes the running API's computer credential with a healthy worker probe (one computer each: %s)",
+    async (oneComputerEach) => {
+      const result = await runStartWithStaleServerProbe(400, {
+        settings: {
+          COMPUTER_TOKEN: "manually-edited-token",
+          OPENBOT_ONE_COMPUTER_EACH: oneComputerEach,
+        },
+        runningComputerToken: "previous-runtime-token",
+        repeatStart: true,
+      });
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
+      expectServerRestart(result.signalLog);
+      expect(result.runtimeComputerToken).toBe("manually-edited-token");
+      expect(result.composeComputerToken).toBe(result.runtimeComputerToken);
+      expect(result.computerState).not.toContain("manually-edited-token");
+      expect(result.stdout).not.toContain("manually-edited-token");
+      expect(result.stdout).not.toContain("previous-runtime-token");
+      expect(result.computerState).toBe(
+        `v1\n${createHash("sha256").update("manually-edited-token").digest("hex")}\n91000006\nfixture-start\n`,
       );
-      expect(result.pkillLog).toContain("bun --env-file=../.env src/index.ts");
+      expect(result.repeated).toMatchObject({
+        exitCode: 0,
+        stderr: "",
+        signalLog: "",
+      });
+    },
+  );
+
+  test("a server that remains alive is not stamped as having refreshed its computer credential", async () => {
+    const result = await runStartWithStaleServerProbe(400, {
+      serverStops: false,
+      settings: { COMPUTER_TOKEN: "manually-edited-token" },
+      runningComputerToken: "previous-runtime-token",
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("old API is still answering");
+    expect(result.serverLaunch).toBe("");
+    expect(result.runtimeComputerToken).toBe("previous-runtime-token");
+    expect(result.computerState).toContain(
+      createHash("sha256").update("previous-runtime-token").digest("hex"),
+    );
+  });
+
+  test.each(["missing", "previous-process"] as const)(
+    "%s launch state conservatively refreshes only the owned API",
+    async (computerStamp) => {
+      const result = await runStartWithStaleServerProbe(400, {
+        computerStamp,
+        repeatStart: true,
+      });
+      expect(result.exitCode).toBe(0);
+      expectServerRestart(result.signalLog);
+      expect(result.repeated).toMatchObject({
+        exitCode: 0,
+        stderr: "",
+        signalLog: "",
+      });
+    },
+  );
+
+  test("an API owned by another checkout is never restarted or stamped", async () => {
+    const result = await runStartWithStaleServerProbe(400, {
+      server: "other",
+      computerStamp: "missing",
+      settings: { COMPUTER_TOKEN: "manually-edited-token" },
+      runningComputerToken: "previous-runtime-token",
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.signalLog).toBe("");
+    expect(result.serverLaunch).toBe("");
+    expect(result.computerState).toBe("");
+    expect(result.stdout).toContain("ownership");
+  });
+
+  test.each(["default", "process environment"])(
+    "an unchanged resolved %s token leaves the API running",
+    async (source) => {
+      const token =
+        source === "default" ? "openbot-dev-computer-token" : "process-token";
+      const result = await runStartWithStaleServerProbe(400, {
+        settings: { COMPUTER_TOKEN: "" },
+        runningComputerToken: token,
+        processEnvironment:
+          source === "process environment" ? { COMPUTER_TOKEN: token } : {},
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.signalLog).toBe("");
+      expect(result.savedEnvironment).toContain(`COMPUTER_TOKEN=${token}\n`);
+      expect(result.composeComputerToken).toBe(result.runtimeComputerToken);
+    },
+  );
+
+  test.each([
+    ["unquoted", "computer-token"],
+    ["double-quoted", '"computer-token"'],
+    ["single-quoted", "'computer-token'"],
+    ["with an embedded quote", '"computer\'token"'],
+  ])(
+    "an unchanged computer token %s leaves a healthy server running",
+    async (_, stored) => {
+      const result = await runStartWithStaleServerProbe(400, {
+        settings: { COMPUTER_TOKEN: stored },
+      });
+
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
+      expect(result.savedEnvironment).toContain(`COMPUTER_TOKEN=${stored}\n`);
+      expect(result.signalLog).toBe("");
+      expect(result.serverLaunch).toBe("");
+    },
+  );
+});
+
+describe("start.sh deployment ownership", () => {
+  test("another deployment's worker does not suppress this deployment's launch", async () => {
+    const result = await runStartWithStaleServerProbe(400, { worker: "other" });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("worker: started");
+    expect(result.stdout).not.toContain("worker: did not stay up");
+    expect(result.workerLaunch).toBe(
+      `${result.directory}/worker/src/index.ts\n`,
+    );
+    expect(result.signalLog).toBe("");
+  });
+
+  test("an unchanged start reuses only this deployment's worker", async () => {
+    const result = await runStartWithStaleServerProbe(400);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("worker: already running");
+    expect(result.workerLaunch).toBe("");
+    expect(result.signalLog).toBe("");
+  });
+
+  test("Windows launches identifiable absolute API and worker entry paths", async () => {
+    const result = await runStartWithStaleServerProbe(401, {
+      processEnvironment: { OS: "Windows_NT" },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.workerLaunch).toBe(
+      `${result.directory}/worker/src/index.ts\n`,
+    );
+    expect(result.stdout).not.toContain("worker: did not stay up");
+    expect(result.serverLaunch).toBe(
+      `--env-file=../.env ${result.directory}/server/src/production-entry.ts\n`,
+    );
+  });
+
+  test("Windows refuses ambiguous legacy processes with a manual restart instruction", async () => {
+    const result = await runStartWithStaleServerProbe(401, {
+      processEnvironment: { OS: "Windows_NT", LEGACY_WINDOWS_PROCESS: "1" },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain("deployment cannot be verified");
+    expect(result.stdout).toContain("Stop that process in Task Manager");
+    expect(result.signalLog).toBe("");
+    expect(result.workerLaunch).toBe("");
+    expect(result.dockerLog).toBe("");
+  });
+});
+
+describe("stop.sh deployment ownership", () => {
+  test.each(["own", "other"] as const)(
+    "stops only a worker owned by this deployment (%s)",
+    async (worker) => {
+      const result = await runStartWithStaleServerProbe(400, {
+        script: "stop",
+        worker,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.signalLog).toBe(worker === "own" ? "91000005\n" : "");
     },
   );
 });
@@ -447,4 +833,22 @@ describe("start.sh selected provider services", () => {
     expect(result.stdout).toContain("agent-langgraph never became ready");
     expect(result.stdout).not.toContain("Ready. http://localhost:3010");
   });
+});
+
+test("start persists the computer token for direct server restarts", async () => {
+  const result = await runStartWithStaleServerProbe(401, {
+    settings: { COMPUTER_TOKEN: "" },
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.savedEnvironment).toMatch(/^COMPUTER_TOKEN=.+$/m);
+});
+
+test("start persists an overriding computer token for direct server restarts", async () => {
+  const result = await runStartWithStaleServerProbe(401, {
+    processEnvironment: { COMPUTER_TOKEN: "new-development-token" },
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.savedEnvironment).toMatch(
+    /^COMPUTER_TOKEN=new-development-token$/m,
+  );
 });

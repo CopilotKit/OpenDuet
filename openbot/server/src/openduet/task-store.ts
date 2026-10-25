@@ -1,3 +1,6 @@
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "@openbot/shared/attachments";
+import type { DurableTaskReply } from "@openbot/shared/task-reply";
+import { sanitizeThumbnail } from "@openbot/shared/thumbnail";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Hono, type MiddlewareHandler } from "hono";
@@ -5,6 +8,11 @@ import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { AgentNotFoundError } from "../agents/profile-store";
 import type { AppVariables } from "../auth/guards";
+import {
+  type PersonQuestion,
+  questionResponseMessage,
+  pendingPersonQuestion,
+} from "../approvals/questions";
 import type { Database } from "../db/client";
 import {
   approvalRequests,
@@ -13,7 +21,14 @@ import {
   workItems,
 } from "../db/schema";
 import { type OpenDuetTaskOrigin, openduetTasks } from "../db/schema/openduet";
-import { PROACTIVE_TASK_KIND, replyTail, TASK_RUNS } from "../proactive/engine";
+import {
+  PROACTIVE_TASK_KIND,
+  replyEnding,
+  replyTail,
+  TASK_RUNS,
+  type TaskInput,
+  taskInputSchema,
+} from "../proactive/engine";
 import { ProactiveRefusedError } from "../proactive/types";
 import { DEFAULT_MAX_ATTEMPTS } from "../work/queue";
 import type { TaskReportReader } from "./task-report";
@@ -27,7 +42,8 @@ import type { TaskReportReader } from "./task-report";
  * queued or running, the approval inbox whether it stopped for Allow once, and the question queue
  * whether its Bot asked the person something. Copying any of that onto the task would be a second
  * ledger that drifts from the first the moment one of them changes without it. The one thing only
- * the person can say, that they are done with it, is the one thing kept: `resolvedAt`.
+ * the person can say, that they are done with it, is the one thing kept: `resolvedAt`. It covers
+ * work accepted by then; a later durable turn supersedes it, without a separate reopening write.
  *
  * FAILING IS READ THE SAME WAY. A task's turn runs at most twice (`TASK_RUNS`): once, and once more
  * if the first run threw or was cut off by a restart. A turn that has run out of runs stays on the
@@ -40,8 +56,8 @@ export type { OpenDuetTaskOrigin as TaskOrigin };
 /**
  * Where a task stands, worked out on every read, first match wins:
  * - `needs_input`: an approval or a question in its conversation waits on the person;
- * - `working`: its turn is queued, running, or due its one retry, or an answered approval is being
- *   carried on;
+ * - `working`: its turn is queued, running, or due its one retry, or an answered approval or question
+ *   is being carried on;
  * - `resolved`: the person marked it done;
  * - `failed`: its turn ran out of runs without finishing, and nothing has happened in its
  *   conversation since;
@@ -55,6 +71,10 @@ export type TaskStatus =
   | "ready_for_review";
 
 export type TaskRecord = {
+  thumbnail?: string | null;
+  queuedReplies?: { messageId: string; text: string }[];
+  /** Questions the person already answered in accepted replies, even if their turns failed. */
+  answeredQuestionIds?: string[];
   id: string;
   botId: string;
   /** The task's own conversation. */
@@ -86,12 +106,14 @@ export type TaskRecord = {
    * worked on. Null before anything has been said there.
    */
   next: string | null;
+  /** Null once durable work accepted after the person's last completion supersedes it. */
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
 export type NewTask = {
+  thumbnail?: string | null;
   ownerUserId: string;
   botId: string;
   channelId: string;
@@ -175,6 +197,14 @@ export function plainFailure(error: string | null | undefined): string {
 type Row = typeof openduetTasks.$inferSelect;
 /** What a task's conversation is doing, and its thread, as one read of the ledgers found them. */
 type TaskState = {
+  /** The person's completion, unless genuinely new durable work superseded it. */
+  resolvedAt: Date | null;
+  /** The same effective turn supplies both the visible outcome and Try again's complete input. */
+  turnInput: Record<string, unknown> | null;
+  /** Explicit task turns, for Try again's durable key (legacy suggestion turns had no task id). */
+  turns: number;
+  queuedReplies: { messageId: string; text: string }[];
+  answeredQuestionIds: Set<string>;
   needsInput: boolean;
   working: boolean;
   threadId: string | null;
@@ -209,6 +239,7 @@ const payload = (field: string) => sql<string>`${workItems.payload}->>${field}`;
 const approvalThread = sql<string>`${approvalRequests.action}->>'threadId'`;
 
 export type TaskStore = ReturnType<typeof createTaskStore>;
+type TaskTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /** Every read and write is the owner's: another person's task is the same as no task. */
 export function createTaskStore(
@@ -231,6 +262,11 @@ export function createTaskStore(
       rows.map((row) => [
         row.id,
         {
+          resolvedAt: row.resolvedAt,
+          turnInput: null,
+          turns: 0,
+          queuedReplies: [],
+          answeredQuestionIds: new Set<string>(),
           needsInput: false,
           working: false,
           threadId: null,
@@ -249,8 +285,11 @@ export function createTaskStore(
         lastMessage: channels.lastMessage,
         byBot: sql<boolean>`${channels.lastMessageAgentId} is not null`,
         sourceId: channels.lastMessageSourceId,
+        needsInput: channels.lastMessageNeedsInput,
+        afterResolution: sql<boolean>`coalesce(${channels.lastMessageAt} > ${openduetTasks.resolvedAt}, true)`,
       })
       .from(channels)
+      .innerJoin(openduetTasks, eq(openduetTasks.channelId, channels.id))
       .where(inArray(channels.id, channelIds));
     const taskOfChannelId = new Map(rows.map((row) => [row.channelId, row.id]));
     for (const said of lastSaid) {
@@ -306,6 +345,7 @@ export function createTaskStore(
         ),
       database
         .select({
+          key: workItems.key,
           channelId: payload("channelId"),
           threadId: payload("threadId"),
         })
@@ -324,35 +364,58 @@ export function createTaskStore(
     ]);
     for (const row of approvals)
       mark(channelOfThread.get(row.threadId), "needsInput");
-    for (const row of questions)
-      mark(
-        row.channelId ?? channelOfThread.get(row.threadId ?? ""),
-        "needsInput",
-      );
 
     /*
-     * Its turns, newest first, and the conversation's last line. The newest turn is the one that
-     * counts: Try again queues another beside the one that failed. The turn is the proactive
-     * engine's to run, queued under its kind (proactive/engine.ts). A turn queued before tasks
-     * existed names only its suggestion.
+     * Its turns, in creation order for the queued reply list. The effective outcome follows when
+     * each turn finished or failed: an older insert may commit and run after a newer turn finished.
+     * The proactive engine owns task turns; an older one may name its suggestion. Question-card
+     * answers are continuations in the same conversation, owned by the person-response worker.
      */
     const suggestionIds = rows.flatMap((row) =>
       row.suggestionId ? [row.suggestionId] : [],
     );
-    const [turns, resuming] = await Promise.all([
+    // The same ledger timestamps order task executions and question-card continuations.
+    const turnState = {
+      key: workItems.key,
+      acceptedAt: sql`extract(epoch from ${workItems.createdAt})`.mapWith(
+        Number,
+      ),
+      // Compare in SQL so a same-millisecond acceptance still follows the exact completion.
+      afterResolution: sql<boolean>`coalesce(${workItems.createdAt} > ${openduetTasks.resolvedAt}, false)`,
+      // A crash fails at lease expiry, not its last heartbeat. Finished rows use their actual
+      // completion; released rows use the release timestamp. Keep PostgreSQL's sub-ms order.
+      outcomeAt: sql`extract(epoch from coalesce(
+        ${workItems.finishedAt},
+        case when ${workItems.claimedBy} is not null then ${workItems.leaseUntil} end,
+        ${workItems.updatedAt}
+      ))`.mapWith(Number),
+      attempts: workItems.attempts,
+      live: sql<boolean>`coalesce(${workItems.leaseUntil} > now(), false)`,
+      finished: sql<boolean>`${workItems.finishedAt} is not null`,
+      lastError: workItems.lastError,
+      claimed: sql<boolean>`${workItems.claimedBy} is not null`,
+      updatedAt: workItems.updatedAt,
+      leaseUntil: workItems.leaseUntil,
+    };
+    const responseQuestion = sql<PersonQuestion>`${workItems.payload}->'question'`;
+    const responseThread = sql<string>`${responseQuestion}->>'threadId'`;
+    const responseChannel = sql<string>`${responseQuestion}->>'channelId'`;
+    const [turns, resuming, responses] = await Promise.all([
       database
         .select({
+          ...turnState,
+          input: workItems.payload,
+          reply: payload("reply"),
+          followup: payload("followup"),
+          questionIds: sql<
+            string[] | null
+          >`${workItems.payload}->'questionIds'`,
+          messageId: payload("messageId"),
           taskId: payload("taskId"),
           suggestionId: payload("suggestionId"),
-          attempts: workItems.attempts,
-          live: sql<boolean>`coalesce(${workItems.leaseUntil} > now(), false)`,
-          finished: sql<boolean>`${workItems.finishedAt} is not null`,
-          lastError: workItems.lastError,
-          claimed: sql<boolean>`${workItems.claimedBy} is not null`,
-          updatedAt: workItems.updatedAt,
-          leaseUntil: workItems.leaseUntil,
         })
         .from(workItems)
+        .leftJoin(openduetTasks, eq(openduetTasks.id, payload("taskId")))
         .where(
           and(
             eq(workItems.kind, PROACTIVE_TASK_KIND),
@@ -370,7 +433,7 @@ export function createTaskStore(
             ),
           ),
         )
-        .orderBy(desc(workItems.createdAt)),
+        .orderBy(desc(workItems.createdAt), desc(workItems.key)),
       database
         .select({ threadId: approvalThread })
         .from(workItems)
@@ -387,23 +450,136 @@ export function createTaskStore(
             sql`(${workItems.attempts} < ${DEFAULT_MAX_ATTEMPTS} or ${workItems.leaseUntil} > now())`,
           ),
         ),
+      database
+        .select({
+          ...turnState,
+          taskId: openduetTasks.id,
+          question: responseQuestion,
+          response: payload("response"),
+        })
+        .from(workItems)
+        .innerJoin(
+          intelligenceChannelMappings,
+          and(
+            eq(intelligenceChannelMappings.userId, owner),
+            eq(intelligenceChannelMappings.threadId, responseThread),
+          ),
+        )
+        .innerJoin(
+          openduetTasks,
+          and(
+            eq(openduetTasks.ownerUserId, owner),
+            eq(openduetTasks.channelId, intelligenceChannelMappings.channelId),
+          ),
+        )
+        .where(
+          and(
+            eq(workItems.kind, "person.response"),
+            sql`${payload("ownerUserId")} = ${owner}`,
+            sql`${responseQuestion}->>'actorId' = ${owner}`,
+            inArray(
+              openduetTasks.id,
+              rows.map((row) => row.id),
+            ),
+            or(
+              isNull(responseChannel),
+              eq(responseChannel, openduetTasks.channelId),
+            ),
+          ),
+        ),
     ]);
     const taskOfSuggestion = new Map(
       rows.flatMap((row) =>
         row.suggestionId ? [[row.suggestionId, row.id] as const] : [],
       ),
     );
-    const newest = new Map<string, (typeof turns)[number]>();
-    for (const turn of turns) {
+    const taskTurns = [
+      ...turns.map((turn) => ({
+        ...turn,
+        explicit: true,
+        maxAttempts: TASK_RUNS,
+      })),
+      ...responses.map(({ question, response, ...turn }) => {
+        const message = questionResponseMessage(
+          question,
+          response,
+          `person-response:${turn.key}`,
+        );
+        return {
+          ...turn,
+          explicit: false,
+          // The person-response worker accepts one attempt, unlike proactive task executions.
+          maxAttempts: 1,
+          suggestionId: null,
+          followup: "true",
+          reply: response,
+          messageId: message.id,
+          questionIds: [turn.key],
+          input: {
+            text: message.content,
+            followup: true,
+            questionIds: [turn.key],
+            inputId: message.id,
+            reply: response,
+          },
+        };
+      }),
+    ].sort((a, b) => b.acceptedAt - a.acceptedAt || b.key.localeCompare(a.key));
+    const latestOutcome = new Map<string, (typeof taskTurns)[number]>();
+    const unfinished = new Map<string, (typeof taskTurns)[number]>();
+    for (const turn of taskTurns) {
       const taskId =
         turn.taskId ?? taskOfSuggestion.get(turn.suggestionId ?? "");
-      if (taskId && !newest.has(taskId)) newest.set(taskId, turn);
+      // Acceptance answers only the captured questions. Keep that fact across exhausted turns
+      // and historical Try again turns that did not carry the original reply's snapshot.
+      if (taskId && turn.followup === "true")
+        for (const id of turn.questionIds ?? [])
+          state.get(taskId)?.answeredQuestionIds.add(id);
+      if (taskId) {
+        const entry = state.get(taskId);
+        if (entry && turn.taskId) {
+          if (turn.explicit) entry.turns += 1;
+          if (turn.afterResolution) entry.resolvedAt = null;
+        }
+        const latest = latestOutcome.get(taskId);
+        // Ties retain creation/key order, but insertion order never hides a later terminal turn.
+        if (!latest || turn.outcomeAt > latest.outcomeAt)
+          latestOutcome.set(taskId, turn);
+      }
+      if (
+        taskId &&
+        !turn.finished &&
+        (turn.live || turn.attempts < turn.maxAttempts) &&
+        !unfinished.has(taskId)
+      )
+        unfinished.set(taskId, turn);
+      if (
+        taskId &&
+        turn.reply &&
+        turn.messageId &&
+        !turn.finished &&
+        !turn.live &&
+        turn.attempts < turn.maxAttempts
+      )
+        state.get(taskId)?.queuedReplies.unshift({
+          messageId: turn.messageId,
+          text: turn.reply,
+        });
+    }
+    for (const question of questions) {
+      const channelId =
+        question.channelId ?? channelOfThread.get(question.threadId ?? "");
+      const taskId = channelId ? taskOfChannel.get(channelId) : undefined;
+      if (!taskId || !state.get(taskId)?.answeredQuestionIds.has(question.key))
+        mark(channelId, "needsInput");
     }
     const at = now().getTime();
     for (const row of rows) {
       const entry = state.get(row.id);
       if (!entry) continue;
-      const turn = newest.get(row.id);
+      // Any queued/live turn takes priority, including one whose older insert committed late.
+      const turn = unfinished.get(row.id) ?? latestOutcome.get(row.id);
+      entry.turnInput = turn?.input ?? null;
       if (!turn) {
         /*
          * Opened, and its turn not queued yet: the moment between the two writes that start a task.
@@ -418,10 +594,10 @@ export function createTaskStore(
       }
       if (turn.finished) continue;
       /*
-       * Working while it is queued, running, or due its one retry: a run that threw, or one a
-       * restart cut off once its lease runs out. Out of runs and let go, it failed.
+       * Working while queued, running, or below its worker's attempt cap after a throw or restart.
+       * Question-card answers have one attempt; proactive task turns have two.
        */
-      if (turn.live || turn.attempts < TASK_RUNS) {
+      if (turn.live || turn.attempts < turn.maxAttempts) {
         entry.working = true;
         continue;
       }
@@ -439,12 +615,28 @@ export function createTaskStore(
     }
     for (const row of resuming)
       mark(channelOfThread.get(row.threadId), "working");
+    for (const said of lastSaid) {
+      const taskId = taskOfChannelId.get(said.id);
+      const entry = state.get(taskId ?? "");
+      if (
+        entry &&
+        said.byBot &&
+        (said.needsInput ?? replyEnding(said.lastMessage).asks) &&
+        !entry.working &&
+        !entry.failure &&
+        !entry.resolvedAt &&
+        // New work must not resurrect a final question the person already dismissed.
+        said.afterResolution
+      )
+        entry.needsInput = true;
+    }
     return state;
   }
 
   function recordOf(row: Row, state: TaskState | undefined): TaskRecord {
+    const resolvedAt = state ? state.resolvedAt : row.resolvedAt;
     const status = taskStatus({
-      resolved: row.resolvedAt !== null,
+      resolved: resolvedAt !== null,
       needsInput: state?.needsInput ?? false,
       working: state?.working ?? false,
       failed: (state?.failure ?? null) !== null,
@@ -452,6 +644,9 @@ export function createTaskStore(
     const failedOrDone = status === "failed" || status === "resolved";
     return {
       id: row.id,
+      thumbnail: row.thumbnail,
+      queuedReplies: state?.queuedReplies ?? [],
+      answeredQuestionIds: [...(state?.answeredQuestionIds ?? [])],
       botId: row.botId,
       channelId: row.channelId,
       threadId: state?.threadId ?? null,
@@ -467,7 +662,7 @@ export function createTaskStore(
       failure: failedOrDone ? (state?.failure ?? null) : null,
       failedAt: failedOrDone ? (state?.failedAt?.toISOString() ?? null) : null,
       next: state?.next ?? null,
-      resolvedAt: row.resolvedAt?.toISOString() ?? null,
+      resolvedAt: resolvedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -478,20 +673,25 @@ export function createTaskStore(
     return rows.map((row) => recordOf(row, state.get(row.id)));
   }
 
-  async function one(owner: string, id: string): Promise<TaskRecord> {
+  async function oneWithState(owner: string, id: string) {
     const [row] = await database
       .select()
       .from(openduetTasks)
       .where(owned(owner, id))
       .limit(1);
     if (!row) throw new TaskNotFoundError();
-    const [record] = await withState(owner, [row]);
-    if (!record) throw new TaskNotFoundError();
-    return record;
+    const state = (await stateOf(owner, [row])).get(id);
+    if (!state) throw new TaskNotFoundError();
+    return { record: recordOf(row, state), state };
+  }
+
+  async function one(owner: string, id: string): Promise<TaskRecord> {
+    return (await oneWithState(owner, id)).record;
   }
 
   async function setResolved(owner: string, id: string, resolved: boolean) {
-    const at = now();
+    // The same clock and precision as durable acceptance, across every server replica.
+    const at = sql`now()`;
     const [row] = await database
       .update(openduetTasks)
       .set({ resolvedAt: resolved ? at : null, updatedAt: at })
@@ -502,14 +702,60 @@ export function createTaskStore(
   }
 
   return {
-    async create(input: NewTask): Promise<TaskRecord> {
+    /** Share the channel's transaction so neither half can become visible on its own. */
+    async create(
+      input: NewTask,
+      executor: Database | TaskTransaction = database,
+    ): Promise<TaskRecord> {
       const at = now();
-      const [row] = await database
+      const [row] = await executor
         .insert(openduetTasks)
-        .values({ id: randomUUID(), ...input, createdAt: at, updatedAt: at })
+        .values({
+          id: randomUUID(),
+          ...input,
+          thumbnail: sanitizeThumbnail(input.thumbnail),
+          createdAt: at,
+          updatedAt: at,
+        })
         .returning();
       if (!row) throw new Error("The task was not saved.");
       return recordOf(row, undefined);
+    },
+    async pendingQuestions(owner: string, id: string): Promise<string[]> {
+      const task = await one(owner, id);
+      const rows = await database
+        .select({ key: workItems.key })
+        .from(workItems)
+        .where(
+          and(
+            pendingPersonQuestion(owner),
+            sql`${workItems.payload}->>'mode' = 'completed_question'`,
+            or(
+              sql`${workItems.payload}->>'channelId' = ${task.channelId}`,
+              task.threadId
+                ? sql`${workItems.payload}->>'threadId' = ${task.threadId}`
+                : sql`false`,
+            ),
+          ),
+        );
+      return rows.map((row) => row.key);
+    },
+    async answerQuestions(
+      owner: string,
+      ids: readonly string[],
+    ): Promise<void> {
+      if (!ids.length) return;
+      await database
+        .update(workItems)
+        .set({ finishedAt: sql`now()`, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(workItems.kind, "person.question"),
+            inArray(workItems.key, [...ids]),
+            sql`${workItems.payload}->>'actorId' = ${owner}`,
+            isNull(workItems.finishedAt),
+          ),
+        );
     },
     /** The owner's tasks, newest first. No cap on how many there are; a page is what a list shows. */
     async list(owner: string, limit = 200): Promise<TaskRecord[]> {
@@ -553,20 +799,20 @@ export function createTaskStore(
     },
     /**
      * What a failed task's turn was asked to do, to run it again, and how many turns it has had:
-     * the ask its newest turn carried, or, for one that never reached the queue, its suggestion or
+     * the ask its effective failed turn carried, or, for one never queued, its suggestion or
      * its title. Refused unless it failed, so Try again never starts a second run beside a live one.
      *
-     * A task marked done after it failed is taken too, for the person replying to it, and is no
-     * longer done: the run that follows is its, and it reads as that run goes.
+     * A task marked done after it failed is taken too. Its completion is superseded only when
+     * the retry is durably accepted; selecting the input leaves that completion intact.
      */
     async failedTurn(
       owner: string,
       id: string,
     ): Promise<{
-      ask: { text?: string; suggestionId?: string };
+      ask: TaskInput;
       turns: number;
     }> {
-      const task = await one(owner, id);
+      const { record: task, state } = await oneWithState(owner, id);
       const failed =
         task.status === "failed" ||
         (task.status === "resolved" && task.failure !== null);
@@ -574,28 +820,17 @@ export function createTaskStore(
         throw new ProactiveRefusedError(
           "Only a task that couldn't finish can be tried again.",
         );
-      if (task.resolvedAt !== null) await setResolved(owner, id, false);
-      const turns = await database
-        .select({
-          text: payload("text"),
-          suggestionId: payload("suggestionId"),
-        })
-        .from(workItems)
-        .where(
-          and(
-            eq(workItems.kind, PROACTIVE_TASK_KIND),
-            sql`${payload("taskId")} = ${id}`,
-          ),
-        )
-        .orderBy(desc(workItems.createdAt));
-      const [newest] = turns;
-      const suggestionId = newest?.suggestionId ?? task.suggestionId;
-      const ask = newest?.text
-        ? { text: newest.text }
-        : suggestionId
-          ? { suggestionId }
-          : { text: task.title };
-      return { ask, turns: turns.length };
+      const input = taskInputSchema.parse(state.turnInput ?? {});
+      const suggestionId = input.suggestionId ?? task.suggestionId;
+      // Empty text is intentional for a file-only reply. Only a missing ask uses the fallback.
+      const ask =
+        input.text !== undefined
+          ? input
+          : {
+              ...input,
+              ...(suggestionId ? { suggestionId } : { text: task.title }),
+            };
+      return { ask, turns: state.turns };
     },
     /** The person is done with it. Its conversation stays, and Reopen brings it back. */
     resolve: (owner: string, id: string) => setResolved(owner, id, true),
@@ -608,6 +843,11 @@ export type TaskReply = { reply?: string; messageId?: string };
 
 /** Runs a failed task's turn again, with the person's reply when there is one: the engine's `again`. */
 export type TaskRetry = {
+  reply?: (
+    owner: string,
+    taskId: string,
+    input: DurableTaskReply,
+  ) => Promise<unknown>;
   again(
     ownerUserId: string,
     taskId: string,
@@ -630,6 +870,21 @@ const againSchema = z
       .optional(),
   })
   .strict();
+
+/** Ordinary replies retain files and skills; failed-task Try again stays words-only. */
+const replySchema = againSchema
+  .extend({
+    reply: z.string().trim().max(MAX_REPLY).default(""),
+    messageId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/),
+    attachmentIds: z
+      .array(z.uuid())
+      .max(MAX_ATTACHMENTS_PER_MESSAGE)
+      .optional(),
+    skillIds: z.array(z.string().min(1).max(200)).max(32).optional(),
+  })
+  .refine(
+    (input) => input.reply.length > 0 || (input.attachmentIds?.length ?? 0) > 0,
+  );
 
 /**
  * How a person adds a task themselves, from the + on Tasks: start it now, as `start_task` would from
@@ -803,6 +1058,25 @@ export function createTaskRoutes(
       }
     });
   }
+  const queueReply = retry?.reply;
+  if (queueReply)
+    routes.post("/:id/reply", async (context) => {
+      const owner = context.var.actor.id;
+      const id = context.req.param("id");
+      const parsed = replySchema.safeParse(
+        await context.req.json().catch(() => null),
+      );
+      if (!parsed.success)
+        return context.json(
+          {
+            error: `A reply of at most ${MAX_REPLY} characters or an attachment, and its message id, are required.`,
+          },
+          400,
+        );
+      await store.get(owner, id);
+      await queueReply(owner, id, parsed.data);
+      return context.json({ task: await store.get(owner, id) }, 202);
+    });
   routes.post("/:id/resolve", async (context) =>
     context.json({
       task: await store.resolve(context.var.actor.id, context.req.param("id")),

@@ -868,20 +868,6 @@ const ALLOW: Allowed[] = [
     why: 'expect(created).toEqual([ { ownerUserId: "owner", agentId: "bot", instruction: demonstrationRoutineInstruction',
   },
   {
-    file: "server/tests/routine-runner.test.ts",
-    line: 169,
-    shape: "c",
-    finding: "NEW (round 2 did not find this)",
-    why: 'expect(recorded.finished).toEqual([ { runId: RUN_ID, status: "succeeded", error: undefined }, ]);',
-  },
-  {
-    file: "server/tests/routine-runner.test.ts",
-    line: 272,
-    shape: "c",
-    finding: "NEW (round 2 did not find this)",
-    why: 'expect(recorded.finished).toEqual([ { runId: RUN_ID, status: "succeeded", error: undefined }, ]);',
-  },
-  {
     file: "app/tests/connected-accounts-authorized-notice.test.tsx",
     line: 104,
     shape: "d",

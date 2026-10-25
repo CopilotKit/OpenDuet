@@ -69,6 +69,9 @@ function fakeStore(
 ): ChannelStore & { calls: StoreCall[] } {
   const calls: StoreCall[] = [];
   const base: ChannelStore = {
+    firstDay: async () => {
+      throw new Error("unused first day");
+    },
     async create(receivedActor, agentIds) {
       calls.push(["create", receivedActor, agentIds]);
       return channel({ agentIds });

@@ -87,6 +87,9 @@ function tie(
   questions: readonly PersonQuestion[],
 ) {
   const taskOfThread = new Map<string, string>();
+  const answeredByTask = new Map(
+    tasks.map((task) => [task.id, new Set(task.answeredQuestionIds ?? [])]),
+  );
   for (const task of tasks)
     if (task.threadId) taskOfThread.set(task.threadId, task.id);
   const waiting = new Map<
@@ -103,7 +106,8 @@ function tie(
   for (const question of questions) {
     const taskId = taskOfThread.get(question.threadId);
     if (!taskId) looseQuestions.push(question);
-    else waiting.set(taskId, { question, ...waiting.get(taskId) });
+    else if (!answeredByTask.get(taskId)?.has(question.id))
+      waiting.set(taskId, { question, ...waiting.get(taskId) });
   }
   return { waiting, looseRequests, looseQuestions };
 }

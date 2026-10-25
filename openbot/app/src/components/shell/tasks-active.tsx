@@ -5,6 +5,7 @@ import { ApprovalCard } from "@/components/approvals/approval-card";
 import { ChannelTagOf } from "@/components/duet/channel-tag";
 import { DuetIcon } from "@/components/duet/icons";
 import type { TileTone } from "@/components/duet/kit";
+import { SafeSvg } from "@/components/duet/page-rich-block";
 import { TryTaskAgain } from "@/components/duet/task-card";
 import type { AgentProfile } from "@/lib/agents/queries";
 import { clockTime } from "@/lib/approval-view";
@@ -397,7 +398,13 @@ function TaskLine({
           params={{ taskId: task.id }}
           to="/tasks/$taskId"
         >
-          <RowTitle>{task.title}</RowTitle>
+          <div className="flex items-center gap-2">
+            <SafeSvg
+              className="h-10 w-16 shrink-0 overflow-hidden rounded-lg"
+              svg={task.thumbnail}
+            />
+            <RowTitle>{task.title}</RowTitle>
+          </div>
           <StatusLine status={status}>{item.need}</StatusLine>
           <ChannelTagOf channelId={task.fromChannelId} className="mt-2" />
         </Link>

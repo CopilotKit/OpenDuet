@@ -1,3 +1,4 @@
+import { readFirstDay } from "@openbot/shared/first-day";
 import {
   and,
   asc,
@@ -30,12 +31,16 @@ import {
   intelligenceChannelMappings,
   openduetChannels,
   openduetTasks,
+  workItems,
 } from "../db/schema";
+import type { ChannelActivityEvent, ChannelEventHub } from "./events";
 import {
-  CHANNEL_ACTIVITY_TOPIC,
-  type ChannelActivityEvent,
-  type ChannelEventHub,
-} from "./events";
+  announceChannelActivity,
+  MAX_CHANNEL_EVENT_TEXT_BYTES,
+} from "./notifications";
+import { replyEnding } from "../proactive/engine";
+import { WORK_OFFERED_TOPIC } from "../work/queue";
+import { FIRST_DAY_KIND } from "./first-day";
 import { upgradeWebSocket } from "./socket";
 import { oneLine } from "./text";
 import type { ThreadIdentity } from "./thread-identity";
@@ -59,6 +64,8 @@ export type AgentChannel = {
 
 /** A channel plus the last thing said in it, which is what a roster renders. */
 export type ChannelSummary = AgentChannel & {
+  /** Aggregate of unexpired run claims, also published through channel events. */
+  busy: boolean;
   /** A few words about the conversation, or null. Readers fall back to the channel's name. */
   summary: string | null;
   lastMessage: string | null;
@@ -96,6 +103,7 @@ export type ChannelActivity = {
   /** The agent that said it, or null when a person did. */
   agentId: string | null;
   at: Date;
+  needsInput?: boolean;
 };
 
 /** One page of somebody's channels, newest activity first. */
@@ -191,7 +199,12 @@ const ROSTER_ORDER = [
 type ChannelTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export type ChannelStore = {
-  create(actor: AgentActor, agentIds: string[]): Promise<AgentChannel>;
+  /** Publish task/workstream metadata in the same transaction that makes its channel visible. */
+  create(
+    actor: AgentActor,
+    agentIds: string[],
+    transaction?: ChannelTransaction,
+  ): Promise<AgentChannel>;
   /**
    * The one conversation this person has with this Bot alone, made if they have not had one yet.
    *
@@ -204,6 +217,11 @@ export type ChannelStore = {
    * would look for the answer.
    */
   direct(actor: AgentActor, agentId: string): Promise<AgentChannel>;
+  firstDay(
+    actor: AgentActor,
+    agentId: string,
+    greeting?: string,
+  ): Promise<{ channel: AgentChannel; claimed: boolean }>;
   get(actor: AgentActor, channelId: string): Promise<AgentChannel | null>;
   list(actor: AgentActor, query?: ChannelQuery): Promise<ChannelPage>;
   /** Pin or unpin the caller's own membership. Throws ChannelNotFoundError for a non-member. */
@@ -239,10 +257,10 @@ export type ChannelStore = {
    *
    * Keyed by thread because that is all a headless turn knows. A thread that maps to no channel —
    * the scratch thread a handoff answers in — resolves to nothing and signals nowhere, which is
-   * the point of a scratch thread. Announced, never written: `busy` is a moment, not a fact about
-   * the channel, and a missed one costs a dot until the next real event rather than any data.
+   * the point of a scratch thread. Run claims are persisted with a bounded lifetime, so another
+   * replica can publish expiry after a producer disappears and a roster read can recover state.
    */
-  signalBusy(threadId: string, busy: boolean): Promise<void>;
+  signalBusy(threadId: string, busy: boolean, runId?: string): Promise<void>;
   /**
    * The same signal, from a person's own run, by the channel they are in.
    *
@@ -256,6 +274,7 @@ export type ChannelStore = {
     actor: AgentActor,
     channelId: string,
     busy: boolean,
+    runId?: string,
   ): Promise<void>;
 };
 
@@ -266,7 +285,7 @@ const MAX_ACTIVITY_GRAPHEMES = 200;
 
 /** Reduce a message to the one line a roster draws. See `oneLine` for why it is shared. */
 function previewOf(text: string) {
-  return oneLine(text, MAX_ACTIVITY_GRAPHEMES);
+  return oneLine(text, MAX_ACTIVITY_GRAPHEMES, MAX_CHANNEL_EVENT_TEXT_BYTES);
 }
 
 function channelName(names: string[]) {
@@ -274,6 +293,68 @@ function channelName(names: string[]) {
   const codePoints = Array.from(joined);
   if (codePoints.length <= MAX_CHANNEL_NAME_CODE_POINTS) return joined;
   return `${codePoints.slice(0, MAX_CHANNEL_NAME_CODE_POINTS - 1).join("")}…`;
+}
+
+/** The database clock is authoritative for both roster reads and expiry notifications. */
+const BUSY_NOW = sql<number>`extract(epoch from statement_timestamp())::float8 * 1000`;
+const CHANNEL_BUSY = sql<boolean>`exists (
+  select 1 from jsonb_each_text(${channels.busyClaims}) as claim
+  where claim.value::float8 > ${BUSY_NOW}
+)`;
+
+async function writeBusyClaims(
+  transaction: ChannelTransaction,
+  channelId: string,
+  claims: Record<string, number>,
+) {
+  await transaction
+    .update(channels)
+    .set({ busyClaims: claims })
+    .where(eq(channels.id, channelId));
+  const members = await transaction
+    .select({ userId: channelMemberships.userId })
+    .from(channelMemberships)
+    .where(eq(channelMemberships.channelId, channelId));
+  await announceChannelActivity(transaction, {
+    channelId,
+    memberIds: members.map((member) => member.userId),
+    lastMessage: null,
+    lastMessageAt: null,
+    lastMessageAgentId: null,
+    busy: Object.keys(claims).length > 0,
+  });
+}
+
+/**
+ * One bounded expiry pass, including claims left by a previous process. Every replica may run it:
+ * the row lock orders pruning and notification with busy writers; SKIP LOCKED avoids duplicate
+ * work and waiting on active channels. Reads never prune, so they cannot consume an owed event.
+ */
+export async function expireChannelBusyClaims(
+  database: Database,
+): Promise<void> {
+  await database.transaction(async (transaction) => {
+    const expired = await transaction
+      .select({ id: channels.id, claims: channels.busyClaims, now: BUSY_NOW })
+      .from(channels)
+      .where(
+        and(
+          isNull(channels.deletedAt),
+          sql`exists (
+        select 1 from jsonb_each_text(${channels.busyClaims}) as claim
+        where claim.value::float8 <= ${BUSY_NOW}
+      )`,
+        ),
+      )
+      .limit(100)
+      .for("update", { skipLocked: true });
+    for (const row of expired) {
+      const claims = Object.fromEntries(
+        Object.entries(row.claims).filter(([, until]) => until > row.now),
+      );
+      await writeBusyClaims(transaction, row.id, claims);
+    }
+  });
 }
 
 export function createChannelStore(
@@ -342,8 +423,32 @@ export function createChannelStore(
     return { id, name, agentIds, threadId, active: true, lastMessageAt: null };
   };
 
+  async function announceBusy(channelId: string, busy: boolean, runId: string) {
+    await database.transaction(async (transaction) => {
+      // Row locking orders the claim mutation and its notification across all replicas.
+      const [row] = await transaction
+        .select({
+          claims: channels.busyClaims,
+          now: BUSY_NOW,
+        })
+        .from(channels)
+        .where(eq(channels.id, channelId))
+        .for("update");
+      if (!row) return;
+      const at = row.now;
+      let claims = Object.fromEntries(
+        Object.entries(row.claims).filter(([, until]) => until > at),
+      );
+      // A computed key creates an own claim even for IDs such as "__proto__".
+      if (busy) claims = { ...claims, [runId]: at + 15 * 60_000 };
+      else delete claims[runId];
+      await writeBusyClaims(transaction, channelId, claims);
+    });
+  }
+
   const store: ChannelStore = {
-    create(actor, agentIds) {
+    create(actor, agentIds, transaction) {
+      if (transaction) return makeChannel(transaction, actor, agentIds);
       return database.transaction(
         async (transaction) => makeChannel(transaction, actor, agentIds),
         { isolationLevel: "read committed" },
@@ -419,9 +524,52 @@ export function createChannelStore(
 
       if (typeof found !== "string") return found;
       const channel = await store.get(actor, found);
-      // Null only if it was deleted between the two reads, which is a reason to make a new one
-      // rather than to fail: the caller asked for a conversation, not for that row.
-      return channel ?? store.create(actor, [agentId]);
+      // If it was deleted between reads, repeat selection under the same advisory lock. Another
+      // caller may already have made the replacement; creating outside the lock duplicates it.
+      return channel ?? store.direct(actor, agentId);
+    },
+
+    async firstDay(actor, agentId, greeting) {
+      const channel = await store.direct(actor, agentId);
+      const claimed = await database.transaction(async (transaction) => {
+        const [claim] = await transaction
+          .update(channels)
+          .set({ firstDayStartedAt: sql`now()` })
+          .where(
+            and(
+              eq(channels.id, channel.id),
+              isNull(channels.deletedAt),
+              isNull(channels.firstDayStartedAt),
+              isNull(channels.lastMessageAt),
+            ),
+          )
+          .returning({ id: channels.id });
+        if (claim && greeting) {
+          await transaction
+            .insert(workItems)
+            .values({
+              kind: FIRST_DAY_KIND,
+              key: channel.id,
+              payload: {
+                ownerUserId: actor.id,
+                agentId,
+                channelId: channel.id,
+                text: greeting,
+              },
+            })
+            .onConflictDoNothing();
+          await transaction.execute(
+            sql`select pg_notify(${WORK_OFFERED_TOPIC}, ${FIRST_DAY_KIND})`,
+          );
+        }
+        return Boolean(claim);
+      });
+      // Deletion may commit after direct() returns. Claim only a live row, then reselect
+      // under direct()'s advisory lock if that destination disappeared before the claim.
+      if (!claimed && !(await store.get(actor, channel.id))) {
+        return store.firstDay(actor, agentId, greeting);
+      }
+      return { channel, claimed };
     },
 
     async get(actor, channelId) {
@@ -538,6 +686,7 @@ export function createChannelStore(
           agentId: channelAgents.agentId,
           threadId: intelligenceChannelMappings.threadId,
           deletedAt: agentProfiles.deletedAt,
+          busy: CHANNEL_BUSY,
           channelSummary: channels.summary,
           lastMessage: channels.lastMessage,
           lastMessageAt: channels.lastMessageAt,
@@ -599,6 +748,7 @@ export function createChannelStore(
           agentIds: [row.agentId],
           threadId: row.threadId,
           active: row.deletedAt === null,
+          busy: row.busy,
           summary: row.channelSummary,
           lastMessage: row.lastMessage,
           lastMessageAt: row.lastMessageAt,
@@ -659,9 +809,7 @@ export function createChannelStore(
             lastMessageAgentId: null,
             pinned,
           };
-          await transaction.execute(
-            sql`select pg_notify(${CHANNEL_ACTIVITY_TOPIC}, ${JSON.stringify(event)})`,
-          );
+          await announceChannelActivity(transaction, event);
         },
         { isolationLevel: "read committed" },
       );
@@ -757,9 +905,7 @@ export function createChannelStore(
             lastMessageAgentId: null,
             deleted: true,
           };
-          await transaction.execute(
-            sql`select pg_notify(${CHANNEL_ACTIVITY_TOPIC}, ${JSON.stringify(event)})`,
-          );
+          await announceChannelActivity(transaction, event);
           return true;
         },
         { isolationLevel: "read committed" },
@@ -815,6 +961,9 @@ export function createChannelStore(
             .set({
               lastMessage,
               lastMessageSourceId: source?.id ?? null,
+              lastMessageNeedsInput:
+                activity.agentId !== null &&
+                (activity.needsInput ?? replyEnding(activity.text).asks),
               lastMessageAt: activity.at,
               lastMessageAgentId: activity.agentId,
               updatedAt: new Date(),
@@ -850,7 +999,7 @@ export function createChannelStore(
 
           // Announced inside the transaction, so it is delivered on commit and a write that rolls
           // back is never announced. The payload carries the members because the writer has already
-          // resolved them; NOTIFY caps at 8000 bytes, which a 200-character preview leaves room in.
+          // resolved them; the announcer partitions them within NOTIFY's complete JSON byte limit.
           const event: ChannelActivityEvent = {
             channelId,
             memberIds: members.map((member) => member.userId),
@@ -858,82 +1007,30 @@ export function createChannelStore(
             lastMessageAt: activity.at.toISOString(),
             lastMessageAgentId: activity.agentId,
           };
-          await transaction.execute(
-            sql`select pg_notify(${CHANNEL_ACTIVITY_TOPIC}, ${JSON.stringify(event)})`,
-          );
+          await announceChannelActivity(transaction, event);
         },
         { isolationLevel: "read committed" },
       );
     },
 
-    async signalBusy(threadId, busy) {
-      // The channel this thread is shown in, if any. A scratch thread maps to nothing, so a hop
-      // running there signals nowhere and the branch below returns without announcing.
+    async signalBusy(threadId, busy, runId = "server") {
       const [mapped] = await database
         .select({ channelId: intelligenceChannelMappings.channelId })
         .from(intelligenceChannelMappings)
         .where(eq(intelligenceChannelMappings.threadId, threadId))
         .limit(1);
-      if (!mapped) return;
-
-      const members = await database
-        .select({ userId: channelMemberships.userId })
-        .from(channelMemberships)
-        .where(eq(channelMemberships.channelId, mapped.channelId));
-      if (members.length === 0) return;
-
-      // No table write: busy is a moment, and the roster query stays the source of truth. Just the
-      // announcement, carrying the members the same way recordActivity does.
-      const event: ChannelActivityEvent = {
-        channelId: mapped.channelId,
-        memberIds: members.map((member) => member.userId),
-        lastMessage: null,
-        lastMessageAt: null,
-        lastMessageAgentId: null,
-        busy,
-      };
-      await database.execute(
-        sql`select pg_notify(${CHANNEL_ACTIVITY_TOPIC}, ${JSON.stringify(event)})`,
-      );
+      if (mapped) await announceBusy(mapped.channelId, busy, runId);
     },
 
-    async signalChannelBusy(actor, channelId, busy) {
-      const [membership] = await database
-        .select({ userId: channelMemberships.userId })
-        .from(channelMemberships)
-        .innerJoin(
-          channels,
-          and(
-            eq(channels.id, channelMemberships.channelId),
-            isNull(channels.deletedAt),
-          ),
-        )
-        .where(
-          and(
-            eq(channelMemberships.channelId, channelId),
-            eq(channelMemberships.userId, actor.id),
-          ),
-        );
-      // Not a member, no such channel, or a deleted one: the same refusal every way, so belonging
-      // to a channel is not something an outsider can probe for.
-      if (!membership) throw new ChannelNotFoundError(channelId);
-
-      const members = await database
-        .select({ userId: channelMemberships.userId })
-        .from(channelMemberships)
-        .where(eq(channelMemberships.channelId, channelId));
-
-      const event: ChannelActivityEvent = {
-        channelId,
-        memberIds: members.map((member) => member.userId),
-        lastMessage: null,
-        lastMessageAt: null,
-        lastMessageAgentId: null,
-        busy,
-      };
-      await database.execute(
-        sql`select pg_notify(${CHANNEL_ACTIVITY_TOPIC}, ${JSON.stringify(event)})`,
-      );
+    async signalChannelBusy(
+      actor,
+      channelId,
+      busy,
+      runId = `legacy:${actor.id}`,
+    ) {
+      const channel = await store.get(actor, channelId);
+      if (!channel) throw new ChannelNotFoundError(channelId);
+      await announceBusy(channelId, busy, runId);
     },
   };
   return store;
@@ -1054,6 +1151,7 @@ export function createChannelRoutes(
   events?: ChannelEventHub,
   /** Where a channel's removal is written. Absent in tests that do not care about the trail. */
   auditStore?: AuditStore,
+  startFirstDay?: () => void,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
 
@@ -1172,6 +1270,30 @@ export function createChannelRoutes(
     }
   });
 
+  routes.post("/first-day", requireUser, async (context) => {
+    const body = await context.req.json().catch(() => null);
+    if (typeof body?.agentId !== "string" || !body.agentId.trim())
+      return context.json({ error: "A Bot is required." }, 400);
+    if (
+      body.greeting !== undefined &&
+      (typeof body.greeting !== "string" ||
+        body.greeting.length > 8000 ||
+        readFirstDay(body.greeting) === null)
+    )
+      return context.json({ error: "A first-day greeting is required." }, 400);
+    try {
+      const { channel, claimed } = await store.firstDay(
+        context.var.actor,
+        body.agentId,
+        body.greeting,
+      );
+      if (body.greeting) startFirstDay?.();
+      return context.json({ start: { channel: channelDto(channel), claimed } });
+    } catch (error) {
+      return mapStoreError(context, error);
+    }
+  });
+
   routes.post("/:channelId/activity", requireUser, async (context) => {
     const parsed = parseActivityInput(
       await context.req.json().catch(() => null),
@@ -1195,6 +1317,7 @@ export function createChannelRoutes(
   routes.post("/:channelId/busy", requireUser, async (context) => {
     const body = (await context.req.json().catch(() => null)) as {
       busy?: unknown;
+      runId?: unknown;
     } | null;
     if (typeof body?.busy !== "boolean") {
       return context.json({ error: "busy must be true or false" }, 400);
@@ -1208,6 +1331,9 @@ export function createChannelRoutes(
         context.var.actor,
         context.req.param("channelId"),
         body.busy,
+        typeof body.runId === "string" && body.runId.length <= 200
+          ? body.runId
+          : undefined,
       );
       return context.body(null, 204);
     } catch (error) {
@@ -1296,6 +1422,7 @@ function channelDto(channel: AgentChannel): ChannelWire {
 function channelSummaryDto(channel: ChannelSummary) {
   return {
     ...channelDto(channel),
+    busy: channel.busy,
     summary: channel.summary,
     lastMessage: channel.lastMessage,
     lastMessageAgentId: channel.lastMessageAgentId,

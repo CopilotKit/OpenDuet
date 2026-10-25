@@ -67,7 +67,7 @@ import {
 } from "./headless-tools";
 import { sanitizeSeededHistory } from "./history-sanitize";
 import type { AuditInitiator } from "./initiator";
-import { keepLease } from "./lease";
+import { isLockConflict, keepLease, ThreadLockBusyError } from "./lease";
 import { TURN_LIMITS } from "./limits";
 import type { ComponentCatalog, TurnAdmission } from "./ports";
 import { historyOrEmpty } from "./thread-history";
@@ -87,13 +87,19 @@ export type TurnRunner = (input: {
     messageId: string;
   };
   userMessage?: Message;
+  /** Trusted server-resolved skills, persisted as rows and included in this turn's model context. */
+  systemMessages?: Extract<Message, { role: "system" }>[];
   /** Durable inbound delivery id; reused by lock, runner and emitted events. */
   runId?: string;
   /** How deep in a Bot-to-Bot chain this turn is. Absent is a person's own turn, depth zero. */
   depth?: number;
   /** The reply so far, each time more of it arrives, for a surface that shows a turn in progress. */
   onText?: (text: string) => void;
-}) => Promise<{ replyText: string; components?: DrawnComponent[] }>;
+}) => Promise<{
+  replyText: string;
+  components?: DrawnComponent[];
+  replyChips?: boolean;
+}>;
 
 /** A display component the Bot drew in a turn and the server allowed, with the props it drew. */
 export type DrawnComponent = { name: string; args: Record<string, unknown> };
@@ -290,9 +296,16 @@ export function turnMessages(input: {
   historicIds: ReadonlySet<string>;
   /** This turn's own message; ignored for a continuation. */
   turn: Message;
+  systemMessages?: Parameters<TurnRunner>[0]["systemMessages"];
   continuation?: Parameters<TurnRunner>[0]["continuation"];
 }): { messages: Message[]; persistedInputMessages: Message[] } {
-  const { seeded, historicIds, turn, continuation } = input;
+  const {
+    seeded,
+    historicIds,
+    turn,
+    continuation,
+    systemMessages = [],
+  } = input;
   const messages: Message[] = continuation
     ? sanitizeSeededHistory([
         ...continuation.snapshot.messages,
@@ -303,7 +316,11 @@ export function turnMessages(input: {
           ...continuation.result,
         },
       ])
-    : [...seeded, turn];
+    : [
+        ...seeded,
+        ...systemMessages.filter((message) => !historicIds.has(message.id)),
+        turn,
+      ];
   return {
     messages,
     persistedInputMessages: messages.filter(
@@ -319,16 +336,33 @@ export function turnInput(input: {
   messages: Message[];
   state: unknown;
   tools: readonly HeadlessTool[];
+  systemMessages?: Parameters<TurnRunner>[0]["systemMessages"];
   continuation?: Parameters<TurnRunner>[0]["continuation"];
 }): RunAgentInput {
-  const { threadId, runId, messages, state, tools, continuation } = input;
+  const {
+    threadId,
+    runId,
+    messages,
+    state,
+    tools,
+    systemMessages = [],
+    continuation,
+  } = input;
   return {
     threadId,
     runId,
     messages,
     state,
     tools: tools.filter((tool) => !tool.hidden).map((tool) => tool.definition),
-    context: continuation?.snapshot.context ?? [],
+    // Built-in models omit system rows; remote Bots and the transcript still need those rows.
+    // Promote only the server-resolved instructions supplied for this turn, never message history
+    // or client-authored rows. A continuation keeps its captured context instead of fresh skills.
+    context:
+      continuation?.snapshot.context ??
+      systemMessages.map((message, index) => ({
+        description: `Selected skill ${index + 1}`,
+        value: message.content,
+      })),
     forwardedProps: continuation?.snapshot.forwardedProps,
     ...(continuation
       ? {
@@ -386,14 +420,21 @@ async function takeLease(input: {
     heartbeatMs,
     onLost,
   } = input;
-  await intelligence.ɵacquireThreadLock({
-    threadId,
-    runId,
-    userId,
-    agentId,
-    ttlSeconds,
-    ...(learningContainerId ? { learningContainerId } : {}),
-  });
+  try {
+    await intelligence.ɵacquireThreadLock({
+      threadId,
+      runId,
+      userId,
+      agentId,
+      ttlSeconds,
+      ...(learningContainerId ? { learningContainerId } : {}),
+    });
+  } catch (error) {
+    // Only acquisition contention is unstarted work. The same 409 during a run or renewal may
+    // follow tool side effects and must still consume an execution attempt.
+    if (isLockConflict(error)) throw new ThreadLockBusyError(error);
+    throw error;
+  }
 
   const heartbeat = keepLease({
     renew: () => intelligence.ɵrenewThreadLock({ threadId, runId, ttlSeconds }),
@@ -417,7 +458,12 @@ async function takeLease(input: {
  */
 export type TurnOutcome =
   /** The Bot answered. */
-  | { kind: "completed"; replyText: string; components: DrawnComponent[] }
+  | {
+      kind: "completed";
+      replyText: string;
+      components: DrawnComponent[];
+      replyChips?: boolean;
+    }
   /** The run itself failed: a RUN_ERROR, a broken stream, a cancellation, or a stop that never landed. */
   | { kind: "failed"; error: unknown }
   /** The thread's lock was lost partway through, so whatever the turn said is not an answer. */
@@ -497,6 +543,23 @@ export function settle(evidence: TurnEvidence): TurnOutcome {
     kind: "completed",
     replyText,
     components: drawnComponents(evidence.added, evidence.componentNames),
+    ...(evidence.added.some(
+      (message) =>
+        message.role === "tool" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("The buttons are") &&
+        evidence.added.some(
+          (call) =>
+            call.role === "assistant" &&
+            call.toolCalls?.some(
+              (tool) =>
+                tool.id === message.toolCallId &&
+                tool.function.name === "suggest_replies",
+            ),
+        ),
+    )
+      ? { replyChips: true }
+      : {}),
   };
 }
 
@@ -511,7 +574,11 @@ async function conclude(
   outcome: TurnOutcome,
   stopped: Promise<unknown> | undefined,
   turnTimeoutMs: number,
-): Promise<{ replyText: string; components?: DrawnComponent[] }> {
+): Promise<{
+  replyText: string;
+  components?: DrawnComponent[];
+  replyChips?: boolean;
+}> {
   switch (outcome.kind) {
     case "failed":
       throw outcome.error;
@@ -532,9 +599,13 @@ async function conclude(
     case "empty":
       throw new Error("The turn finished without saying anything.");
     case "completed":
-      return outcome.components.length > 0
-        ? { replyText: outcome.replyText, components: outcome.components }
-        : { replyText: outcome.replyText };
+      return {
+        replyText: outcome.replyText,
+        ...(outcome.components.length
+          ? { components: outcome.components }
+          : {}),
+        ...(outcome.replyChips ? { replyChips: true } : {}),
+      };
   }
 }
 
@@ -599,6 +670,7 @@ export function createTurnRunner(options: {
     continuation,
     signal,
     userMessage,
+    systemMessages,
     runId: suppliedRunId,
     depth,
     onText,
@@ -683,6 +755,7 @@ export function createTurnRunner(options: {
       seeded,
       historicIds: new Set(history.messages.map((message) => message.id)),
       turn,
+      systemMessages,
       ...(continuation ? { continuation } : {}),
     });
 
@@ -732,6 +805,7 @@ export function createTurnRunner(options: {
       messages,
       state: agent.state,
       tools: headlessTools,
+      systemMessages,
       ...(continuation ? { continuation } : {}),
     });
 
@@ -817,6 +891,9 @@ export function createTurnRunner(options: {
     });
 
     try {
+      // Cancellation can arrive while acquisition is pending. Release the acquired lease, but
+      // never start a run after a stop issued before its runner state exists.
+      if (signal?.aborted) throw new Error("The headless turn was cancelled.");
       const cancelled = new Promise<never>((_resolve, reject) => {
         cancelTurn = () => {
           stopTurn();

@@ -46,7 +46,7 @@ function request(
   } = overrides;
   return {
     id: "r",
-    status: "completed",
+    status: "approved",
     createdAt: "2026-10-23T04:58:00Z",
     decision: "allow_once",
     decidedAt: "2026-10-23T04:59:30Z",
@@ -89,6 +89,44 @@ describe("what the pill says for the server's work", () => {
     ).toBe("Sending your email");
   });
 
+  test("an allowed action stays named after execution starts", () => {
+    expect(
+      serverWorkPhrase(
+        true,
+        "thread-1",
+        inbox([request({ status: "consumed", decision: "allow_always" })]),
+        NOW,
+      ),
+    ).toBe("Sending your email");
+  });
+
+  test("a recently completed email does not name a later server run", () => {
+    const completed = request({
+      status: "completed",
+      completedAt: "2026-10-23T04:59:45Z",
+    });
+    expect(
+      serverWorkPhrase(false, "thread-1", inbox([completed]), NOW),
+    ).toBeNull();
+    expect(serverWorkPhrase(true, "thread-1", inbox([completed]), NOW)).toBe(
+      SERVER_WORKING,
+    );
+  });
+
+  test("the newest completed decision does not resurrect an earlier allowed email", () => {
+    expect(
+      serverWorkPhrase(
+        true,
+        "thread-1",
+        inbox([
+          request({ id: "earlier", decidedAt: "2026-10-23T04:59:00Z" }),
+          request({ id: "latest", status: "completed" }),
+        ]),
+        NOW,
+      ),
+    ).toBe(SERVER_WORKING);
+  });
+
   test("a request still waiting is not counted, only one the person allowed", () => {
     expect(
       serverWorkPhrase(
@@ -96,6 +134,24 @@ describe("what the pill says for the server's work", () => {
         "thread-1",
         inbox([
           request({ status: "pending", decision: null, decidedAt: null }),
+        ]),
+        NOW,
+      ),
+    ).toBe(SERVER_WORKING);
+  });
+
+  test("a fresh refusal replaces an earlier allowed email immediately", () => {
+    expect(
+      serverWorkPhrase(
+        true,
+        "thread-1",
+        inbox([
+          request({ id: "earlier", decidedAt: "2026-10-23T04:59:00Z" }),
+          request({
+            id: "refused",
+            decision: "deny",
+            decidedAt: "2026-10-23T04:59:59Z",
+          }),
         ]),
         NOW,
       ),

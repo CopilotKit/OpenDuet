@@ -7,6 +7,11 @@ import { FIRST_DAY_FRAME, frameFirstDay } from "@openbot/shared/first-day";
 import { FIRING_FRAME, frameFiring } from "@openbot/shared/routine-firing";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
+import {
+  type ChannelActivityEvent,
+  createChannelEventHub,
+  startChannelActivityListener,
+} from "../src/channels/events";
 import { createChannelStore } from "../src/channels/routes";
 import {
   CHANNEL_SUMMARY_KIND,
@@ -549,7 +554,7 @@ describe("naming a claimed conversation", () => {
     // that is the term the test grows. `pg_notify` refuses a payload over 8000 bytes outright, and
     // it refuses it inside the transaction that writes the title.
     const crowd = [];
-    for (let index = 0; index < 40; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       const member = await createUser();
       crowd.push(member.id);
       await database
@@ -557,23 +562,76 @@ describe("naming a claimed conversation", () => {
         .values({ channelId: channel.id, userId: member.id });
     }
 
-    await offer(channel.id);
-    const report = await summariseClaimedChannels(
-      options({ title: titler("Travel receipt rules") }),
-    );
-
-    expect(report.written).toContain(channel.id);
-    // Recorded rather than merely survived: this is the number that says how much room is left, and
-    // it is what a later change adding a field to the event has to be measured against.
-    const payload = JSON.stringify({
+    // A single notification cannot hold this event: delivery must split the recipients.
+    const members = [owner.id, ...crowd];
+    const expectedEvent = {
       channelId: channel.id,
-      memberIds: [owner.id, ...crowd],
+      memberIds: members,
       lastMessage: null,
       lastMessageAt: null,
       lastMessageAgentId: null,
       summary: "Travel receipt rules",
-    });
-    expect(payload.length).toBeLessThan(8000);
+    } satisfies ChannelActivityEvent;
+    expect(
+      Buffer.byteLength(JSON.stringify(expectedEvent), "utf8"),
+    ).toBeGreaterThan(8000);
+
+    const hub = createChannelEventHub();
+    const heard = new Map<string, string[]>();
+    for (const member of members) {
+      const payloads: string[] = [];
+      heard.set(member, payloads);
+      hub.register(member, (payload) => payloads.push(payload));
+    }
+    // Subscribe after fixture activity, so only the summary producer can satisfy this observation.
+    const listener = await startChannelActivityListener(databaseUrl, hub);
+    try {
+      await offer(channel.id);
+      const report = await summariseClaimedChannels(
+        options({ title: titler("Travel receipt rules") }),
+      );
+
+      expect(report.written).toContain(channel.id);
+      expect((await summaryOf(channel.id))?.summary).toBe(
+        "Travel receipt rules",
+      );
+      const deadline = Date.now() + 2_000;
+      while (
+        [...heard.values()].some((payloads) => payloads.length === 0) &&
+        Date.now() < deadline
+      ) {
+        await Bun.sleep(25);
+      }
+      for (const [member, payloads] of heard) {
+        expect(payloads).toHaveLength(1);
+        const payload = payloads[0]!;
+        expect(Buffer.byteLength(payload, "utf8")).toBeLessThan(8_000);
+        expect(JSON.parse(payload)).toEqual({
+          ...expectedEvent,
+          memberIds: expect.arrayContaining([member]),
+        });
+      }
+      const batches = [...new Set([...heard.values()].flat())];
+      const deliveredMembers = batches.flatMap((payload) => {
+        const event: ChannelActivityEvent = JSON.parse(payload);
+        return event.memberIds;
+      });
+      expect(deliveredMembers.sort()).toEqual([...members].sort());
+    } finally {
+      await listener.stop();
+    }
+  });
+
+  test("bounds a summary containing one oversized grapheme before announcing it", async () => {
+    const owner = await createUser();
+    const channel = await createUsedChannel(owner);
+    await offer(channel.id);
+    const report = await summariseClaimedChannels(
+      options({ title: titler(`x${"\u0301".repeat(4_100)}`) }),
+    );
+
+    expect(report.written).toContain(channel.id);
+    expect((await summaryOf(channel.id))?.summary).toBe("…");
   });
 
   test("a model that fails leaves the work to be tried again", async () => {

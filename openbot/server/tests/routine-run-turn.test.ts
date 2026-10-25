@@ -113,6 +113,8 @@ function harness(options: {
   historyFails?: () => Error;
   /** What the acquire call does. A thunk that throws, for the same reason `renew` is one. */
   acquireFails?: () => Error;
+  /** Hold acquisition open to exercise cancellation while the platform grants the lock. */
+  acquire?: () => Promise<void>;
   drive?: Driver;
   /**
    * What a renew does. A thunk that THROWS rather than one that returns a rejected promise: a
@@ -177,6 +179,7 @@ function harness(options: {
       order.push("acquire");
       if (options.acquireFails) throw options.acquireFails();
       calls.acquired.push(params);
+      await options.acquire?.();
       return { threadId: params.threadId, runId: params.runId, joinToken: "t" };
     },
     ɵrenewThreadLock: async (params: {
@@ -259,13 +262,14 @@ function harness(options: {
       : { lockTtlSeconds: options.lockTtlSeconds }),
   });
 
-  const run = () =>
+  const run = (extra: Partial<Parameters<typeof runTurn>[0]> = {}) =>
     runTurn({
       ownerUserId: OWNER,
       routineId: ROUTINE_ID,
       agentId: AGENT_ID,
       threadId: THREAD_ID,
       instruction: INSTRUCTION,
+      ...extra,
     });
 
   return { run, agent, calls, order, builtFor };
@@ -721,6 +725,38 @@ describe("the lock is released on every exit path", () => {
 });
 
 describe("cleanup only runs for a lock that was actually taken", () => {
+  test("only an initial platform lock conflict is safe to defer", async () => {
+    const conflict = lockConflict();
+    const busy = harness({ acquireFails: () => conflict });
+    await expect(busy.run()).rejects.toMatchObject({
+      name: "ThreadLockBusyError",
+      cause: conflict,
+    });
+    expect(busy.calls.runs).toEqual([]);
+    expect(busy.calls.cleaned).toEqual([]);
+
+    const providerConflict = Object.assign(new Error("Provider conflict"), {
+      status: 409,
+    });
+    await expect(
+      harness({ acquireFails: () => providerConflict }).run(),
+    ).rejects.toBe(providerConflict);
+    await expect(
+      harness({ drive: ({ observer }) => observer.error(conflict) }).run(),
+    ).rejects.toBe(conflict);
+    await expect(
+      harness({
+        renew: () => {
+          throw conflict;
+        },
+        heartbeatMs: 1,
+        drive: ({ agent, observer }) => {
+          agent.onAbort = () => observer.complete();
+        },
+      }).run(),
+    ).rejects.toBe(conflict);
+  });
+
   test("a rejected acquire never cleans up, renews, or starts the heartbeat", async () => {
     // `ɵcleanupThreadLock` is DELETE on the platform's lock endpoint. If cleanup ran when the
     // acquire itself failed, it would delete whoever DOES hold the lock — the person's own browser
@@ -1005,6 +1041,64 @@ describe("a turn's admission", () => {
     expect(calls.stops).toHaveLength(1);
     expect(calls.cleaned).toHaveLength(1);
   });
+
+  for (const source of ["caller", "admission"] as const) {
+    test(`${source} cancellation during lock acquisition releases the lock without starting a run`, async () => {
+      const cancelled = new AbortController();
+      const acquiring = Promise.withResolvers<void>();
+      const acquired = Promise.withResolvers<void>();
+      const { run, calls, agent } = harness({
+        admission: async ({ signal }) => signal ?? cancelled.signal,
+        acquire: () => {
+          acquiring.resolve();
+          return acquired.promise;
+        },
+        // The real runner cannot stop a run that has not been started yet.
+        drive: () => undefined,
+      });
+
+      const turn = run(source === "caller" ? { signal: cancelled.signal } : {});
+      await acquiring.promise;
+      cancelled.abort();
+      expect(calls.runs).toHaveLength(0);
+      expect(calls.cleaned).toHaveLength(0);
+      acquired.resolve();
+
+      await expect(turn).rejects.toThrow("The headless turn was cancelled.");
+      expect(calls.cleaned).toEqual([
+        { threadId: THREAD_ID, runId: calls.acquired[0]?.runId },
+      ]);
+      expect(calls.runs).toHaveLength(0);
+      expect(calls.stops).toHaveLength(0);
+      expect(agent.aborts).toBe(0);
+    });
+  }
+
+  test("a delayed lock acquisition still starts and completes an uncancelled turn", async () => {
+    const acquiring = Promise.withResolvers<void>();
+    const acquired = Promise.withResolvers<void>();
+    const { run, calls } = harness({
+      acquire: () => {
+        acquiring.resolve();
+        return acquired.promise;
+      },
+    });
+
+    const turn = run();
+    await acquiring.promise;
+    expect(calls.runs).toHaveLength(0);
+    expect(calls.cleaned).toHaveLength(0);
+    acquired.resolve();
+
+    await expect(turn).resolves.toEqual({
+      replyText: "Three things happened.",
+    });
+    expect(calls.runs).toHaveLength(1);
+    expect(calls.cleaned).toEqual([
+      { threadId: THREAD_ID, runId: calls.acquired[0]?.runId },
+    ]);
+    expect(calls.stops).toHaveLength(0);
+  });
 });
 
 /**
@@ -1191,4 +1285,29 @@ test("drawnComponents returns the charts that were drawn, never a refused or unk
   ]);
   // A turn with no catalog drew nothing, whatever its tool calls were named.
   expect(drawnComponents(messages, new Set())).toEqual([]);
+});
+
+test("trusted selected skill messages precede a task attachment and persist with its original reference", async () => {
+  const { run, calls } = harness({});
+  const skill = {
+    id: "reply-id:skill:0",
+    role: "system" as const,
+    content: "Use the approved review rubric.",
+  };
+  const userMessage = {
+    id: "reply-id",
+    role: "user" as const,
+    content: [
+      {
+        type: "document" as const,
+        source: {
+          type: "url" as const,
+          value: "/api/attachments/12345678-1234-4123-8123-123456789abc",
+        },
+      },
+    ],
+  };
+  await run({ userMessage, systemMessages: [skill] });
+  expect(calls.runs[0]?.input.messages).toEqual([skill, userMessage]);
+  expect(calls.runs[0]?.persistedInputMessages).toEqual([skill, userMessage]);
 });

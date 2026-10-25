@@ -6,7 +6,7 @@ import {
   useAgent,
   useCopilotKit,
 } from "@copilotkit/react-core/v2";
-import { observeApprovalAgent } from "@/lib/copilot/approval-context";
+import type { TaskReplyContext } from "@openbot/shared/task-reply";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   type ReactNode,
@@ -15,17 +15,17 @@ import {
   useRef,
   useState,
 } from "react";
-import { HandoffResumeNotice } from "@/components/computer/handoff-resume-notice";
 import { attachmentModality } from "@/components/channels/chat-messages";
 import { toAgentOptions } from "@/components/channels/composer";
 import { ConversationView } from "@/components/channels/conversation-view";
-import { VoiceCallWidget } from "@/components/channels/voice-call-widget";
-import { Topic } from "@/components/duet/kit";
 import {
   seedMessage,
   takeFirstMessage,
   transcriptMessages,
 } from "@/components/channels/transcript-messages";
+import { VoiceCallWidget } from "@/components/channels/voice-call-widget";
+import { HandoffResumeNotice } from "@/components/computer/handoff-resume-notice";
+import { Topic } from "@/components/duet/kit";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { type ApprovalInboxData, approvalInboxOptions } from "@/lib/approvals";
 import { attachmentUrl } from "@/lib/channels/attachments";
@@ -61,6 +61,7 @@ import {
   withoutUnansweredCalls,
 } from "@/lib/channels/run-lifecycle";
 import { useActiveBot } from "@/lib/copilot/active-bot";
+import { observeApprovalAgent } from "@/lib/copilot/approval-context";
 import { ConversationProvider } from "@/lib/copilot/conversation";
 import { afterMs } from "@/lib/copilot/join-thread";
 import { repairUnansweredToolCalls } from "@/lib/copilot/repair-history";
@@ -73,14 +74,14 @@ import {
   voiceContext,
   withVoiceContext,
 } from "@/lib/voice/agent-bridge";
-import { useVoiceCall } from "@/lib/voice/use-voice-call";
 import {
-  loadVoiceArchive,
   cachedVoiceArchive,
+  loadVoiceArchive,
   useVoiceArchive,
   voiceArchiveContext,
   withVoiceChats,
 } from "@/lib/voice/archive";
+import { useVoiceCall } from "@/lib/voice/use-voice-call";
 import { queryClient } from "@/query-client";
 import { newId } from "../../lib/new-id";
 
@@ -382,7 +383,11 @@ export function ChannelChat({
    */
   task?: {
     busy: boolean;
-    send?: (input: { text: string; messageId: string }) => Promise<void>;
+    durable?: boolean;
+    queued?: { messageId: string; text: string }[];
+    send?: (
+      input: { text: string; messageId: string } & TaskReplyContext,
+    ) => Promise<void>;
   };
   /** Drawn above the conversation in place of the topic, such as a task's report. */
   lead?: ReactNode;
@@ -392,6 +397,9 @@ export function ChannelChat({
   onSubmitted?: () => void;
 }) {
   const taskBusy = task?.busy ?? false;
+  // A retry may fall back to the server queue. Keep its preview separate from real history so
+  // it cannot hide the accepted Queued row or overwrite the reply once the server records it.
+  const [taskPreviews, setTaskPreviews] = useState<Message[]>([]);
   // The core attaches the frontend tool registry; direct agent runs do not.
   const { copilotkit } = useCopilotKit();
   // Mentions are scoped to the channel's permitted agents.
@@ -917,9 +925,9 @@ export function ChannelChat({
    */
   const turnFailure = useRef<string | null>(null);
   /**
-   * The run was refused because another run holds the thread. Not a failure: the turn this send
-   * wanted is waiting behind one already going. Kept beside `turnFailure` for the same reason: the
-   * subscriber knows, and `deliver` has to act on it.
+   * A request was refused because another run holds the thread. `deliver` distinguishes a send
+   * that never started from a continuation whose earlier work must not be automatically repeated.
+   * Kept beside `turnFailure`: the subscriber knows, and `deliver` has to act on it.
    */
   const turnLocked = useRef(false);
   const assistantMessagesBeforeRun = useRef<Set<string>>(new Set());
@@ -1194,19 +1202,27 @@ export function ChannelChat({
       );
     } finally {
       startWatch.unsubscribe();
+      // A frontend tool finishes one run before its continuation; track failures for the whole turn.
+      awaitingReply.current = false;
       setRunsInFlight((count) => count - 1);
     }
 
     /*
      * ANOTHER RUN HAD THE THREAD: the server continuing after Allow once, another tab, another
-     * device on the same first day. Nothing this turn added was stored, so it comes off screen; this
-     * tab follows the run that is going, and the words are handed back as busy, which the queue
-     * parks as Queued and sends when that run ends. Following starts before the throw, so the
-     * conversation never reads as idle in between and drains the queue into the same lock.
+     * device on the same first day. Only a turn that never started can come off screen and wait
+     * in the queue. A refused continuation may follow completed frontend actions: keep that history
+     * and fail for an explicit retry, since requeueing the original request could repeat them.
+     * Following an untouched send starts before the throw, so the queue waits for the other run.
      */
     if (turnLocked.current) {
       turnLocked.current = false;
       awaitingReply.current = false;
+      if (serverStarted) {
+        const message =
+          "The Bot couldn't continue because another turn started. Review what it already did before trying again.";
+        setRunError(message);
+        throw new Error(message);
+      }
       const kept = withoutMessages(target.messages, added);
       if (kept !== target.messages) target.setMessages([...kept]);
       void follow.current();
@@ -1292,11 +1308,14 @@ export function ChannelChat({
       throw new ThreadBusyError();
     }
 
+    const busyOwner = newId();
     turnsRef.current += 1;
     setTurnsInFlight(turnsRef.current);
-    if (turnsRef.current === 1) {
-      void setChannelBusy({ channelId: channel.id, busy: true });
-    }
+    const busyStarted = setChannelBusy({
+      channelId: channel.id,
+      busy: true,
+      runId: busyOwner,
+    });
     try {
       return await deliver(trimmed, skillInstructions, attachments, skipIf);
     } finally {
@@ -1305,7 +1324,15 @@ export function ChannelChat({
       // Sent from here rather than from an effect on `turnsInFlight`: this runs after unmount, that
       // does not, and the last turn out is what takes the roster's working indicator down.
       if (turnsRef.current === 0) {
-        void setChannelBusy({ channelId: channel.id, busy: false });
+        // A delayed start must settle before its release, including after this tab unmounts.
+        // `setChannelBusy` absorbs transport failures: a lost response may still have committed.
+        void busyStarted.then(() =>
+          setChannelBusy({
+            channelId: channel.id,
+            busy: false,
+            runId: busyOwner,
+          }),
+        );
         const waiting = followAfterTurn.current;
         followAfterTurn.current = null;
         if (waiting) void follow.current(waiting);
@@ -1318,7 +1345,7 @@ export function ChannelChat({
       if (!awaitingReply.current) return;
       awaitingReply.current = false;
       const message = stoppedReason(reported);
-      // Another run holds the thread: a wait, not a failure, and never a sentence naming a thread.
+      // `deliver` decides whether this can wait or already-started work needs an explicit retry.
       if (isThreadLocked(reported) || isThreadLocked(new Error(message))) {
         turnLocked.current = true;
         return;
@@ -1336,7 +1363,6 @@ export function ChannelChat({
       onRunFailed: ({ error }) => fail(error),
       onRunFinishedEvent: () => {
         const wasOurs = awaitingReply.current;
-        awaitingReply.current = false;
         if (!wasOurs) return;
 
         const reply = [...agent.messages]
@@ -1571,9 +1597,21 @@ export function ChannelChat({
     // Keep `seed` in state; transcriptMessages gives it up once the agent holds a user turn.
   }, [channel.id]);
 
+  const presenceInbox = useQuery({
+    ...approvalInboxOptions(),
+    enabled: inShell,
+  });
   const botName =
     agentProfiles?.find((profile) => profile.id === runtimeAgentId)?.name ??
     channel.name;
+  const messages = transcriptMessages(
+    restoring ? NOTHING : (standIn ?? agent.messages),
+    seed,
+  );
+  const recordedOrQueued = new Set([
+    ...messages.map((message) => message.id),
+    ...(task?.queued ?? []).map((reply) => reply.messageId),
+  ]);
 
   return (
     // Activity renderers resolve their agent through this SDK context. It must match useAgent's
@@ -1595,7 +1633,9 @@ export function ChannelChat({
             taskRunning={agent.isRunning || runsInFlight > 0}
           />
           <ConversationView
+            approvals={presenceInbox.data?.requests}
             folded={folded}
+            serverQueued={task?.queued}
             inShell={inShell}
             lead={lead ?? (topic ? <Topic>{topic}</Topic> : null)}
             placeholder={task ? `Reply to ${botName}` : `Message ${botName}`}
@@ -1614,8 +1654,8 @@ export function ChannelChat({
                 : undefined
             }
             agents={toAgentOptions(agentProfiles, channel.agentIds)}
-            // A send handed to the task carries words only.
-            channelId={task?.send ? undefined : channel.id}
+            // Failed-task retries carry words only; ordinary durable replies retain composer features.
+            channelId={task?.send && !task.durable ? undefined : channel.id}
             /*
              * THE TURN, not the run. `say` waits for the runtime agent and the join before a run starts,
              * and `agent.isRunning` alone leaves that gap unmarked — which is the one moment the
@@ -1623,7 +1663,7 @@ export function ChannelChat({
              */
             busy={agent.isRunning || turnsInFlight > 0 || following || taskBusy}
             // The `/` menu exposes only skills granted to this Bot.
-            commands={skillCommands}
+            commands={task?.send && !task.durable ? undefined : skillCommands}
             // Readiness is handled by `say`; deletion is the only disabled-chat state.
             disabled={!channel.active}
             /*
@@ -1634,10 +1674,12 @@ export function ChannelChat({
              * latest message.
              */
             messages={withVoiceChats(
-              transcriptMessages(
-                restoring ? NOTHING : (standIn ?? agent.messages),
-                seed,
-              ),
+              [
+                ...messages,
+                ...taskPreviews.filter(
+                  (message) => !recordedOrQueued.has(message.id),
+                ),
+              ],
               voiceArchive.entries,
             )}
             notice={
@@ -1695,19 +1737,31 @@ export function ChannelChat({
               onSubmitted?.();
               if (task?.send) {
                 const messageId = newId();
-                agent.addMessage({
-                  id: messageId,
-                  role: "user",
-                  content: draft.text,
-                });
+                if (!task.durable)
+                  setTaskPreviews((messages) => [
+                    ...messages,
+                    { id: messageId, role: "user", content: draft.text },
+                  ]);
                 try {
-                  await task.send({ text: draft.text, messageId });
+                  await task.send({
+                    text: draft.text,
+                    messageId,
+                    ...(draft.attachments.length
+                      ? {
+                          attachmentIds: draft.attachments.map(
+                            (attachment) =>
+                              uploadedAttachment(attachment).attachmentId,
+                          ),
+                        }
+                      : {}),
+                    ...(draft.commandIds.length
+                      ? { skillIds: draft.commandIds }
+                      : {}),
+                  });
                 } catch (error) {
                   // Taken back off, and thrown on, so the composer puts the words back in the box.
-                  agent.setMessages(
-                    agent.messages.filter(
-                      (message) => message.id !== messageId,
-                    ),
+                  setTaskPreviews((messages) =>
+                    messages.filter((message) => message.id !== messageId),
                   );
                   throw error;
                 }
@@ -1744,7 +1798,8 @@ export function ChannelChat({
              * result stitched over a tool call that is still executing.
              */
             pending={
-              agent.isRunning || turnsInFlight > 0 || following || taskBusy
+              !task?.send &&
+              (agent.isRunning || turnsInFlight > 0 || following || taskBusy)
             }
             /*
              * A channel outlives its turns, so it is the screen where waiting is worth offering. A
@@ -1752,7 +1807,7 @@ export function ChannelChat({
              * moment this one is over — including when it is over because somebody pressed the button
              * above.
              */
-            queueWhileBusy
+            queueWhileBusy={!task?.send}
             restoring={restoring}
             /*
              * The run, not the turn. Stop reaches a run through the core's abort controller, and that

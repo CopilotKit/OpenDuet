@@ -91,6 +91,10 @@ function serving() {
       return Response.json({ ok: true });
     }
     if (url === "/api/approvals") return Response.json(inbox);
+    if (url === "/api/agents")
+      return Response.json({
+        agents: queryClient.getQueryData(agentKeys.list(false)) ?? [],
+      });
     if (url === "/api/proactive/suggestions")
       return Response.json({ suggestions });
     if (url === "/api/proactive/settings") return Response.json({ settings });
@@ -300,6 +304,42 @@ test("the list last shown is remembered in this browser", async () => {
 });
 
 // ---------- Active ----------
+
+test("a failed accepted answer stays Failed with Try again despite its unfinished inbox question", async () => {
+  quiet();
+  tasks = [
+    task({
+      id: "answered",
+      threadId: "answered-thread",
+      status: "failed",
+      failure: "a service didn't answer",
+      failedAt: ago(1),
+      answeredQuestionIds: ["old-question"],
+    }),
+  ];
+  inbox = {
+    requests: [],
+    questions: [
+      {
+        id: "old-question",
+        botId: "openduet",
+        threadId: "answered-thread",
+        question: "Which deck?",
+        createdAt: ago(5),
+      },
+    ],
+  };
+  serving();
+  const view = draw();
+  const failed = await view.findByRole("region", { name: "Failed" });
+  expect(failed.textContent).toContain(
+    "Couldn't finish: a service didn't answer.",
+  );
+  expect(
+    within(failed).getByRole("button", { name: "Try this task again" }),
+  ).toBeTruthy();
+  expect(view.queryByRole("region", { name: "Needs input" })).toBeNull();
+});
 
 test("Active groups everything by what it needs: Ready for review, Needs input, Working, Resolved", async () => {
   quiet();

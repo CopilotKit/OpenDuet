@@ -15,6 +15,24 @@ const THUMB = "\u{1F44D}\u{1F3FD}";
 const KEYCAP = "1\u{FE0F}\u{20E3}";
 
 describe("oneLine", () => {
+  test("bounds JSON bytes without cutting an oversized grapheme", () => {
+    expect(oneLine(`x${"\u0301".repeat(4_100)} Question?`, 200, 4_096)).toBe(
+      "…",
+    );
+    expect(oneLine(FLAG, 200, 10)).toBe(FLAG);
+    expect(oneLine(FLAG, 200, 9)).toBe("…");
+  });
+
+  test("counts JSON escaping and the ellipsis in the byte limit", () => {
+    const preview = oneLine('"'.repeat(20), 200, 12);
+    expect(preview).toBe('"""…');
+    expect(
+      Buffer.byteLength(JSON.stringify(preview), "utf8"),
+    ).toBeLessThanOrEqual(12);
+    expect(oneLine("abcdefghij", 5, 100)).toBe("abcd…");
+    expect(() => oneLine("abcdef", 200, 4)).toThrow(RangeError);
+  });
+
   /*
    * The guard against over-correcting. Every one of these passes on the previous implementation
    * too: the cut lands in the same place, the ellipsis replaces the same last unit, and control

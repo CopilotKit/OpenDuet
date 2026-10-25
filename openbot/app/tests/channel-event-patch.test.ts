@@ -1,8 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import type { ChannelPage, ChannelSummary } from "../src/lib/channels/queries";
+import {
+  CancelledError,
+  InfiniteQueryObserver,
+  QueryClient,
+} from "@tanstack/react-query";
+import {
+  type ChannelPage,
+  type ChannelSummary,
+  channelKeys,
+  channelListQueryOptions,
+} from "../src/lib/channels/queries";
 import {
   applyChannelEvent,
   type ChannelActivityEvent,
+  updateChannelEventCache,
 } from "../src/lib/channels/use-channel-events";
 
 /** A minimal but fully-typed channel summary, so tests build real objects rather than casts. */
@@ -180,6 +191,227 @@ describe("a pin", () => {
  * order the way an ordinary activity event does.
  */
 describe("a busy signal", () => {
+  test("aborts superseded roster transport before its next page", async () => {
+    const queryClient = new QueryClient();
+    const key = channelKeys.list();
+    const oldPage = { channels: [channel("a")], nextCursor: "obsolete" };
+    const busy = event({ channelId: "a", busy: true });
+    const currentRow = channel("a", { busy: true });
+    const currentPage = { channels: [currentRow], nextCursor: "current" };
+    const lastPage = cache([channel("b")]).pages[0];
+    const held = Promise.withResolvers<Response>();
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const errors: unknown[] = [];
+    let obsoleteSignal: AbortSignal | null | undefined;
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push(url);
+        if (requests.length === 1) {
+          obsoleteSignal = init?.signal;
+          return held.promise;
+        }
+        if (url !== "/api/channels" && url !== "/api/channels?cursor=current") {
+          errors.push(new Error(`Unexpected request: ${url}`));
+        }
+        return Response.json(url === "/api/channels" ? currentPage : lastPage);
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    queryClient.setQueryData(key, cache([channel("a")], [channel("b")]));
+    const observer = new InfiniteQueryObserver(queryClient, {
+      ...channelListQueryOptions(),
+      staleTime: Infinity,
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe((result) => {
+      if (result.isError) errors.push(result.error);
+    });
+    try {
+      const recovery = queryClient.invalidateQueries({ queryKey: key });
+      const initiallyAborted = obsoleteSignal?.aborted;
+      updateChannelEventCache(queryClient, busy);
+      // Even a transport that completes after abort must not advance the obsolete cursor.
+      held.resolve(Response.json(oldPage));
+      await recovery;
+      for (let turn = 0; turn < 20; turn++) await Bun.sleep(0);
+      expect(initiallyAborted).toBe(false);
+      expect(obsoleteSignal?.aborted).toBe(true);
+      expect(requests).not.toContain("/api/channels?cursor=obsolete");
+      expect(requests).toContain("/api/channels?cursor=current");
+      expect(observer.getCurrentResult().isSuccess).toBe(true);
+      expect(observer.getCurrentResult().isFetching).toBe(false);
+      expect(errors).toEqual([]);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+      held.resolve(Response.json(oldPage));
+      await held.promise;
+      await Bun.sleep(0);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("preserves a busy release received before the first roster response", async () => {
+    const queryClient = new QueryClient();
+    const key = channelKeys.list();
+    const oldPage = cache([channel("a", { busy: true })]).pages[0]!;
+    const currentPage = cache([channel("a", { busy: false })]).pages[0]!;
+    const held = Promise.withResolvers<ChannelPage>();
+    let response = held.promise;
+    const errors: unknown[] = [];
+    const observer = new InfiniteQueryObserver(queryClient, {
+      ...channelListQueryOptions(),
+      staleTime: Infinity,
+      retry: false,
+      refetchOnWindowFocus: false,
+      queryFn: () => response,
+    });
+    const unsubscribe = observer.subscribe((result) => {
+      if (result.isError) errors.push(result.error);
+    });
+
+    try {
+      expect(queryClient.getQueryData(key)).toBeUndefined();
+      expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+      // A corrective read sees the release that the held initial snapshot missed.
+      response = Promise.resolve(currentPage);
+      updateChannelEventCache(
+        queryClient,
+        event({ channelId: "a", busy: false }),
+      );
+      held.resolve(oldPage);
+      await held.promise;
+      for (let turn = 0; turn < 20; turn++) {
+        await Bun.sleep(0);
+        if (queryClient.getQueryState(key)?.fetchStatus !== "fetching") break;
+      }
+      expect(
+        observer.getCurrentResult().data?.find((row) => row.id === "a")?.busy,
+      ).toBe(false);
+      expect(queryClient.getQueryState(key)).toMatchObject({
+        status: "success",
+        fetchStatus: "idle",
+      });
+      expect(errors).toEqual([]);
+    } finally {
+      held.resolve(oldPage);
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  test("preserves active roster recovery when a busy event overlaps it", async () => {
+    const queryClient = new QueryClient();
+    const key = channelKeys.list();
+    const seeded = cache([channel("a", { busy: true }), channel("b")]);
+    const oldPage = cache([channel("a", { busy: true })]).pages[0]!;
+    const currentPage = cache([channel("a", { busy: false })]).pages[0]!;
+    const held = Promise.withResolvers<ChannelPage>();
+    let response = held.promise;
+    queryClient.setQueryData(key, seeded);
+    const observer = new InfiniteQueryObserver(queryClient, {
+      ...channelListQueryOptions(),
+      staleTime: Infinity,
+      retry: false,
+      refetchOnWindowFocus: false,
+      queryFn: () => response,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    const recovery = queryClient.invalidateQueries(
+      { queryKey: key },
+      { throwOnError: true },
+    );
+
+    try {
+      expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+      // Any replacement read observes the server after the release and B's deletion.
+      response = Promise.resolve(currentPage);
+      updateChannelEventCache(
+        queryClient,
+        event({ channelId: "a", busy: false }),
+      );
+      held.resolve(oldPage);
+      await held.promise;
+      await recovery;
+      for (let turn = 0; turn < 20; turn++) {
+        await Bun.sleep(0);
+        if (queryClient.getQueryState(key)?.fetchStatus !== "fetching") break;
+      }
+      const rows = queryClient
+        .getQueryData<typeof seeded>(key)
+        ?.pages.flatMap((page) => page.channels);
+      expect(rows?.find((row) => row.id === "a")?.busy).toBe(false);
+      expect(rows?.map((row) => row.id)).toEqual(["a"]);
+      expect(queryClient.getQueryState(key)).toMatchObject({
+        status: "success",
+        fetchStatus: "idle",
+      });
+    } finally {
+      held.resolve(oldPage);
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  test("an older roster read cannot undo a busy release event", async () => {
+    const queryClient = new QueryClient();
+    const key = channelKeys.list();
+    const oldData = cache([channel("a", { busy: true })]);
+    const held = Promise.withResolvers<ChannelPage>();
+    queryClient.setQueryData(key, oldData);
+    const earlierRead = queryClient
+      .fetchInfiniteQuery({
+        ...channelListQueryOptions(),
+        queryFn: () => held.promise,
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof CancelledError)) throw error;
+      });
+    const currentRow = () =>
+      queryClient.getQueryData<typeof oldData>(key)?.pages[0]?.channels[0];
+
+    try {
+      expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+      updateChannelEventCache(
+        queryClient,
+        event({ channelId: "a", lastMessage: "A newer message." }),
+      );
+      updateChannelEventCache(
+        queryClient,
+        event({ channelId: "a", busy: false }),
+      );
+      expect(currentRow()?.busy).toBe(false);
+      expect(currentRow()?.lastMessage).toBe("A newer message.");
+
+      updateChannelEventCache(
+        queryClient,
+        event({ channelId: "a", busy: true }),
+      );
+      expect(currentRow()?.busy).toBe(true);
+      updateChannelEventCache(
+        queryClient,
+        event({ channelId: "a", busy: false }),
+      );
+      expect(currentRow()?.busy).toBe(false);
+
+      held.resolve(oldData.pages[0]!);
+      await held.promise;
+      await earlierRead;
+      await Bun.sleep(0); // Let the cancelled read's underlying promise finish too.
+      expect(currentRow()?.busy).toBe(false);
+      expect(currentRow()?.lastMessage).toBe("A newer message.");
+      expect(queryClient.getQueryState(key)).toMatchObject({
+        status: "success",
+        fetchStatus: "idle",
+      });
+    } finally {
+      held.resolve(oldData.pages[0]!);
+      queryClient.clear();
+    }
+  });
+
   test("patches only the busy flag, leaving the last message and order alone", () => {
     const data = cache([
       channel("a", {

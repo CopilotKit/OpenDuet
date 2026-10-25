@@ -1,8 +1,8 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { type ChannelPage, type ChannelSummary, channelKeys } from "./queries";
-import { socketUrl as buildSocketUrl } from "@/lib/socket-url";
+import { socketUrl as buildSocketUrl } from "../socket-url";
 
 /**
  * Keep the roster live.
@@ -194,6 +194,58 @@ export function applyChannelEvent(
   return { ...data, pages };
 }
 
+/** Patch the paged roster at the production socket/query boundary. */
+export function updateChannelEventCache(
+  queryClient: QueryClient,
+  activity: ChannelActivityEvent,
+) {
+  const data = queryClient.getQueryData<ChannelCache>(channelKeys.list());
+  if (!data) {
+    if (activity.busy !== undefined) {
+      // There is no row to patch yet. Invalidation alone reuses the pending first load, which may
+      // predate this event, so cancel it before requesting a fresh snapshot for the mounted roster.
+      void queryClient.cancelQueries({
+        queryKey: channelKeys.list(),
+        exact: true,
+      });
+      void queryClient.refetchQueries({
+        queryKey: channelKeys.list(),
+        exact: true,
+        type: "active",
+      });
+    }
+    return;
+  }
+  const patched = applyChannelEvent(data, activity);
+  if (patched === "unknown") {
+    // An unknown channel id means the roster is stale; refetch rather than patch.
+    void queryClient.invalidateQueries({ queryKey: channelKeys.list() });
+    return;
+  }
+  const interruptedRead =
+    activity.busy !== undefined &&
+    queryClient.getQueryState(channelKeys.list())?.fetchStatus !== "idle";
+  if (activity.busy !== undefined) {
+    // Cancellation is synchronous. Compute the patch first so reverting the fetch cannot discard
+    // fields from newer events, then write it immediately to preserve socket event order.
+    void queryClient.cancelQueries({
+      queryKey: channelKeys.list(),
+      exact: true,
+    });
+  }
+  // Only the holding page is re-sorted; moving rows across pages would fight pagination cursors.
+  queryClient.setQueryData(channelKeys.list(), patched);
+  if (interruptedRead) {
+    // The busy delta cannot recover unrelated changes missed by this roster. Start a fresh read
+    // after the patch, retaining the event's synchronous ordering and the old read's cancellation.
+    void queryClient.refetchQueries({
+      queryKey: channelKeys.list(),
+      exact: true,
+      type: "active",
+    });
+  }
+}
+
 const FIRST_RETRY_MS = 500;
 const MAX_RETRY_MS = 30_000;
 
@@ -238,27 +290,7 @@ export function useChannelEvents() {
           queryKey: ["groups", activity.channelId],
         });
 
-        /*
-         * The list is paged, so the cache holds pages rather than one array.
-         *
-         * The channel is patched inside whichever page holds it and that page is re-sorted. Sorting
-         * across pages is deliberately not attempted: a channel that has just become the most recent
-         * belongs at the top of page one, and moving a row between pages would fight the cursors the
-         * next fetch uses. The page it is on stays correct, and the next refetch puts it in order.
-         */
-        queryClient.setQueryData(
-          channelKeys.list(),
-          (data: ChannelCache | undefined) => {
-            if (!data) return data;
-            const patched = applyChannelEvent(data, activity);
-            if (patched !== "unknown") return patched;
-            // An unknown channel id means the roster is stale; refetch rather than patch.
-            void queryClient.invalidateQueries({
-              queryKey: channelKeys.list(),
-            });
-            return data;
-          },
-        );
+        updateChannelEventCache(queryClient, activity);
 
         /*
          * A tab looking at the channel somebody just deleted in another tab.

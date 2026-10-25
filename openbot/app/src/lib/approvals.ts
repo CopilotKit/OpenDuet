@@ -256,7 +256,30 @@ export const decideApprovalMutationOptions = (queryClient: QueryClient) =>
   mutationOptions({
     mutationFn: ({ id, choice }: { id: string; choice: ApprovalDecision }) =>
       decideApproval(id, choice),
-    onSuccess: settleAnswer(queryClient),
+    onSuccess: async (_response, { id, choice }) => {
+      // The saved decision is already known. Update it before the inbox refetch so the activity
+      // pill stops describing a refused action while the continuation is still settling.
+      queryClient.setQueryData<ApprovalInboxData>(
+        approvalInboxOptions().queryKey,
+        (inbox) =>
+          inbox
+            ? {
+                ...inbox,
+                requests: inbox.requests.map((request) =>
+                  request.id === id
+                    ? {
+                        ...request,
+                        decision: choice,
+                        decidedAt: new Date().toISOString(),
+                        status: choice === "deny" ? "denied" : "approved",
+                      }
+                    : request,
+                ),
+              }
+            : inbox,
+      );
+      await settleAnswer(queryClient)();
+    },
   });
 /** Answer a question a Bot asked mid-run; the run resumes with the answer. */
 export const answerPersonQuestionMutationOptions = (queryClient: QueryClient) =>

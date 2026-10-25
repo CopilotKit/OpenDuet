@@ -31,20 +31,39 @@ export function cutAtCodeUnits(text: string, limit: number): string {
 /**
  * One line a roster can draw: control characters stripped, whitespace collapsed, cut on grapheme
  * clusters so an emoji is never split. The caller supplies the cap; a preview and a title want
- * different ones.
+ * different ones. An optional JSON byte cap also bounds a cluster made of arbitrarily many
+ * combining marks, and includes the quotes and escaping that a notification will serialize.
  */
-export function oneLine(text: string, maxGraphemes: number): string {
+export function oneLine(
+  text: string,
+  maxGraphemes: number,
+  maxJsonBytes = Number.POSITIVE_INFINITY,
+): string {
+  if (maxJsonBytes < 5)
+    throw new RangeError("A JSON line needs room for an ellipsis.");
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
   const flattened = text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
   const collapsed = flattened.replace(/\s+/g, " ");
   // A string can never hold more graphemes than it holds UTF-16 units, so a line this short is
   // already under the cap and needs no segmenting. Nearly everything a roster draws is that short,
   // and segmenting is the expensive part of this function.
-  if (collapsed.length <= maxGraphemes) return collapsed;
+  const fitsBytes =
+    maxJsonBytes === Number.POSITIVE_INFINITY ||
+    Buffer.byteLength(JSON.stringify(collapsed), "utf8") <= maxJsonBytes;
+  if (collapsed.length <= maxGraphemes && fitsBytes) return collapsed;
   const graphemes = Array.from(
     GRAPHEMES.segment(collapsed),
     (each) => each.segment,
   );
-  if (graphemes.length <= maxGraphemes) return collapsed;
-  return `${graphemes.slice(0, maxGraphemes - 1).join("")}…`;
+  if (graphemes.length <= maxGraphemes && fitsBytes) return collapsed;
+  let kept = "";
+  // The two JSON quotes and the UTF-8 ellipsis are part of the cap.
+  let bytes = 5;
+  for (const grapheme of graphemes.slice(0, maxGraphemes - 1)) {
+    const next = Buffer.byteLength(JSON.stringify(grapheme), "utf8") - 2;
+    if (bytes + next > maxJsonBytes) break;
+    kept += grapheme;
+    bytes += next;
+  }
+  return `${kept}…`;
 }

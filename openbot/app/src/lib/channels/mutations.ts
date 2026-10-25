@@ -70,10 +70,19 @@ export function recordChannelActivityMutationOptions() {
 export async function setChannelBusy(variables: {
   channelId: string;
   busy: boolean;
+  runId?: string;
 }) {
   await tryClient(`/api/channels/${variables.channelId}/busy`, {
     method: "POST",
-    body: { busy: variables.busy },
+    body: {
+      busy: variables.busy,
+      ...(variables.runId ? { runId: variables.runId } : {}),
+    },
+  }).catch((error: unknown) => {
+    // A lost response can follow a committed claim. Settle without rejecting so the caller can
+    // still release that owner after the start settles. Release failures are best-effort too:
+    // the server expires abandoned claims, and neither notification may fail the actual turn.
+    console.warn("Could not report channel busy state.", error);
   });
 }
 

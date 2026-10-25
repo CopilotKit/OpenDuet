@@ -1,6 +1,8 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import type { ChannelPage as ClientChannelPage } from "../../app/src/lib/channels/queries";
+import { applyChannelEvent } from "../../app/src/lib/channels/use-channel-events";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
 import {
@@ -10,10 +12,12 @@ import {
   createChannelEventHub,
   startChannelActivityListener,
 } from "../src/channels/events";
+import { announceChannelActivity } from "../src/channels/notifications";
 import {
   ChannelNotFoundError,
   ChannelPackageOwnedError,
   createChannelStore,
+  expireChannelBusyClaims,
 } from "../src/channels/routes";
 import { createThreadIdentity } from "../src/channels/thread-identity";
 import { createDatabase } from "../src/db/client";
@@ -184,6 +188,48 @@ afterAll(async () => {
  * writer but the database hears it.
  */
 describe("channel activity delivery", () => {
+  test("publishes expired ownership to the connected busy observer", async () => {
+    const owner = await createTestUser("Busy owner");
+    const observer = await createTestUser("Busy observer");
+    const channel = await createSharedChannel(owner, observer);
+    const page: ClientChannelPage = JSON.parse(
+      JSON.stringify(await store.list(observer)),
+    );
+    let cache = { pages: [page], pageParams: [""] as unknown[] };
+    let delivered = 0;
+    const hub = createChannelEventHub();
+    hub.register(observer.id, (payload) => {
+      const patched = applyChannelEvent(cache, JSON.parse(payload));
+      if (patched !== "unknown") cache = patched;
+      delivered++;
+    });
+    const listener = await startChannelActivityListener(databaseUrl, hub);
+    try {
+      await store.signalChannelBusy(owner, channel.id, true, "A");
+      await store.signalChannelBusy(owner, channel.id, true, "B");
+      await until(() => delivered === 2);
+      expect(cache.pages[0]!.channels[0]!.busy).toBe(true);
+      // A disappears; B's completion must retain A's still-live ownership.
+      await store.signalChannelBusy(owner, channel.id, false, "B");
+      await until(() => delivered === 3);
+      expect({
+        observed: cache.pages[0]!.channels[0]!.busy,
+        read: (await store.list(observer)).channels[0]!.busy,
+      }).toEqual({ observed: true, read: true });
+      await database
+        .update(channels)
+        .set({ busyClaims: { A: 0 } })
+        .where(eq(channels.id, channel.id));
+      // The production expiry tick, with no subsequent busy writer or roster refresh.
+      await expireChannelBusyClaims(database);
+      await until(() => delivered === 4, 1_000);
+      expect(cache.pages[0]!.channels[0]!.busy).toBe(false);
+      expect((await store.list(observer)).channels[0]!.busy).toBe(false);
+    } finally {
+      await listener.stop();
+    }
+  });
+
   test("announces a recorded message to a listener on its own connection", async () => {
     const id = `${testPrefix}-user-${randomUUID()}`;
     await database.insert(users).values({
@@ -303,6 +349,168 @@ function within5s(arrived: Promise<void>) {
     ),
   ]);
 }
+
+describe("bounded channel notifications", () => {
+  test("measures escaped recipient IDs and refuses one that cannot fit", async () => {
+    const members = ['"\\é'.repeat(700), '\\"😀'.repeat(600)];
+    const hub = createChannelEventHub();
+    const watched = watch(hub, members);
+    const listener = await startChannelActivityListener(databaseUrl, hub);
+    try {
+      await database.transaction((transaction) =>
+        announceChannelActivity(transaction, event({ memberIds: members })),
+      );
+      await until(() =>
+        members.every((member) => watched.of(member).length === 1),
+      );
+      for (const member of members) {
+        expect(watched.of(member)).toHaveLength(1);
+        expect(watched.of(member)[0]).toEqual(event({ memberIds: [member] }));
+        expect(
+          Buffer.byteLength(JSON.stringify(watched.of(member)[0]), "utf8"),
+        ).toBeLessThan(8_000);
+      }
+      // An identifier beyond the budget must fail explicitly, not skip the member or loop while
+      // repeatedly flushing an empty batch. No ordinary generated ID approaches this length.
+      await expect(
+        database.transaction((transaction) =>
+          announceChannelActivity(
+            transaction,
+            event({ memberIds: ["x".repeat(8_000)] }),
+          ),
+        ),
+      ).rejects.toThrow("Channel notification cannot fit one recipient.");
+    } finally {
+      await listener.stop();
+    }
+  });
+
+  test("persists activity and its unread question when one grapheme exceeds NOTIFY", async () => {
+    const owner = await createTestUser("Owner");
+    const other = await createTestUser("Other member");
+    const channel = await createSharedChannel(owner, other);
+    await store.markRead(other, channel.id);
+    const at = new Date(Date.now() + 1_000);
+    // One grapheme alone is 8,201 UTF-8 bytes. Its question ending must be inferred before the
+    // preview is shortened, and the oversized cluster must never be split into a partial glyph.
+    const text = `x${"\u0301".repeat(4_100)} Shall we proceed?`;
+    const hub = createChannelEventHub();
+    const watched = watch(hub, [owner.id, other.id]);
+    const listener = await startChannelActivityListener(databaseUrl, hub);
+    try {
+      await store.recordActivity(owner, channel.id, {
+        agentId: channel.agentIds[0]!,
+        at,
+        text,
+      });
+      await until(() => watched.of(other.id).length === 1);
+      const [row] = await database
+        .select()
+        .from(channels)
+        .where(eq(channels.id, channel.id));
+      expect(row?.lastMessageAt).toEqual(at);
+      expect(row?.lastMessageNeedsInput).toBe(true);
+      expect(row?.lastMessage).toBe("…");
+      const roster = (await store.list(other)).channels[0]!;
+      expect(roster.lastMessageAt!.getTime()).toBeGreaterThan(
+        roster.lastReadAt!.getTime(),
+      );
+      for (const member of [owner.id, other.id]) {
+        expect(watched.of(member)).toHaveLength(1);
+        expect(watched.of(member)[0]).toMatchObject({
+          channelId: channel.id,
+          lastMessage: row?.lastMessage,
+          lastMessageAt: at.toISOString(),
+          lastMessageAgentId: channel.agentIds[0],
+        });
+      }
+    } finally {
+      await listener.stop();
+    }
+  });
+
+  for (const change of ["activity", "busy", "delete"] as const) {
+    test(`delivers ${change} to every member when their IDs exceed NOTIFY`, async () => {
+      const owner = await createTestUser("Owner");
+      const other = await createTestUser("Other member");
+      const channel = await createSharedChannel(owner, other);
+      const members = [owner.id, other.id];
+      const crowd = Array.from(
+        { length: 100 },
+        () => `${testPrefix}-${randomUUID()}`,
+      );
+      await database.insert(users).values(
+        crowd.map((id) => ({
+          id,
+          email: `${id}@example.test`,
+          name: "Crowd member",
+        })),
+      );
+      createdUserIds.push(...crowd);
+      await database
+        .insert(channelMemberships)
+        .values(crowd.map((userId) => ({ channelId: channel.id, userId })));
+      members.push(...crowd);
+      // The recipients alone cannot fit, even if all message fields were omitted.
+      expect(
+        Buffer.byteLength(JSON.stringify(members), "utf8"),
+      ).toBeGreaterThan(8_000);
+      const hub = createChannelEventHub();
+      const watched = watch(hub, members);
+      const listener = await startChannelActivityListener(databaseUrl, hub);
+      const at = new Date();
+      try {
+        if (change === "activity") {
+          await store.recordActivity(owner, channel.id, {
+            agentId: channel.agentIds[0]!,
+            at,
+            text: "Ready to proceed?",
+          });
+        } else if (change === "busy") {
+          await store.signalChannelBusy(owner, channel.id, true, "crowded-run");
+        } else {
+          await store.softDelete(owner, channel.id);
+        }
+        await until(() =>
+          members.every((member) => watched.of(member).length === 1),
+        );
+        for (const member of members) {
+          expect(watched.of(member)).toHaveLength(1);
+          const delivered = watched.of(member)[0]!;
+          expect(delivered.memberIds).toContain(member);
+          expect(
+            Buffer.byteLength(JSON.stringify(delivered), "utf8"),
+          ).toBeLessThan(8_000);
+          expect(delivered).toMatchObject(
+            change === "activity"
+              ? {
+                  channelId: channel.id,
+                  lastMessage: "Ready to proceed?",
+                  lastMessageAt: at.toISOString(),
+                }
+              : change === "busy"
+                ? { channelId: channel.id, busy: true }
+                : { channelId: channel.id, deleted: true },
+          );
+        }
+        const [row] = await database
+          .select()
+          .from(channels)
+          .where(eq(channels.id, channel.id));
+        if (change === "activity") {
+          expect(row?.lastMessageNeedsInput).toBe(true);
+          expect(row?.lastMessageAt).toEqual(at);
+        } else if (change === "busy") {
+          expect(Object.keys(row!.busyClaims)).toEqual(["crowded-run"]);
+        } else {
+          expect(row?.deletedAt).toBeInstanceOf(Date);
+        }
+      } finally {
+        await listener.stop();
+      }
+    });
+  }
+});
 
 /**
  * Two changes a roster has to hear about that are not a message: a channel that is gone, and a pin.

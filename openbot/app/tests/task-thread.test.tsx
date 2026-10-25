@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import type { Message } from "@ag-ui/core";
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { frameTaskBrief } from "@openbot/shared/task-brief";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -21,8 +22,8 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { frameTaskBrief } from "@openbot/shared/task-brief";
 import { ConversationView } from "@/components/channels/conversation-view";
 import { useCloseSheet } from "@/components/duet/page-sheet";
 import {
@@ -48,7 +49,6 @@ import {
   type TaskReport,
   taskKeys,
 } from "@/lib/tasks/queries";
-import userEvent from "@testing-library/user-event";
 import { queryClient } from "@/query-client";
 import { settleReactWork } from "./settle-react-work";
 
@@ -77,6 +77,7 @@ let tasks: TaskRecord[] = [];
 const posted: string[] = [];
 /** What each Try again carried. */
 const againBodies: unknown[] = [];
+const replyBodies: unknown[] = [];
 
 const rosa = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
   id: "rosa",
@@ -188,10 +189,19 @@ function sse(events: unknown[]) {
 }
 
 /** Every request the card, the page and the conversation make, answered from the fixtures above. */
-function serving() {
+function serving({
+  againFailure,
+  replyFailure,
+  history = stored,
+}: {
+  againFailure?: { error: string; status: number };
+  replyFailure?: { error: string; status: number };
+  history?: Message[];
+} = {}) {
   posted.length = 0;
   runs = [];
   againBodies.length = 0;
+  replyBodies.length = 0;
   globalThis.fetch = Object.assign(
     async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = new URL(
@@ -233,10 +243,42 @@ function serving() {
       }
       if (path === "/api/openduet/tasks/rosa/report")
         return NativeResponse.json({ report });
+      const reply = /^\/api\/openduet\/tasks\/([^/]+)\/reply$/.exec(path);
+      if (reply && method === "POST") {
+        posted.push(path);
+        const body = JSON.parse(String(init?.body));
+        replyBodies.push(body);
+        if (replyFailure)
+          return NativeResponse.json(
+            { error: replyFailure.error },
+            { status: replyFailure.status },
+          );
+        tasks = tasks.map((task) =>
+          task.id === reply[1]
+            ? {
+                ...task,
+                status: "working",
+                queuedReplies: [
+                  ...(task.queuedReplies ?? []),
+                  { messageId: body.messageId, text: body.reply },
+                ],
+              }
+            : task,
+        );
+        return NativeResponse.json(
+          { task: tasks.find((task) => task.id === reply[1]) },
+          { status: 202 },
+        );
+      }
       const again = /^\/api\/openduet\/tasks\/([^/]+)\/again$/.exec(path);
       if (again && method === "POST") {
         posted.push(path);
         againBodies.push(init?.body ? JSON.parse(String(init.body)) : null);
+        if (againFailure)
+          return NativeResponse.json(
+            { error: againFailure.error },
+            { status: againFailure.status },
+          );
         tasks = tasks.map((task) =>
           task.id === again[1]
             ? { ...task, status: "working", failure: null, failedAt: null }
@@ -256,6 +298,19 @@ function serving() {
               { status: 404 },
             );
       }
+      if (
+        path === `/api/channels/${conversation.id}/attachments` &&
+        method === "POST"
+      ) {
+        return NativeResponse.json(
+          {
+            id: "12345678-1234-4123-8123-123456789abc",
+            name: "notes.txt",
+            mimeType: "text/plain",
+          },
+          { status: 201 },
+        );
+      }
       if (path === `/api/channels/${conversation.id}`)
         return NativeResponse.json({ channel: conversation });
       if (path === "/api/channels")
@@ -267,7 +322,17 @@ function serving() {
           agents: [{ id: "openduet", name: "OpenDuet" }],
         });
       if (path === "/api/plugins/for/openduet")
-        return NativeResponse.json({ skills: [], tools: [] });
+        return NativeResponse.json({
+          skills: [
+            {
+              slug: "review-notes",
+              title: "Review notes",
+              summary: "Review attached notes",
+              instructions: "Use the review rubric.",
+            },
+          ],
+          tools: [],
+        });
       if (path === "/api/voice/sessions")
         return NativeResponse.json({ sessions: [], nextCursor: null });
       if (path.endsWith("/info"))
@@ -280,11 +345,11 @@ function serving() {
       if (path.endsWith("/connect"))
         return sse([
           { type: "RUN_STARTED", threadId: conversation.threadId, runId: "j" },
-          { type: "MESSAGES_SNAPSHOT", messages: stored },
+          { type: "MESSAGES_SNAPSHOT", messages: history },
           { type: "RUN_FINISHED", threadId: conversation.threadId, runId: "j" },
         ]);
       if (/\/threads\/[^/]+\/messages$/.test(path))
-        return NativeResponse.json({ messages: stored });
+        return NativeResponse.json({ messages: history });
       if (path.endsWith("/run")) {
         const request =
           input instanceof Request ? input : new Request(url, init);
@@ -696,13 +761,11 @@ test("a reply from the box at the foot goes into the task's conversation, and un
     "Also cc Sam",
   );
   await user.click(within(sheet).getByRole("button", { name: "Send message" }));
-  await waitFor(() => expect(runs).toHaveLength(1), { timeout: 5_000 });
-  expect(runs[0]?.path).toBe("/api/copilotkit/agent/openduet/run");
-  expect(runs[0]?.body.threadId).toBe("rosa-thread");
-  expect(runs[0]?.body.messages?.at(-1)).toMatchObject({
-    role: "user",
-    content: "Also cc Sam",
-  });
+  await waitFor(() =>
+    expect(posted).toEqual(["/api/openduet/tasks/rosa/reply"]),
+  );
+  expect(runs).toHaveLength(0);
+  expect(tasks[0]?.queuedReplies?.[0]?.text).toBe("Also cc Sam");
   // Sending unfolded the conversation, so the reply is seen landing.
   expect(
     within(sheet)
@@ -851,6 +914,204 @@ test("a reply typed on a failed task runs it again with the person's words, neve
   );
 });
 
+async function failedTaskSheet(responses: Parameters<typeof serving>[0]) {
+  tasks = [
+    rosa({
+      status: "failed",
+      failure: "a service didn't answer",
+      failedAt: "2026-10-22T09:47:00.000Z",
+    }),
+  ];
+  serving(responses);
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole("dialog", { name: rosa().title });
+  await unfold(sheet);
+  await within(sheet).findByText(ASK);
+  return sheet;
+}
+
+test.each([
+  "OpenDuet is already running this again.",
+  "Only a task that couldn't finish can be tried again.",
+])(
+  "a retry conflict queues the reply without a resend notice: %s",
+  async (error) => {
+    const history = [...stored];
+    const sheet = await failedTaskSheet({
+      againFailure: { error, status: 409 },
+      history,
+    });
+    const box = within(sheet).getByRole("textbox");
+    type(box, "Please keep Friday.");
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData<TaskRecord>(taskKeys.detail("rosa"))
+          ?.queuedReplies,
+      ).toEqual([
+        { messageId: expect.any(String), text: "Please keep Friday." },
+      ]),
+    );
+    await waitFor(() => expect(box.textContent).toBe(""));
+    expect(posted).toEqual([
+      "/api/openduet/tasks/rosa/again",
+      "/api/openduet/tasks/rosa/reply",
+    ]);
+    expect(replyBodies).toEqual([
+      { reply: "Please keep Friday.", messageId: expect.any(String) },
+    ]);
+    expect(againBodies).toEqual(replyBodies);
+    expect(await within(sheet).findByText("Queued")).toBeTruthy();
+    expect(within(sheet).getAllByText("Please keep Friday.")).toHaveLength(1);
+    expect(within(sheet).queryByRole("alert")).toBeNull();
+    expect(sheet.textContent).not.toContain("Send this again when it's done.");
+    expect(runs).toHaveLength(0);
+
+    // The server ran the accepted reply. History can arrive before the task poll clears its queue.
+    const accepted = tasks[0]?.queuedReplies?.[0];
+    expect(accepted).toBeDefined();
+    history.push(
+      { id: accepted!.messageId, role: "user", content: accepted!.text },
+      {
+        id: "friday-answer",
+        role: "assistant",
+        content: "Friday is confirmed.",
+      },
+    );
+    await act(async () => {
+      queryClient.setQueryData(channelKeys.list(), {
+        pages: [
+          {
+            channels: [
+              {
+                ...conversation,
+                lastMessageAt: "2026-10-22T09:50:00.000Z",
+                lastMessage: "Friday is confirmed.",
+                lastMessageAgentId: "openduet",
+                busy: false,
+              },
+            ],
+            nextCursor: null,
+          },
+        ],
+        pageParams: [""],
+      });
+    });
+    await within(sheet).findByText("Friday is confirmed.");
+    expect(within(sheet).queryByText("Queued")).toBeNull();
+    expect(within(sheet).getAllByText("Please keep Friday.")).toHaveLength(1);
+
+    tasks = [rosa({ status: "ready_for_review", queuedReplies: [] })];
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: taskKeys.detail("rosa"),
+      });
+    });
+    await waitFor(() =>
+      expect(sheet.querySelector("[data-status]")?.textContent).toBe(
+        "Ready for review",
+      ),
+    );
+    expect(within(sheet).queryByText("Queued")).toBeNull();
+    expect(within(sheet).getAllByText("Please keep Friday.")).toHaveLength(1);
+    expect(runs).toHaveLength(0);
+  },
+);
+
+test("a rejected reply fallback shows its own error and keeps the draft", async () => {
+  const sheet = await failedTaskSheet({
+    againFailure: {
+      error: "OpenDuet is already running this again.",
+      status: 409,
+    },
+    replyFailure: {
+      error: "Couldn't save this reply. Try again.",
+      status: 503,
+    },
+  });
+  const box = within(sheet).getByRole("textbox");
+  type(box, "Please keep Friday.");
+  await waitFor(() =>
+    expect(within(sheet).getByRole("alert").textContent).toBe(
+      "Couldn't save this reply. Try again.",
+    ),
+  );
+  expect(posted).toEqual([
+    "/api/openduet/tasks/rosa/again",
+    "/api/openduet/tasks/rosa/reply",
+  ]);
+  expect(box.textContent).toBe("Please keep Friday.");
+  expect(within(sheet).queryByText("Queued")).toBeNull();
+  expect(sheet.textContent).not.toContain("Send this again when it's done.");
+});
+
+test("a retry failure that cannot fall back keeps its error and the reply draft", async () => {
+  const sheet = await failedTaskSheet({
+    againFailure: {
+      error: "Couldn't run this task again. Try again in a moment.",
+      status: 503,
+    },
+  });
+  const box = within(sheet).getByRole("textbox");
+  type(box, "Please keep Friday.");
+  expect((await within(sheet).findByRole("alert")).textContent).toBe(
+    "Couldn't run this task again. Try again in a moment.",
+  );
+  expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]);
+  expect(box.textContent).toBe("Please keep Friday.");
+  expect(replyBodies).toEqual([]);
+});
+
+test.each([undefined, "Couldn't save this reply. Try again."])(
+  "a refused Try again notice yields to a later durable reply: %s",
+  async (replyError) => {
+    const sheet = await failedTaskSheet({
+      againFailure: {
+        error: "OpenDuet is already running this again.",
+        status: 409,
+      },
+      replyFailure: replyError ? { error: replyError, status: 503 } : undefined,
+    });
+    fireEvent.click(
+      within(sheet).getByRole("button", { name: "Try this task again" }),
+    );
+    expect((await within(sheet).findByRole("alert")).textContent).toBe(
+      "OpenDuet is still finishing something. Send this again when it's done.",
+    );
+    expect(posted).toEqual(["/api/openduet/tasks/rosa/again"]);
+    expect(replyBodies).toEqual([]);
+
+    tasks = [rosa({ status: "working" })];
+    await act(() =>
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail("rosa") }),
+    );
+    await waitFor(() =>
+      expect(sheet.querySelector("[data-status]")?.textContent).toBe("Working"),
+    );
+    const box = within(sheet).getByRole("textbox");
+    type(box, "Please keep Friday.");
+    if (replyError) {
+      await waitFor(() =>
+        expect(within(sheet).getByRole("alert").textContent).toBe(replyError),
+      );
+      expect(box.textContent).toBe("Please keep Friday.");
+      expect(within(sheet).queryByText("Queued")).toBeNull();
+    } else {
+      await within(sheet).findByText("Queued");
+      await waitFor(() => expect(box.textContent).toBe(""));
+      expect(within(sheet).queryAllByRole("alert")).toHaveLength(0);
+    }
+    expect(replyBodies).toEqual([
+      { reply: "Please keep Friday.", messageId: expect.any(String) },
+    ]);
+    expect(posted).toEqual([
+      "/api/openduet/tasks/rosa/again",
+      "/api/openduet/tasks/rosa/reply",
+    ]);
+    expect(sheet.textContent).not.toContain("Send this again when it's done.");
+    expect(runs).toHaveLength(0);
+  },
+);
+
 test("while the task's own turn runs on the server, a reply waits in the queue and Stop is not drawn", async () => {
   tasks = [rosa({ status: "working" })];
   serving();
@@ -868,7 +1129,7 @@ test("while the task's own turn runs on the server, a reply waits in the queue a
   expect(
     await within(sheet).findByText("Queued", undefined, { timeout: 2_000 }),
   ).toBeTruthy();
-  expect(posted).toEqual([]);
+  expect(posted).toEqual(["/api/openduet/tasks/rosa/reply"]);
   expect(runs).toHaveLength(0);
   expect(
     within(sheet).queryByRole("button", { name: "Stop the Bot" }),
@@ -995,4 +1256,208 @@ test("a report with nothing in it yet says what will appear there", () => {
   expect(failed.getByRole("alert").textContent).toBe(
     "Couldn't load this task's report. Close it and try again.",
   );
+});
+
+test("accepted task replies reappear as Queued after closing and reopening", async () => {
+  tasks = [
+    rosa({
+      status: "working",
+      queuedReplies: [
+        { messageId: "saved-reply", text: "Keep the Friday date." },
+      ],
+    }),
+  ];
+  serving();
+  const first = app("/tasks/rosa");
+  const sheet = await first.view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await unfold(sheet);
+  expect(await within(sheet).findByText("Queued")).toBeTruthy();
+  first.view.unmount();
+  queryClient.clear();
+  const second = app("/tasks/rosa");
+  const reopened = await second.view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await unfold(reopened);
+  expect(
+    await within(reopened).findByText("Keep the Friday date."),
+  ).toBeTruthy();
+  expect(await within(reopened).findByText("Queued")).toBeTruthy();
+});
+
+test("opening and refolding a task report resets its viewport to the top", async () => {
+  tasks = [rosa({ status: "ready_for_review" })];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole(
+    "dialog",
+    { name: rosa().title },
+    { timeout: 5_000 },
+  );
+  await within(sheet).findByRole("list", { name: "Decisions and updates" });
+  const viewport = sheet.querySelector<HTMLElement>(
+    '[data-slot="message-scroller-viewport"]',
+  )!;
+  expect(viewport.scrollTop).toBe(0);
+  await unfold(sheet);
+  viewport.scrollTop = 700;
+  fireEvent.click(
+    within(sheet).getByRole("button", { name: "Hide conversation" }),
+  );
+  await waitFor(() => expect(viewport.scrollTop).toBe(0));
+});
+
+test.each(["ready_for_review", "needs_input"] as const)(
+  "%s task replies retain file uploads and skill commands",
+  async (status) => {
+    tasks = [rosa({ status })];
+    serving();
+    const { view } = app("/tasks/rosa");
+    const sheet = await view.findByRole("dialog", { name: rosa().title });
+    const attach = await within(sheet).findByRole("button", {
+      name: "Attach a file",
+    });
+    expect((attach as HTMLButtonElement).disabled).toBe(false);
+    const input = sheet.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+    fireEvent.change(input!, {
+      target: {
+        files: [
+          new File(["Review these notes"], "notes.txt", { type: "text/plain" }),
+        ],
+      },
+    });
+    await within(sheet).findByLabelText("Remove notes.txt");
+    await waitFor(() =>
+      expect(
+        (
+          within(sheet).getByRole("button", {
+            name: "Send message",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    const user = userEvent.setup({ document: view.container.ownerDocument });
+    const editor = within(sheet).getByRole("textbox", { name: "Message" });
+    // PromptArea anchors slash suggestions to the caret; Happy DOM has no layout.
+    const measure = Range.prototype.getBoundingClientRect;
+    Range.prototype.getBoundingClientRect = () => new DOMRect(10, 10, 1, 20);
+    editor.focus();
+    editor.textContent = "/review";
+    const caret = document.createRange();
+    caret.selectNodeContents(editor);
+    caret.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(caret);
+    fireEvent.input(editor, { inputType: "insertText", data: "/review" });
+    Range.prototype.getBoundingClientRect = measure;
+    await user.click(await view.findByRole("option", { name: /review-notes/ }));
+    await user.click(
+      within(sheet).getByRole("button", { name: "Send message" }),
+    );
+    await waitFor(() => expect(replyBodies).toHaveLength(1));
+    expect(replyBodies[0]).toMatchObject({
+      attachmentIds: ["12345678-1234-4123-8123-123456789abc"],
+      skillIds: ["review-notes"],
+      messageId: expect.any(String),
+    });
+    expect(runs).toHaveLength(0);
+  },
+);
+
+test.each(["paste", "drop"] as const)(
+  "a file-only task reply from %s enters the durable queue",
+  async (method) => {
+    tasks = [rosa({ status: "ready_for_review" })];
+    serving();
+    const { view } = app("/tasks/rosa");
+    const sheet = await view.findByRole("dialog", { name: rosa().title });
+    const editor = await within(sheet).findByRole("textbox", {
+      name: "Message",
+    });
+    const file = new File(["Review these notes"], "notes.txt", {
+      type: "text/plain",
+    });
+    const transfer = {
+      files: [file],
+      items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      types: ["Files"],
+      getData: () => "",
+    };
+    if (method === "paste")
+      fireEvent.paste(editor, { clipboardData: transfer });
+    else
+      fireEvent.drop(sheet.querySelector("form")!, { dataTransfer: transfer });
+    await within(sheet).findByLabelText("Remove notes.txt");
+    await waitFor(() =>
+      expect(
+        (
+          within(sheet).getByRole("button", {
+            name: "Send message",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    const user = userEvent.setup({ document: view.container.ownerDocument });
+    await user.click(
+      within(sheet).getByRole("button", { name: "Send message" }),
+    );
+    await waitFor(() => expect(replyBodies).toHaveLength(1));
+    expect(replyBodies[0]).toEqual({
+      reply: "",
+      attachmentIds: ["12345678-1234-4123-8123-123456789abc"],
+      messageId: expect.any(String),
+    });
+    expect(runs).toHaveLength(0);
+  },
+);
+
+test("a task failing while a file is being composed keeps that draft instead of retrying with missing content", async () => {
+  tasks = [rosa({ status: "ready_for_review" })];
+  serving();
+  const { view } = app("/tasks/rosa");
+  const sheet = await view.findByRole("dialog", { name: rosa().title });
+  await within(sheet).findByRole("button", { name: "Attach a file" });
+  fireEvent.change(sheet.querySelector('input[type="file"]')!, {
+    target: {
+      files: [
+        new File(["Review these notes"], "notes.txt", { type: "text/plain" }),
+      ],
+    },
+  });
+  await within(sheet).findByLabelText("Remove notes.txt");
+  await waitFor(() =>
+    expect(
+      (
+        within(sheet).getByRole("button", {
+          name: "Send message",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  await act(async () => {
+    tasks = [
+      rosa({
+        status: "failed",
+        failure: "a service didn't answer",
+        failedAt: "2026-10-22T10:00:00.000Z",
+      }),
+    ];
+    queryClient.setQueryData(taskKeys.detail("rosa"), tasks[0]);
+  });
+  const user = userEvent.setup({ document: view.container.ownerDocument });
+  await user.click(within(sheet).getByRole("button", { name: "Send message" }));
+  await within(sheet).findByText(
+    "This task now needs a retry. Remove attachments and skills before sending again.",
+  );
+  expect(againBodies).toEqual([]);
+  expect(replyBodies).toEqual([]);
+  expect(within(sheet).getByLabelText("Remove notes.txt")).toBeTruthy();
 });
