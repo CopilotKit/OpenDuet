@@ -7,22 +7,22 @@
  * sizes: on whether a chart's bars stand in columns or lie in rows, and on how many tiles a row of
  * figures holds. Two copies of that rule would be a contract with two authors.
  *
- * ONE DESIGN WIDTH. A slide is laid out at 330px wide, whatever the phone, and the app scales the
- * whole card to the width it is given (about 0.85x at 320, 1x at 390, 1.13x at 430). So a slide
- * wraps its words in the same places at every width, and a measure taken here at 330 holds wherever
- * it is drawn. A slide that reflowed instead would wrap differently at 320 than the check measured,
+ * VERSIONED DESIGN WIDTH. New slides are laid out at 264px; persisted unversioned decks retain
+ * their original 330px geometry. The app scales the whole card, so words wrap in the same places
+ * at every phone width and the save-time measure holds wherever it is drawn. New decks start at
+ * 1x on a 320px phone; legacy decks keep their former minimum scale. A slide that reflowed instead would wrap differently at 320 than the check measured,
  * and break a figure the check had passed.
  *
  * THE MEASURE. Words are laid out line by line from each character's advance in Inter and in the
  * system font (San Francisco), whichever is wider, measured in Chrome. So the measure reads a little
- * long, never short. Outside ASCII and Latin-1 each block of Unicode is counted at its widest glyph.
+ * long. Outside ASCII and Latin-1, measured Unicode ranges use their widest known glyph.
  */
 
 /** A slide's width as it is laid out, before the app scales it to the phone. */
-export const SLIDE_WIDTH = 330;
+export const SLIDE_WIDTH = 264;
 /** The card's padding, each side. */
 export const SLIDE_PADDING = 16;
-/** The width a slide's words have: 330 less the padding. */
+/** The width a slide's words have: 264 less the padding. */
 export const SLIDE_CONTENT_WIDTH = SLIDE_WIDTH - 2 * SLIDE_PADDING;
 /**
  * The most a slide's content may stand: as tall as it is wide, so the card is a square at most.
@@ -61,13 +61,30 @@ const ROW_SPACE = 8;
 export const ROW_GAP = 4;
 
 /**
- * The least a slide is scaled, so its 13px captions never draw under 11px. At 320 wide that makes
- * the card 279px against the 264px the deck gives it.
+ * The narrowest phone slot is the design width: captions stay at least 13px.
  */
-export const LEAST_SCALE = 11 / 13;
-/** A list row is a 44px tap target on screen: so 44 / scale here, 52px at the least scale. */
+export const LEAST_SCALE = 1;
+/** A list row is a 44px tap target on screen: so 44 / scale here, 44px at the least scale. */
 export const TAP_TARGET = 44;
-const LIST_ROW = Math.ceil(TAP_TARGET / LEAST_SCALE);
+/**
+ * Missing persisted versions are v1, with the former 330px width and 11px minimum captions.
+ * New decks explicitly use v2: 264px, 13px minimum captions. Revisions retain their stored version
+ * so old forty-slide decks stay editable without dropping content or raising the new-deck cap.
+ */
+export type SlideLayoutVersion = 1 | 2;
+export const CURRENT_SLIDE_LAYOUT = 2;
+const LAYOUTS = {
+  1: { width: 330, contentWidth: 298, fitHeight: 298, leastScale: 11 / 13 },
+  2: {
+    width: SLIDE_WIDTH,
+    contentWidth: SLIDE_CONTENT_WIDTH,
+    fitHeight: SLIDE_FIT_HEIGHT,
+    leastScale: LEAST_SCALE,
+  },
+} as const;
+export const slideGeometry = (
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
+) => LAYOUTS[version];
 
 /*
  * Each printable ASCII character's advance, in thousandths of an em, from " " (32) to "~" (126):
@@ -103,9 +120,10 @@ const LATIN_1 = [
   613, 613, 589, 625, 589,
 ];
 /**
- * Every other block of Unicode at its widest glyph, in ems, measured the same way: [first, last,
+ * Selected Unicode ranges at their widest measured glyph, in ems: [first, last,
  * width]. Cyrillic, Greek and Latin Extended run to a full em and past it, so a word in them counts
- * at that. Anything not listed (an emoji, a rare ligature) counts at 1.3em.
+ * at that. Arabic presentation ligatures can encode whole words or phrases in one glyph, so their
+ * measured advances need explicit bounds too. Unlisted glyphs retain the 1.3em fallback.
  */
 const BLOCKS: readonly (readonly [number, number, number])[] = [
   [0x0100, 0x024f, 1.32],
@@ -123,6 +141,10 @@ const BLOCKS: readonly (readonly [number, number, number])[] = [
   [0x3000, 0x30ff, 1.61],
   [0x3100, 0x9fff, 1.01],
   [0xac00, 0xd7a3, 1],
+  // Chrome 155, Inter/system sans fallback, 13/15/18px at weights 400/600: maxima 2.34375em
+  // for U+FDF0–U+FDFC and 3.55209em for U+FDFD. Round up for both faces.
+  [0xfdf0, 0xfdfc, 2.35],
+  [0xfdfd, 0xfdfd, 3.56],
 ];
 type Face = "regular" | "bold";
 
@@ -147,7 +169,8 @@ export function widthOf(text: string, size: number, face: Face): number {
 
 /** The words of a run of text, as the browser breaks it. */
 function wordsOf(text: string): string[] {
-  return text.split(/\s+/).filter(Boolean);
+  // Non-breaking spaces keep localized figures together, including the narrower U+202F separator.
+  return text.split(/[^\S\u00a0\u202f]+/u).filter(Boolean);
 }
 
 /**
@@ -219,6 +242,7 @@ function wordsFit(text: string, size: number, face: Face, width: number) {
 
 /** The blocks a slide holds, by shape: the app's and the server's types both fit it. */
 export type SlideBlockShape =
+  | RichBlockShape
   | { type: "heading"; text: string }
   | { type: "text"; text: string }
   | { type: "bullets"; items: readonly string[] }
@@ -240,6 +264,39 @@ export type SlideBlockShape =
       title?: string | undefined;
       items: readonly { text: string; note?: string | undefined }[];
     };
+export type RichBlockShape =
+  | {
+      type: "timeline";
+      items: readonly {
+        date: string;
+        title: string;
+        text?: string | undefined;
+      }[];
+    }
+  | {
+      type: "checklist";
+      items: readonly { id: string; text: string; checked: boolean }[];
+    }
+  | {
+      type: "table";
+      columns: readonly string[];
+      rows: readonly (readonly string[])[];
+    }
+  | {
+      type: "decision";
+      question: string;
+      options: readonly {
+        title: string;
+        pros: readonly string[];
+        cons: readonly string[];
+      }[];
+      pick?: string | undefined;
+    }
+  | {
+      type: "comparison";
+      columns: readonly { title: string; items: readonly string[] }[];
+    }
+  | { type: "image"; alt: string; svg: string };
 export type SlideShape = { title: string; blocks: readonly SlideBlockShape[] };
 
 /** 12, 1.5K, 2.1M: a bar's figure on a slide, the same on both sides. */
@@ -247,13 +304,19 @@ const compact = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
+const scientific = new Intl.NumberFormat("en-US", {
+  notation: "scientific",
+  maximumFractionDigits: 1,
+});
 export function barFigure(value: number): string {
-  return compact.format(value);
+  // Compact notation stops at T: quadrillions and beyond would grow without bound before that
+  // suffix. Scientific notation keeps every finite bar figure small enough for both slide widths.
+  return value >= 1e15 ? scientific.format(value) : compact.format(value);
 }
 
 /** The width of each column of a chart with `count` bars standing in columns. */
-const columnWidth = (count: number) =>
-  (SLIDE_CONTENT_WIDTH - BAR_GAP * (count - 1)) / count;
+const columnWidth = (count: number, version: SlideLayoutVersion) =>
+  (slideGeometry(version).contentWidth - BAR_GAP * (count - 1)) / count;
 
 /**
  * How a chart's bars are drawn: standing in columns, figure over and label under, when every figure
@@ -263,8 +326,9 @@ const columnWidth = (count: number) =>
  */
 export function barsLayout(
   block: Extract<SlideBlockShape, { type: "bars" }>,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
 ): "columns" | "rows" {
-  const column = columnWidth(block.items.length);
+  const column = columnWidth(block.items.length, version);
   const fits = block.items.every(
     (item) =>
       widthOf(barFigure(item.value), CAPTION[0], "bold") <= column &&
@@ -282,13 +346,15 @@ export function barsLayout(
  */
 export function rowLabelWidth(
   block: Extract<SlideBlockShape, { type: "bars" }>,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
 ): number {
   const figure = Math.max(
     ...block.items.map((item) =>
       widthOf(barFigure(item.value), CAPTION[0], "bold"),
     ),
   );
-  const most = SLIDE_CONTENT_WIDTH - figure - ROW_BAR - 2 * ROW_SPACE;
+  const most =
+    slideGeometry(version).contentWidth - figure - ROW_BAR - 2 * ROW_SPACE;
   const label = Math.max(
     ...block.items.map((item) => widthOf(item.label, CAPTION[0], "regular")),
   );
@@ -299,8 +365,18 @@ export function rowLabelWidth(
 }
 
 /** The width of the words in a tile of figures, in a row of `columns` tiles. */
-const tileText = (columns: number) =>
-  (SLIDE_CONTENT_WIDTH - TILE_GAP * (columns - 1)) / columns - 20;
+const tileText = (columns: number, version: SlideLayoutVersion) =>
+  (slideGeometry(version).contentWidth - TILE_GAP * (columns - 1)) / columns -
+  20;
+
+/**
+ * Compact tables use equal, fixed columns inside their 1px wrapper border. Keep each column at
+ * least 100px wide; wider tables scroll horizontally with their first column pinned.
+ */
+export const slideTableWidth = (
+  columns: number,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
+): number => Math.max(slideGeometry(version).contentWidth - 2, columns * 100);
 
 /**
  * How many tiles a row of figures holds: two, unless a figure has a word too wide for half the
@@ -308,10 +384,11 @@ const tileText = (columns: number) =>
  */
 export function metricColumns(
   block: Extract<SlideBlockShape, { type: "metrics" }>,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
 ): 1 | 2 {
   if (block.items.length < 2) return 1;
   return block.items.every((metric) =>
-    wordsFit(metric.value, FIGURE[0], "bold", tileText(2)),
+    wordsFit(metric.value, FIGURE[0], "bold", tileText(2, version)),
   )
     ? 2
     : 1;
@@ -324,9 +401,12 @@ export function metricColumns(
  */
 export function figuresTooWide(
   block: Extract<SlideBlockShape, { type: "metrics" }>,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
 ): number[] {
   return block.items.flatMap((metric, index) =>
-    wordsFit(metric.value, FIGURE[0], "bold", tileText(1)) ? [] : [index],
+    wordsFit(metric.value, FIGURE[0], "bold", tileText(1, version))
+      ? []
+      : [index],
   );
 }
 
@@ -339,9 +419,77 @@ const lines = (
 ) => linesOf(text, size, face, width, preLine) * height;
 
 /** How tall one block draws on a slide, in px at the design width. */
-export function blockHeight(block: SlideBlockShape): number {
-  const W = SLIDE_CONTENT_WIDTH;
+export function blockHeight(
+  block: SlideBlockShape,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
+): number {
+  const W = slideGeometry(version).contentWidth;
   switch (block.type) {
+    case "timeline":
+      return block.items.reduce(
+        (sum, item) =>
+          sum +
+          12 +
+          lines(item.date, CAPTION, "bold", W - 20) +
+          lines(item.title, CAPTION, "bold", W - 20) +
+          (item.text ? lines(item.text, CAPTION, "regular", W - 20) : 0),
+        0,
+      );
+    case "checklist":
+      return block.items.reduce(
+        (sum, item) =>
+          sum +
+          Math.max(
+            Math.ceil(TAP_TARGET / slideGeometry(version).leastScale),
+            16 + lines(item.text, CAPTION, "regular", W - 36),
+          ),
+        0,
+      );
+    case "table": {
+      const cellWidth =
+        slideTableWidth(block.columns.length, version) / block.columns.length -
+        16;
+      const rowHeight = (row: readonly string[]) =>
+        Math.max(
+          ...row.map((cell) => lines(cell, CAPTION, "bold", cellWidth)),
+        ) + 17;
+      return (
+        rowHeight(block.columns) +
+        block.rows.reduce((sum, row) => sum + rowHeight(row), 0) +
+        2
+      );
+    }
+    case "decision":
+      return (
+        lines(block.question, CAPTION, "bold", W) +
+        8 +
+        Math.max(
+          ...block.options.map(
+            (option) =>
+              16 +
+              lines(option.title, CAPTION, "bold", 104) +
+              [...option.pros, ...option.cons].reduce(
+                (sum, item) => sum + lines(item, CAPTION, "regular", 88) + 4,
+                0,
+              ),
+          ),
+        ) +
+        (block.pick ? 8 + lines(`Pick: ${block.pick}`, CAPTION, "bold", W) : 0)
+      );
+    case "comparison":
+      return Math.max(
+        ...block.columns.map(
+          (column) =>
+            16 +
+            lines(column.title, CAPTION, "bold", 104) +
+            column.items.reduce(
+              (sum, item) => sum + 4 + lines(item, CAPTION, "regular", 104),
+              0,
+            ),
+        ),
+      );
+    case "image":
+      return 120 + 4 + lines(block.alt, CAPTION, "regular", W);
     case "heading":
       return lines(block.text, BODY, "bold", W);
     case "text":
@@ -356,8 +504,8 @@ export function blockHeight(block: SlideBlockShape): number {
         4 * (block.items.length - 1)
       );
     case "metrics": {
-      const columns = metricColumns(block);
-      const inner = tileText(columns);
+      const columns = metricColumns(block, version);
+      const inner = tileText(columns, version);
       const tiles = block.items.map(
         (metric) =>
           16 +
@@ -376,8 +524,8 @@ export function blockHeight(block: SlideBlockShape): number {
       const caption = block.label
         ? lines(block.label, CAPTION, "bold", W) + 6
         : 0;
-      if (barsLayout(block) === "rows") {
-        const label = rowLabelWidth(block);
+      if (barsLayout(block, version) === "rows") {
+        const label = rowLabelWidth(block, version);
         return (
           caption +
           block.items.reduce(
@@ -387,7 +535,7 @@ export function blockHeight(block: SlideBlockShape): number {
           ROW_GAP * (block.items.length - 1)
         );
       }
-      const column = columnWidth(block.items.length);
+      const column = columnWidth(block.items.length, version);
       const labels = Math.max(
         ...block.items.map((item) =>
           lines(item.label, CAPTION, "regular", column),
@@ -404,7 +552,7 @@ export function blockHeight(block: SlideBlockShape): number {
           (sum, item) =>
             sum +
             Math.max(
-              LIST_ROW,
+              Math.ceil(TAP_TARGET / slideGeometry(version).leastScale),
               8 +
                 lines(item.text, BODY, "bold", W - 24) +
                 (item.note ? lines(item.note, CAPTION, "regular", W - 24) : 0),
@@ -418,16 +566,22 @@ export function blockHeight(block: SlideBlockShape): number {
 }
 
 /** How tall a slide's title draws, in px at the design width. */
-export function titleHeight(title: string): number {
-  return lines(title, TITLE, "bold", SLIDE_CONTENT_WIDTH);
+export function titleHeight(
+  title: string,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
+): number {
+  return lines(title, TITLE, "bold", slideGeometry(version).contentWidth);
 }
 
 /** How tall a slide's content draws at the design width: its title, then each block 12px apart. */
-export function slideHeight(slide: SlideShape): number {
+export function slideHeight(
+  slide: SlideShape,
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
+): number {
   return (
-    titleHeight(slide.title) +
+    titleHeight(slide.title, version) +
     slide.blocks.reduce(
-      (sum, block) => sum + SLIDE_BLOCK_GAP + blockHeight(block),
+      (sum, block) => sum + SLIDE_BLOCK_GAP + blockHeight(block, version),
       0,
     )
   );

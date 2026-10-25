@@ -4,8 +4,8 @@ import { FIX_SILENTLY } from "../src/openduet/page-content";
 import {
   PAGE_TOOL,
   type PageInput,
-  type PageRecord,
   PageNotFoundError,
+  type PageRecord,
   pageTools,
   parsePageInput,
   previewOf,
@@ -16,6 +16,7 @@ const INITIATOR = { kind: "person" } as const;
 /** A store that keeps what it was handed, so a test can read back what the tool saved. */
 function tool(
   save: (input: PageInput) => Promise<PageRecord> = async (input) => ({
+    checklistRevision: "a".repeat(64),
     id: input.id ?? "page-1",
     botId: "openduet",
     kind: input.kind,
@@ -140,10 +141,10 @@ describe("the make_page tool", () => {
 
   test("refuses what the app cannot draw, naming where and what to fix", async () => {
     const refusals: [unknown, string][] = [
-      [{ ...prep, blocks: undefined }, 'blocks: A "page" needs blocks.'],
+      [{ ...prep, blocks: undefined }, "blocks: This kind needs blocks."],
       [{ ...deck, slides: undefined }, 'slides: A "slides" deck needs slides.'],
       [{ ...prep, slides: deck.slides }, "slides:"],
-      [{ ...prep, kind: "doc" }, "kind:"],
+      [{ ...prep, kind: "video" }, "kind:"],
       [{ ...prep, title: "x".repeat(81) }, "title:"],
       [{ ...prep, summary: "x".repeat(141) }, "summary:"],
       [{ ...prep, blocks: [{ type: "image", url: "x" }] }, "blocks.0"],
@@ -243,7 +244,11 @@ describe("the make_page tool", () => {
       seen.push(input);
       throw new PageNotFoundError();
     });
-    const answer = await revising.execute({ ...prep, id: "someone-elses" });
+    const answer = await revising.execute({
+      ...prep,
+      id: "someone-elses",
+      expectedUpdatedAt: "2026-10-22T12:52:00.000Z",
+    });
     expect(seen[0]?.id).toBe("someone-elses");
     expect(answer).toBe(
       'Refused. There is no page of yours with the id "someone-elses". Leave id out to make a new one.',

@@ -1,8 +1,12 @@
 import {
+  CURRENT_SLIDE_LAYOUT,
   figuresTooWide,
   SLIDE_FIT_HEIGHT,
+  type SlideLayoutVersion,
+  slideGeometry,
   slideHeight,
 } from "@openbot/shared/slide-fit";
+import { sanitizeThumbnail } from "@openbot/shared/thumbnail";
 import { z } from "zod";
 
 /*
@@ -15,17 +19,16 @@ import { z } from "zod";
  * same data as the page itself.
  */
 
-export const PAGE_KINDS = ["page", "slides"] as const;
-export type PageKind = (typeof PAGE_KINDS)[number];
+export { PAGE_KINDS, type PageKind } from "@openbot/shared/page-look";
 
 export const MAX_TITLE = 80;
 export const MAX_SUMMARY = 140;
 export const MAX_BLOCKS = 40;
 export const MAX_SLIDES = 20;
 /**
- * The most slides a deck has once laid out for a phone. The model writes at most `MAX_SLIDES`; what
- * runs over continues, and a deck that runs past this is refused. As many as a page has blocks, so a
- * deck never holds more than a page could.
+ * The most slides a deck has once laid out for a phone, also accepted when revising a saved deck.
+ * A new deck starts with at most `MAX_SLIDES`; what runs over continues, and a deck that runs past
+ * this is refused. As many as a page has blocks, so a deck never holds more than a page could.
  */
 export const MAX_LAID_OUT_SLIDES = MAX_BLOCKS;
 export const MAX_SLIDE_BLOCKS = 3;
@@ -37,7 +40,7 @@ export const MAX_BULLETS = 12;
 /*
  * What one slide holds. A page scrolls, so its caps are about length. A slide doesn't: it is one
  * frame, and the viewer shows all of it, so these are what reads in full in that frame (a square of
- * 298px of content, laid out at 330px wide and scaled to the phone: see shared/slide-fit.ts).
+ * content laid out at the narrowest phone slot, then only scaled up: see shared/slide-fit.ts).
  *
  * The model is not held to them. A slide it writes with more is laid out at save onto as many
  * continuation slides as it needs (`layOutDeck`, below): each count is the most one slide takes
@@ -47,12 +50,12 @@ export const MAX_BULLETS = 12;
  */
 /** Two rows of two half-width tiles. A third row of tiles with notes runs past the frame. */
 export const SLIDE_MAX_METRICS = 4;
-/** Six bullets of up to two lines each, under the slide's title, fill the frame (294 of 298px). */
+/** The count cap is a ceiling; the shared height budget splits wrapped bullets sooner. */
 export const SLIDE_MAX_BULLETS = 6;
-/** Four rows at 52px (a 44px tap target at the least scale) under a list title and the slide's title (269px). */
+/** Each row retains a 44px target at the narrowest supported width. */
 export const SLIDE_MAX_LIST = 4;
-/** Twelve bars lying in rows, 16px each and 4px apart, under a caption and the slide's title (292px). */
-export const SLIDE_MAX_BARS = 12;
+/** Ten compact bars fit under the slide title; longer labels can split sooner. */
+export const SLIDE_MAX_BARS = 10;
 
 export { SLIDE_FIT_HEIGHT, slideHeight };
 
@@ -186,6 +189,23 @@ function blockSchemaWith(limits: Limits, caps: Caps) {
   const bars = closed(limits, {
     type: z.literal("bars"),
     label: line(limits, caps.text.barCaption).optional(),
+    scale: amount(limits)
+      .optional()
+      .describe(
+        "Preserve this on saved chart fragments: their common maximum, at least every item's value. Omit for a new chart.",
+      ),
+    highlight: (limits.enforce
+      ? z
+          .number()
+          .int()
+          .min(-1)
+          .max(MAX_BARS - 1)
+      : z.number().meta({ type: "integer", minimum: -1, maximum: MAX_BARS - 1 })
+    )
+      .optional()
+      .describe(
+        "Preserve this on saved chart fragments: the highlighted bar's zero-based index; an index beyond this fragment or -1 means no highlighted bar here. Omit for a new chart.",
+      ),
     items: many(
       limits,
       closed(limits, {
@@ -211,14 +231,115 @@ function blockSchemaWith(limits: Limits, caps: Caps) {
       caps.list.message,
     ),
   });
-  return z.discriminatedUnion("type", [
+  const timeline = closed(limits, {
+    type: z.literal("timeline"),
+    items: many(
+      limits,
+      closed(limits, {
+        date: line(limits, 60),
+        title: line(limits, 120),
+        text: line(limits, 300).optional(),
+      }),
+      24,
+    ),
+  });
+  const decision = closed(limits, {
+    type: z.literal("decision"),
+    question: line(limits, 160),
+    options: many(
+      limits,
+      closed(limits, {
+        title: line(limits, 80),
+        pros: upTo(limits, line(limits, 160), 6),
+        cons: upTo(limits, line(limits, 160), 6),
+      }),
+      3,
+    ),
+    pick: line(limits, 80).optional(),
+  });
+  const checklist = closed(limits, {
+    type: z.literal("checklist"),
+    items: many(
+      limits,
+      closed(limits, {
+        id: line(limits, 64),
+        text: line(limits, 240),
+        checked: z.boolean().default(false),
+      }),
+      30,
+    ),
+  });
+  const table = closed(limits, {
+    type: z.literal("table"),
+    columns: many(limits, line(limits, 60), 8),
+    rows: many(limits, many(limits, line(limits, 240), 8), 30),
+  });
+  const comparison = closed(limits, {
+    type: z.literal("comparison"),
+    columns: many(
+      limits,
+      closed(limits, {
+        title: line(limits, 80),
+        items: many(limits, line(limits, 240), 8),
+      }),
+      3,
+    ),
+  });
+  const image = closed(limits, {
+    type: z.literal("image"),
+    alt: line(limits, 160),
+    svg: line(limits, 4096),
+  });
+  const schema = z.discriminatedUnion("type", [
     heading,
     text,
     bullets,
     metrics,
     bars,
     list,
+    timeline,
+    decision,
+    checklist,
+    table,
+    comparison,
+    image,
   ]);
+  if (!limits.enforce) return schema;
+  return schema.superRefine((block, context) => {
+    const issue = (message: string) =>
+      context.addIssue({ code: "custom", message });
+    if (
+      block.type === "bars" &&
+      block.scale !== undefined &&
+      block.scale < Math.max(...block.items.map((item) => item.value), 0)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["scale"],
+        message: "A chart's scale must be at least every item's value.",
+      });
+    if (
+      block.type === "table" &&
+      block.rows.some((row) => row.length !== block.columns.length)
+    )
+      issue("Every table row needs one cell per column.");
+    if (
+      block.type === "checklist" &&
+      new Set(block.items.map((item) => item.id)).size !== block.items.length
+    )
+      issue("Checklist item ids must be unique in a block.");
+    if (
+      block.type === "decision" &&
+      (block.options.length < 2 ||
+        (block.pick &&
+          !block.options.some((option) => option.title === block.pick)))
+    )
+      issue("A decision needs two or three options; pick must name an option.");
+    if (block.type === "comparison" && block.columns.length < 2)
+      issue("A comparison needs two or three columns.");
+    if (block.type === "image" && !sanitizeThumbnail(block.svg))
+      issue("The figure must be a safe static SVG under 4096 bytes.");
+  });
 }
 
 const PAGE_CAPS: Caps = {
@@ -248,7 +369,7 @@ export type PageBlock = z.infer<typeof pageBlockSchema>;
  * What a slide takes from the model: more items and longer lines than a page's. A slide's lines
  * wrap and its items continue onto new slides at save, so a longer note or a fourteenth row is
  * laid out, not refused. Only the shape is refused: a figure is still a figure (24 characters), and
- * a chart's bars, which share one scale and stay on one slide, are still at most 12.
+ * a chart's bars, which share one scale across continuation slides, are still at most 12.
  */
 const SLIDE_INPUT_CAPS: Caps = {
   metrics: { max: 16 },
@@ -283,7 +404,9 @@ export const pageSlideSchema = pageSlideSchemaWith(ENFORCED);
 export type PageSlide = z.infer<typeof pageSlideSchema>;
 
 /** What the table's `content` column holds: a page's blocks, or a deck's slides. */
-export type PageContent = { blocks: PageBlock[] } | { slides: PageSlide[] };
+export type PageContent =
+  | { blocks: PageBlock[] }
+  | { slides: PageSlide[]; layoutVersion?: SlideLayoutVersion };
 
 type FitIssue = { path: (string | number)[]; message: string };
 
@@ -296,49 +419,72 @@ const SLIDE_ITEMS: Partial<Record<PageBlock["type"], number>> = {
 };
 
 /** Whether a slide shows everything on it in its frame: few enough blocks and items, short enough. */
-function fits(slide: PageSlide): boolean {
+function fits(slide: PageSlide, version: SlideLayoutVersion): boolean {
   return (
     slide.blocks.length <= MAX_SLIDE_BLOCKS &&
     slide.blocks.every(
       (block) =>
         !("items" in block) ||
-        block.items.length <= (SLIDE_ITEMS[block.type] ?? Infinity),
+        block.items.length <=
+          // The former 330px layout accepted twelve chart rows. Keep its count cap as well as
+          // its height budget, or a full legacy deck would still expand beyond forty slides.
+          (version === 1 && block.type === "bars"
+            ? 12
+            : (SLIDE_ITEMS[block.type] ?? Infinity)),
     ) &&
-    slideHeight(slide) <= SLIDE_FIT_HEIGHT
+    slideHeight(slide, version) <= slideGeometry(version).fitHeight
   );
 }
 
 /** A continuation slide's title: the slide's own, marked as carrying on, when that fits the cap. */
 const CONTINUED = " (continued)";
 function continued(title: string): string {
-  const next = `${title}${CONTINUED}`;
+  const next = `${ownTitle(title)}${CONTINUED}`;
   return next.length <= MAX_TITLE ? next : title;
 }
 
 /** A slide's own title, without the mark a continuation slide carries. */
 export function ownTitle(title: string): string {
-  return title.endsWith(CONTINUED) ? title.slice(0, -CONTINUED.length) : title;
+  while (title.endsWith(CONTINUED)) title = title.slice(0, -CONTINUED.length);
+  return title;
 }
 
-/** A text block's sentences, each with the space after it, so they join back as written. */
-function sentencesOf(text: string): string[] {
-  return text.match(/[^.!?\n]+(?:[.!?]+["')\]]*)?\s*|\n+/g) ?? [text];
+/** Sentence starts are slice offsets, retaining punctuation and the whitespace between them. */
+function sentenceBoundaries(text: string): number[] {
+  return Array.from(
+    new Intl.Segmenter("en", { granularity: "sentence" }).segment(text),
+    (part) => part.index,
+  ).slice(1);
 }
 
-/**
- * A chart's part, laid out on a continuation slide: `scale` is the whole chart's largest value, so
- * every part draws against it. Set here at save, never by the model, so it is not in the schema.
- */
-export type ScaledBars = Extract<PageBlock, { type: "bars" }> & {
-  scale?: number;
-};
+/** A chart fragment's common scale and original highlight are also valid revision input. */
+export type ScaledBars = Extract<PageBlock, { type: "bars" }>;
 
 /**
  * A block cut in two: its first `count` units and the rest. The units are items for a block of
  * them (a list keeps its title on the first part) and sentences, or failing that words, for text.
  */
-function cut(block: PageBlock, count: number): [PageBlock, PageBlock] | null {
+function cut(
+  block: PageBlock,
+  count: number,
+  textBoundaries: readonly number[] = [],
+): [PageBlock, PageBlock] | null {
   switch (block.type) {
+    case "timeline":
+      return [
+        { ...block, items: block.items.slice(0, count) },
+        { ...block, items: block.items.slice(count) },
+      ];
+    case "checklist":
+      return [
+        { ...block, items: block.items.slice(0, count) },
+        { ...block, items: block.items.slice(count) },
+      ];
+    case "table":
+      return [
+        { ...block, rows: block.rows.slice(0, count) },
+        { ...block, rows: block.rows.slice(count) },
+      ];
     case "bullets":
       return [
         { ...block, items: block.items.slice(0, count) },
@@ -357,10 +503,11 @@ function cut(block: PageBlock, count: number): [PageBlock, PageBlock] | null {
       ];
     }
     case "text": {
-      const units = unitsOf(block.text);
+      const boundary = textBoundaries[count - 1];
+      if (boundary === undefined) return null;
       return [
-        { ...block, text: units.slice(0, count).join("").trim() },
-        { ...block, text: units.slice(count).join("").trim() },
+        { ...block, text: block.text.slice(0, boundary).trim() },
+        { ...block, text: block.text.slice(boundary).trim() },
       ];
     }
     // A chart too tall for a slide continues its bars on the next, every part drawn against the
@@ -368,11 +515,23 @@ function cut(block: PageBlock, count: number): [PageBlock, PageBlock] | null {
     // the first.
     case "bars": {
       const scale =
-        (block as ScaledBars).scale ??
-        Math.max(...block.items.map((item) => item.value), 0);
+        block.scale ?? Math.max(...block.items.map((item) => item.value), 0);
+      const highlight = block.highlight ?? block.items.length - 1;
       return [
-        { ...block, scale, items: block.items.slice(0, count) } as PageBlock,
-        { ...block, scale, items: block.items.slice(count) } as PageBlock,
+        {
+          ...block,
+          scale,
+          highlight,
+          items: block.items.slice(0, count),
+        },
+        {
+          ...block,
+          scale,
+          // A previously highlighted bar stays on the earlier part. Keep the sentinel bounded
+          // across repeated splits so every saved fragment remains valid revision input.
+          highlight: Math.max(-1, highlight - count),
+          items: block.items.slice(count),
+        },
       ];
     }
     // A heading is one line: it is not cut.
@@ -381,14 +540,8 @@ function cut(block: PageBlock, count: number): [PageBlock, PageBlock] | null {
   }
 }
 
-/** How a text block is cut: by sentence, or by word when one sentence is longer than a slide. */
-function unitsOf(text: string): string[] {
-  const sentences = sentencesOf(text);
-  return sentences.length > 1 ? sentences : (text.match(/\S+\s*/g) ?? [text]);
-}
-
 function unitCount(block: PageBlock): number {
-  if (block.type === "text") return unitsOf(block.text).length;
+  if (block.type === "table") return block.rows.length;
   return "items" in block ? block.items.length : 1;
 }
 
@@ -399,62 +552,138 @@ function unitCount(block: PageBlock): number {
 function firstPart(
   block: PageBlock,
   title: string,
+  version: SlideLayoutVersion,
+  before: PageBlock[] = [],
 ): [PageBlock, PageBlock] | null {
-  for (let count = unitCount(block) - 1; count >= 1; count--) {
-    const parts = cut(block, count);
-    if (!parts) return null;
-    if (fits({ title, blocks: [parts[0]] })) return parts;
+  // Charts switch from tall columns to compact rows as items are added, so their fit is
+  // not monotonic. They have at most twelve items; search those bounded prefixes directly.
+  if (block.type === "bars") {
+    for (let count = unitCount(block) - 1; count >= 1; count--) {
+      const parts = cut(block, count);
+      if (parts && fits({ title, blocks: [...before, parts[0]] }, version))
+        return parts;
+    }
+    return null;
   }
-  return null;
+  const find = (
+    textBoundaries?: readonly number[],
+  ): [PageBlock, PageBlock] | null => {
+    let low = 1;
+    let high = textBoundaries?.length ?? unitCount(block) - 1;
+    let best: [PageBlock, PageBlock] | null = null;
+    while (low <= high) {
+      const count = Math.floor((low + high) / 2);
+      const parts = cut(block, count, textBoundaries);
+      if (!parts) return null;
+      if (fits({ title, blocks: [...before, parts[0]] }, version)) {
+        best = parts;
+        low = count + 1;
+      } else high = count - 1;
+    }
+    return best;
+  };
+  if (block.type !== "text") return find();
+  const boundaries = sentenceBoundaries(block.text);
+  const best = find(boundaries);
+  if (best) return best;
+
+  const firstSentence = block.text.slice(0, boundaries[0] ?? block.text.length);
+  // Keep a sentence whole on the next slide if it only lacks room after earlier blocks.
+  if (
+    before.length > 0 &&
+    fits({ title, blocks: [{ ...block, text: firstSentence.trim() }] }, version)
+  )
+    return null;
+  // A single oversized sentence must also continue when later sentences follow it. Search only
+  // its word starts, so punctuation stays attached and an unbroken token is still irreducible.
+  return find(
+    Array.from(firstSentence.matchAll(/\S+\s*/g), (word) => word.index).slice(
+      1,
+    ),
+  );
 }
 
 /**
  * A slide laid out on as many slides as it takes to show it all on a phone. Blocks go on in order
- * while they fit; one that does not starts a continuation slide, carrying a heading that would
- * otherwise end a slide with it; one too long for any slide is cut by items, or by sentence, and
- * continues; a chart too tall for a slide by itself goes on its own slide and continues its bars on
+ * while they fit; one that does not starts a continuation slide, carrying the heading run that
+ * would otherwise end a slide with it; one too long for any slide is cut by items, or by sentence,
+ * and continues; a chart too tall for a slide by itself goes on its own slide and continues its bars on
  * the next, on one scale. Never refused for a chart's height: that ended runs with nothing saved and
  * nothing said. What still cannot be laid out (one unit taller than a slide) comes back as an issue.
  */
 function layOutSlide(
   slide: PageSlide,
   at: number,
+  remaining: number,
+  version: SlideLayoutVersion,
 ): { slides: PageSlide[]; issues: FitIssue[] } {
   const slides: PageSlide[] = [];
   let current: PageSlide = { title: slide.title, blocks: [] };
+  // A title must fit even when there are no blocks to enter the layout loop.
+  if (!fits(current, version))
+    return {
+      slides: [],
+      issues: [
+        {
+          path: ["slides", at, "title"],
+          message: `This slide's title is taller than a phone shows by itself (about ${Math.ceil(slideHeight(current, version))}px against ${slideGeometry(version).fitHeight}px). Shorten the title.`,
+        },
+      ],
+    };
   const queue = [...slide.blocks];
   let block = queue.shift();
   while (block) {
+    if (slides.length >= remaining)
+      return { slides: [], issues: [deckLimitIssue()] };
     const next = { ...current, blocks: [...current.blocks, block] };
-    if (fits(next)) {
+    if (fits(next, version)) {
       current = next;
       block = queue.shift();
       continue;
     }
+    const fitted = firstPart(block, current.title, version, current.blocks);
+    if (fitted) {
+      slides.push({ ...current, blocks: [...current.blocks, fitted[0]] });
+      current = { title: continued(slide.title), blocks: [] };
+      block = fitted[1];
+      continue;
+    }
     if (current.blocks.length > 0) {
-      // A heading never ends a slide with what it heads on the next one: it goes over with it.
-      const last = current.blocks.at(-1);
-      const carried =
-        last?.type === "heading" && current.blocks.length > 1 ? last : null;
+      // Keep every adjacent heading with what it heads, including when another heading is
+      // the block that overflows. A heading-only slide cannot be split without an orphan.
+      let carryFrom = current.blocks.length;
+      while (current.blocks[carryFrom - 1]?.type === "heading") carryFrom--;
+      if (carryFrom === 0)
+        return {
+          slides: [],
+          issues: [
+            {
+              path: ["slides", at],
+              message:
+                "This heading and the first item below it do not fit together. Shorten them.",
+            },
+          ],
+        };
       slides.push({
         ...current,
-        blocks: carried ? current.blocks.slice(0, -1) : current.blocks,
+        blocks: current.blocks.slice(0, carryFrom),
       });
+      const carried = current.blocks.slice(carryFrom);
       current = { title: continued(slide.title), blocks: [] };
-      if (carried) {
-        queue.unshift(block);
-        block = carried;
+      if (carried.length > 0) {
+        queue.unshift(...carried, block);
+        block = queue.shift();
       }
       continue;
     }
-    const parts = firstPart(block, current.title);
+    const parts = firstPart(block, current.title, version);
     if (!parts)
       return {
         slides: [],
         issues: [
           {
             path: ["slides", at],
-            message: `This slide's ${block.type} is taller than a phone shows by itself (about ${Math.ceil(slideHeight({ title: current.title, blocks: [block] }))}px against ${SLIDE_FIT_HEIGHT}px). Shorten it.`,
+            message: `This slide's ${block.type} is taller than a phone shows by itself (about ${Math.ceil(slideHeight({ title: current.title, blocks: [block] }, version))}px against ${slideGeometry(version).fitHeight}px). Shorten it.`,
           },
         ],
       };
@@ -472,14 +701,17 @@ function layOutSlide(
  * figure too wide to draw whole even in a whole-width tile, one unit taller than a slide by itself,
  * and a deck that runs past `MAX_LAID_OUT_SLIDES` once laid out.
  */
-export function layOutDeck(slides: readonly PageSlide[]): {
+export function layOutDeck(
+  slides: readonly PageSlide[],
+  version: SlideLayoutVersion = CURRENT_SLIDE_LAYOUT,
+): {
   slides: PageSlide[];
   issues: FitIssue[];
 } {
   const issues: FitIssue[] = slides.flatMap((slide, at) =>
     slide.blocks.flatMap((block, index) =>
       block.type === "metrics"
-        ? figuresTooWide(block).map((item) => ({
+        ? figuresTooWide(block, version).map((item) => ({
             path: ["slides", at, "blocks", index, "items", item, "value"],
             message: `"${block.items[item]?.value}" is too wide to show on a phone. Write the figure shorter, such as "$1.2M" for "$1,234,567".`,
           }))
@@ -487,19 +719,25 @@ export function layOutDeck(slides: readonly PageSlide[]): {
     ),
   );
   if (issues.length > 0) return { slides: [], issues };
-  const laid = slides.map((slide, at) => layOutSlide(slide, at));
-  const failed = laid.flatMap((result) => result.issues);
-  if (failed.length > 0) return { slides: [], issues: failed };
-  const all = laid.flatMap((result) => result.slides);
-  if (all.length > MAX_LAID_OUT_SLIDES)
-    return {
-      slides: [],
-      issues: [
-        {
-          path: ["slides"],
-          message: `Laid out for a phone, this deck runs to ${all.length} slides, and a deck has at most ${MAX_LAID_OUT_SLIDES}. Keep fewer items, or shorter notes.`,
-        },
-      ],
-    };
+  const all: PageSlide[] = [];
+  for (const [at, slide] of slides.entries()) {
+    const laid = layOutSlide(
+      slide,
+      at,
+      MAX_LAID_OUT_SLIDES - all.length,
+      version,
+    );
+    if (laid.issues.length) return { slides: [], issues: laid.issues };
+    all.push(...laid.slides);
+    if (all.length > MAX_LAID_OUT_SLIDES)
+      return { slides: [], issues: [deckLimitIssue()] };
+  }
   return { slides: all, issues: [] };
+}
+
+function deckLimitIssue(): FitIssue {
+  return {
+    path: ["slides"],
+    message: `Laid out for a phone, this deck has at most ${MAX_LAID_OUT_SLIDES} slides. Keep fewer items, or shorter notes.`,
+  };
 }

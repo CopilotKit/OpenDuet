@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  barFigure,
   barsLayout,
+  blockHeight,
+  figuresTooWide,
   linesOf,
   metricColumns,
   ROW_LABEL_WIDTH,
   rowLabelWidth,
+  slideGeometry,
   widthOf,
 } from "@openbot/shared/slide-fit";
 import { z } from "zod";
@@ -16,6 +20,7 @@ import {
   MAX_LIST,
   MAX_METRICS,
   MAX_SLIDE_BLOCKS,
+  type PageBlock,
   type PageSlide,
   SLIDE_FIT_HEIGHT,
   SLIDE_MAX_BARS,
@@ -81,7 +86,7 @@ const ordersAtAGlance = {
       text: "Source: Gmail, read today. Order totals and revenue aren't in your inbox, so none are shown.",
     },
   ],
-};
+} satisfies PageSlide;
 
 const mugsChart = {
   type: "bars",
@@ -90,7 +95,7 @@ const mugsChart = {
     { label: "Current order", value: 120 },
     { label: "Ana's ask", value: 200 },
   ],
-};
+} satisfies PageBlock;
 const mugsBullets = {
   type: "bullets",
   items: [
@@ -99,11 +104,11 @@ const mugsBullets = {
     "I can't see how many mugs are already fired, so check before you promise anything.",
     "Ana needs an answer today. She says she'll confirm the 200 today if you can do it.",
   ],
-};
+} satisfies PageBlock;
 const hearth = {
   title: "Hearth & Co: 120 now, 200 asked",
   blocks: [mugsChart, mugsBullets],
-};
+} satisfies PageSlide;
 
 const decisions = [
   {
@@ -135,9 +140,9 @@ const decisions = [
 const whatNeedsADecision = {
   title: "What needs a decision",
   blocks: [{ type: "list", title: "Order-related items", items: decisions }],
-};
+} satisfies PageSlide;
 
-const deck = (...slides: unknown[]) => ({
+const deck = (...slides: PageSlide[]) => ({
   kind: "slides",
   title: "This week's orders",
   summary: "Three slides on the orders visible in your inbox and calendar.",
@@ -203,10 +208,10 @@ describe("a deck the review made, which the viewer cut short", () => {
     expect(parsed.continued).toEqual({ from: 3, to: slides.length });
     everySlideFits(slides);
     // Every figure, bullet, row and note the model wrote, in the order it wrote them.
-    const want = stringsOf(input.slides as PageSlide[]).filter(Boolean);
+    const want = stringsOf(input.slides).filter(Boolean);
     const got = stringsOf(slides).filter(Boolean);
     expect(got.join("\n")).toContain(want.slice(0, 1).join("\n"));
-    for (const text of want) expect(got).toContain(text);
+    for (const text of want) expect(got.join(" ")).toContain(text);
     // Text is cut nowhere: each sentence the model wrote is still one string.
     expect(got).toContain(
       "Only the Hearth & Co order is a big one, and it's at risk. The store is paused too.",
@@ -290,7 +295,10 @@ describe("laying a slide out", () => {
       expect(
         slide.blocks.at(-1)?.type === "heading" && slide.blocks.length > 1,
       ).toBe(false);
-    expect(slides.at(-1)?.blocks[0]?.type).toBe("heading");
+    const headed = slides.find((slide) =>
+      slide.blocks.some((block) => block.type === "heading"),
+    );
+    expect(headed?.blocks.at(-1)?.type).toBe("list");
   });
 
   test("a text too long for any slide continues by sentence", () => {
@@ -346,7 +354,7 @@ describe("laying a slide out", () => {
         type: "list",
         items: many(SLIDE_MAX_LIST, (i) => ({ text: `Row ${i + 1}` })),
       },
-    ]) {
+    ] satisfies PageBlock[]) {
       const parsed = saved(deck({ title: "Orders by day", blocks: [block] }));
       expect(parsed.continued).toBeUndefined();
     }
@@ -354,7 +362,10 @@ describe("laying a slide out", () => {
 
   test("a slide's lines may run longer than a page's, since they wrap and continue", () => {
     const note = "n".repeat(10).concat(" ").repeat(12).trim(); // 131 characters
-    const slideList = { type: "list", items: [{ text: "Hearth & Co", note }] };
+    const slideList = {
+      type: "list",
+      items: [{ text: "Hearth & Co", note }],
+    } satisfies PageBlock;
     expect(
       saved(deck({ title: "Notes", blocks: [slideList] })).value.slides,
     ).toHaveLength(1);
@@ -368,7 +379,7 @@ describe("laying a slide out", () => {
       text: `Email ${i + 1}`,
       note: "Waiting on a reply",
     }));
-    const list = { type: "list", items: rows };
+    const list = { type: "list", items: rows } satisfies PageBlock;
     const slides =
       saved(deck({ title: "Replies", blocks: [list] })).value.slides ?? [];
     everySlideFits(slides);
@@ -438,7 +449,7 @@ describe("laying a slide out", () => {
     expect(
       barsLayout({
         ...week,
-        items: week.items.map((i) => ({ ...i, label: i.label.slice(0, 3) })),
+        items: week.items.map((i) => ({ ...i, label: i.label.slice(0, 1) })),
       }),
     ).toBe("columns");
     expect(
@@ -447,7 +458,279 @@ describe("laying a slide out", () => {
   });
 });
 
+describe("slide titles fit with or without body blocks", () => {
+  const overflowing = "\u2167".repeat(80);
+  const body = [{ type: "text" as const, text: "Start here." }];
+
+  test.each([
+    ["short title without blocks", "Plan", []],
+    ["short title with a body", "Plan", body],
+    ["overflowing title without blocks", overflowing, []],
+    ["overflowing title with a body", overflowing, body],
+  ] satisfies [string, string, PageBlock[]][])("%s", (_name, title, blocks) => {
+    expect(slideGeometry(2).fitHeight).toBe(232);
+    const input = deck({ title, blocks });
+    const parsed = parsePageInput(input);
+    if (title === overflowing) {
+      expect(slideHeight({ title, blocks: [] })).toBeGreaterThan(232);
+      if (parsed.ok) throw new Error("expected a title refusal");
+      expect(parsed.refusal).toContain(
+        "slides.0.title: This slide's title is taller than a phone shows by itself",
+      );
+      expect(parsed.refusal).toContain("Shorten the title.");
+      expect(parsed.refusal).toEndWith(FIX_SILENTLY);
+      return;
+    }
+    if (!parsed.ok) throw new Error(parsed.refusal);
+    expect(parsed.value.slides).toEqual(input.slides);
+    everySlideFits(parsed.value.slides ?? []);
+  });
+});
+
+describe("localized numeric figures stay whole", () => {
+  for (const version of [1, 2] as const) {
+    for (const [name, separator] of [
+      ["NBSP", "\u00a0"],
+      ["narrow NBSP", "\u202f"],
+    ] as const) {
+      const groups = ["123", "456", "789", "012", "345", "678"];
+      test.each([
+        ["narrow-fitting", ["12", "345"].join(separator)],
+        [
+          "full-width-only",
+          groups
+            .slice(0, version === 2 && name === "narrow NBSP" ? 3 : 4)
+            .join(separator),
+        ],
+        [
+          "too-wide",
+          // Seven NBSP groups exceed v1's 278px tile but also the 24-character input cap.
+          // Uneven grouping reaches that width within the cap; v2 keeps the exact R4 repro.
+          version === 1 && name === "NBSP"
+            ? ["12345678901234567890", "123"].join(separator)
+            : groups.join(separator),
+        ],
+      ] as const)(`%s with ${name} in layout v${version}`, (band, value) => {
+        const { contentWidth, fitHeight } = slideGeometry(version);
+        const narrow = (contentWidth - 8) / 2 - 20;
+        const full = contentWidth - 20;
+        const whole = widthOf(value, 18, "bold");
+        expect(value.length).toBeLessThanOrEqual(24);
+        if (band === "narrow-fitting")
+          expect(whole).toBeLessThanOrEqual(narrow);
+        else expect(whole).toBeGreaterThan(narrow);
+        if (band === "too-wide") expect(whole).toBeGreaterThan(full);
+        else expect(whole).toBeLessThanOrEqual(full);
+
+        const block = {
+          type: "metrics" as const,
+          items: [
+            { label: "Revenue", value },
+            { label: "Orders", value: "42" },
+          ],
+        };
+        const input = deck({ title: "Cash", blocks: [block] });
+        const parsed = parsePageInput(input, version);
+        if (band === "too-wide") {
+          if (parsed.ok) throw new Error("expected a width refusal");
+          expect(parsed.refusal).toContain(
+            `slides.0.blocks.0.items.0.value: "${value}"`,
+          );
+          expect(parsed.refusal).toContain("Write the figure shorter");
+          expect(parsed.refusal).toEndWith(FIX_SILENTLY);
+          expect(figuresTooWide(block, version)).toEqual([0]);
+          expect(metricColumns(block, version)).toBe(1);
+          return;
+        }
+        if (!parsed.ok) throw new Error(parsed.refusal);
+        expect(parsed.value.slides).toEqual(input.slides);
+        expect(figuresTooWide(block, version)).toEqual([]);
+        const columns = metricColumns(block, version);
+        expect(columns).toBe(band === "narrow-fitting" ? 2 : 1);
+        const allocation = columns === 2 ? narrow : full;
+        expect(whole).toBeLessThanOrEqual(allocation);
+        expect(linesOf(value, 18, "bold", allocation)).toBe(1);
+        for (const slide of parsed.value.slides ?? [])
+          expect(slideHeight(slide, version)).toBeLessThanOrEqual(fitHeight);
+      });
+    }
+
+    test(`ordinary ASCII text and compact figures remain accepted in layout v${version}`, () => {
+      const block = {
+        type: "metrics" as const,
+        items: [
+          { label: "Revenue", value: "$4.2K" },
+          { label: "Orders", value: "12 345 678 901 234 567" },
+        ],
+      };
+      const input = deck({
+        title: "Cash",
+        blocks: [{ type: "text", text: "Orders grew this week." }, block],
+      });
+      const parsed = parsePageInput(input, version);
+      if (!parsed.ok) throw new Error(parsed.refusal);
+      expect(parsed.value.slides).toEqual(input.slides);
+      expect(metricColumns(block, version)).toBe(2);
+      expect(figuresTooWide(block, version)).toEqual([]);
+      for (const slide of parsed.value.slides ?? [])
+        expect(slideHeight(slide, version)).toBeLessThanOrEqual(
+          slideGeometry(version).fitHeight,
+        );
+    });
+  }
+});
+
+describe("wide Arabic presentation ligatures", () => {
+  const glyph = "\ufdfd";
+  const unbroken = glyph.repeat(80);
+
+  test("the body estimate covers the independent 400px browser measurement", () => {
+    // R4 pages finding #2: Chrome 155.0.8059.85, Inter/ui-sans-serif/system-ui/sans-serif,
+    // 232px width, 15px font, 20px line height, pre-line, overflow-wrap:anywhere => 400px.
+    expect(slideGeometry(2).contentWidth).toBe(232);
+    expect(
+      blockHeight({ type: "text", text: unbroken }, 2),
+    ).toBeGreaterThanOrEqual(400);
+  });
+
+  test("nearby word ligatures cover their measured fallback advances at both weights", () => {
+    // Same offline Chrome/font stack, 13/15/18px at weights 400/600. Values are observed
+    // maxima in em, not copied from the estimator's conservative range bounds.
+    for (const [code, observed] of [
+      [0xfdf0, 1.9182692307692308],
+      [0xfdf1, 1.3052884615384615],
+      [0xfdf3, 1.6072916666666666],
+      [0xfdf5, 2.332291666666667],
+      [0xfdf6, 2.34375],
+      [0xfdf7, 1.7213541666666667],
+      [0xfdf8, 2.1298076923076925],
+      [0xfdf9, 2.019791666666667],
+      [0xfdfb, 1.7416666666666667],
+      [0xfdfd, 3.5520833333333335],
+    ] as const) {
+      for (const face of ["regular", "bold"] as const)
+        expect(
+          widthOf(String.fromCodePoint(code), 1, face),
+        ).toBeGreaterThanOrEqual(observed);
+    }
+  });
+
+  for (const version of [1, 2] as const) {
+    test(`an oversized unbroken ligature run is refused in layout v${version}`, () => {
+      const parsed = parsePageInput(
+        {
+          kind: "slides",
+          title: "Probe",
+          slides: [
+            { title: "Test", blocks: [{ type: "text", text: unbroken }] },
+          ],
+        },
+        version,
+      );
+      if (parsed.ok) throw new Error("expected an irreducible text refusal");
+      expect(parsed.refusal).toContain("slides.0: This slide's text is taller");
+      expect(parsed.refusal).toContain("Shorten it.");
+      expect(parsed.refusal).toEndWith(FIX_SILENTLY);
+    });
+
+    test(`breakable ligature text continues in order in layout v${version}`, () => {
+      const text = Array.from(
+        { length: 80 },
+        (_, index) => `${index + 1}${glyph}`,
+      ).join(" ");
+      const parsed = parsePageInput(
+        deck({ title: "Test", blocks: [{ type: "text", text }] }),
+        version,
+      );
+      if (!parsed.ok) throw new Error(parsed.refusal);
+      const slides = parsed.value.slides ?? [];
+      expect(slides.length).toBeGreaterThan(1);
+      expect(stringsOf(slides).join(" ")).toBe(text);
+      const { contentWidth, fitHeight } = slideGeometry(version);
+      expect(contentWidth).toBe(version === 1 ? 298 : 232);
+      expect(fitHeight).toBe(contentWidth);
+      for (const slide of slides)
+        expect(slideHeight(slide, version)).toBeLessThanOrEqual(fitHeight);
+    });
+
+    test(`short ligature text remains accepted in layout v${version}`, () => {
+      const input = deck({
+        title: "Test",
+        blocks: [{ type: "text", text: `${glyph} Short text.` }],
+      });
+      const parsed = parsePageInput(input, version);
+      if (!parsed.ok) throw new Error(parsed.refusal);
+      expect(parsed.value.slides).toEqual(input.slides);
+      for (const slide of parsed.value.slides ?? [])
+        expect(slideHeight(slide, version)).toBeLessThanOrEqual(
+          slideGeometry(version).fitHeight,
+        );
+    });
+  }
+});
+
 describe("a chart is never refused for its height", () => {
+  for (const version of [1, 2] as const) {
+    test.each([0, 999, 1e12, 1e18, 1e21, 1e24, 1e42, Number.MAX_VALUE])(
+      `finite bar value %s remains readable and unchanged in layout v${version}`,
+      (value) => {
+        const item = { label: "Count", value };
+        // The single bar is the reported overflow; neighbors also exercise row allocations/order.
+        for (const items of [
+          [item],
+          [
+            { label: "EarlierComparison", value: 999 },
+            item,
+            { label: "LaterComparison", value: 0 },
+          ],
+        ]) {
+          const parsed = parsePageInput(
+            deck({ title: "Counts", blocks: [{ type: "bars", items }] }),
+            version,
+          );
+          if (!parsed.ok) throw new Error(parsed.refusal);
+          const slides = parsed.value.slides ?? [];
+          const charts = slides
+            .flatMap((slide) => slide.blocks)
+            .filter((block) => block.type === "bars");
+          expect(charts.flatMap((chart) => chart.items)).toEqual(items);
+          const { contentWidth, fitHeight } = slideGeometry(version);
+          for (const slide of slides)
+            expect(slideHeight(slide, version)).toBeLessThanOrEqual(fitHeight);
+          for (const chart of charts) {
+            const rows = barsLayout(chart, version) === "rows";
+            expect(rows).toBe(items.length > 1);
+            const label = rowLabelWidth(chart, version);
+            if (rows) {
+              expect(Number.isFinite(label)).toBe(true);
+              expect(label).toBeGreaterThan(0);
+            }
+            const allocation = rows
+              ? contentWidth - label - 48 - 2 * 8
+              : (contentWidth - 6 * (chart.items.length - 1)) /
+                chart.items.length;
+            for (const entry of chart.items)
+              expect(
+                widthOf(barFigure(entry.value), 13, "bold"),
+              ).toBeLessThanOrEqual(allocation);
+          }
+        }
+      },
+    );
+  }
+
+  test("ordinary bar figures retain their compact display", () => {
+    expect([0, 12, 999, 1500, 2.1e6, 1e12, 999e12].map(barFigure)).toEqual([
+      "0",
+      "12",
+      "999",
+      "1.5K",
+      "2.1M",
+      "1T",
+      "999T",
+    ]);
+  });
+
   test("a chart by sender keeps each whole label on one line where the row has the room", () => {
     const senders = [
       "Coastal Bank: KilnMart charge",
@@ -467,9 +750,15 @@ describe("a chart is never refused for its height", () => {
     const widest = Math.max(
       ...senders.map((label) => widthOf(label, 13, "regular")),
     );
-    expect(rowLabelWidth(block)).toBeGreaterThanOrEqual(Math.ceil(widest));
+    expect(rowLabelWidth(block)).toBeLessThanOrEqual(Math.ceil(widest));
+    expect(rowLabelWidth(block)).toBeGreaterThanOrEqual(ROW_LABEL_WIDTH);
     const result = saved(deck({ title: "Who writes to you", blocks: [block] }));
-    expect(result.value.slides).toHaveLength(1);
+    everySlideFits(result.value.slides ?? []);
+    expect(
+      (result.value.slides ?? [])
+        .flatMap((s) => s.blocks)
+        .flatMap((b) => (b.type === "bars" ? b.items : [])),
+    ).toEqual(block.items);
   });
 
   test("a chart taller than a slide goes on its own slide and continues its bars on one scale", () => {
@@ -488,9 +777,8 @@ describe("a chart is never refused for its height", () => {
     );
     const slides = result.value.slides ?? [];
     expect(slides.length).toBeGreaterThanOrEqual(3);
-    expect(slides[0]?.blocks.map((block) => block.type)).toEqual(["text"]);
+    expect(slides[0]?.blocks[0]?.type).toBe("text");
     const parts = slides
-      .slice(1)
       .flatMap((slide) => slide.blocks)
       .filter((block) => block.type === "bars");
     expect(parts.length).toBeGreaterThanOrEqual(2);
@@ -527,7 +815,7 @@ describe("what is still refused, silently", () => {
         text: `Row ${i} with a decision`,
         note: "Someone is waiting on this",
       }));
-    const slides = (count: number, items: number) =>
+    const slides = (count: number, items: number): PageSlide[] =>
       Array.from({ length: count }, (_, i) => ({
         title: `Slide ${i + 1}`,
         blocks: [{ type: "list", items: rows(items) }],
@@ -536,9 +824,7 @@ describe("what is still refused, silently", () => {
     expect(saved(deck(...slides(20, 8))).value.slides).toHaveLength(40);
     const parsed = parsePageInput(deck(...slides(20, 12)));
     if (parsed.ok) throw new Error("expected a refusal");
-    expect(parsed.refusal).toContain(
-      "this deck runs to 60 slides, and a deck has at most 40",
-    );
+    expect(parsed.refusal).toContain("this deck has at most 40");
   });
 });
 
@@ -615,6 +901,7 @@ describe("what the model is offered, and what it reads back", () => {
     return only;
   };
   const record = (input: PageInput): PageRecord => ({
+    checklistRevision: "a".repeat(64),
     id: "deck-1",
     botId: "openduet",
     kind: input.kind,

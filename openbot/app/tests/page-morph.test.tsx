@@ -18,6 +18,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { MotionGlobalConfig } from "motion/react";
 import { useMemo } from "react";
 import {
   type ConversationSend,
@@ -29,12 +30,13 @@ import {
   PageSheetHost,
   useCloseSheet,
 } from "@/components/duet/page-sheet";
-import { ConversationPageCard } from "@/lib/copilot/page-card-tool";
-import { searchTextEntry } from "@/lib/search-text";
 import { MakeScreen } from "@/components/shell/make-screen";
 import { agentKeys } from "@/lib/agents/queries";
+import { ConversationPageCard } from "@/lib/copilot/page-card-tool";
 import type { PageSummary } from "@/lib/pages/queries";
+import { searchTextEntry } from "@/lib/search-text";
 import { queryClient } from "@/query-client";
+import { runMotionFrames } from "./run-motion-frames";
 import { settleReactWork } from "./settle-react-work";
 
 /**
@@ -46,10 +48,13 @@ import { settleReactWork } from "./settle-react-work";
 const originalFetch = global.fetch;
 let originalMatchMedia: typeof window.matchMedia;
 let originalRect: typeof Element.prototype.getBoundingClientRect;
+let originalManualTiming: typeof MotionGlobalConfig.useManualTiming;
 beforeAll(() => {
   GlobalRegistrator.register({ url: "http://localhost:3010" });
   originalMatchMedia = window.matchMedia;
   originalRect = Element.prototype.getBoundingClientRect;
+  originalManualTiming = MotionGlobalConfig.useManualTiming;
+  MotionGlobalConfig.useManualTiming = true;
 });
 afterEach(() => {
   cleanup();
@@ -61,6 +66,7 @@ afterEach(() => {
 });
 afterAll(async () => {
   await settleReactWork();
+  MotionGlobalConfig.useManualTiming = originalManualTiming;
   GlobalRegistrator.unregister();
 });
 
@@ -122,10 +128,12 @@ const SHEET = { top: 12, left: 10, width: 355, height: 790 };
 
 /** The card in the grid sits where a grid cell would; the sheet's card fills the screen. */
 function layingOut() {
+  // The hidden marker identifies exactly the element given to morph.sheetRef. Keep its identity
+  // after the handoff removes that marker, so closing still measures the sheet's rectangle.
+  let sheet: Element | null = null;
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    const box = this.className.toString().includes("rounded-[28px]")
-      ? SHEET
-      : CARD;
+    if (this.hasAttribute("data-morph-hidden")) sheet = this;
+    const box = this === sheet ? SHEET : CARD;
     return {
       ...box,
       x: box.left,
@@ -179,6 +187,41 @@ function app() {
 const ghost = (direction: "open" | "close") =>
   document.querySelector<HTMLElement>(`[data-morph="${direction}"]`);
 
+function expectSheetGeometry(dialog: HTMLElement) {
+  const measured = dialog.querySelector<HTMLElement>("[data-morph-hidden]");
+  expect(measured).not.toBeNull();
+  expect(measured!.getBoundingClientRect()).toMatchObject(SHEET);
+  expect(measured!.getBoundingClientRect()).not.toMatchObject(CARD);
+  return measured!;
+}
+
+/** Verify the drawn geometry, including actual travel, rather than only the stand-in's lifetime. */
+async function expectTravel(
+  element: HTMLElement,
+  from: typeof CARD,
+  to: typeof SHEET,
+) {
+  const drawn = () => ({
+    top: Number.parseFloat(element.style.top),
+    left: Number.parseFloat(element.style.left),
+    width: Number.parseFloat(element.style.width),
+    height: Number.parseFloat(element.style.height),
+  });
+  expect(drawn()).toEqual(from);
+  await runMotionFrames(6);
+  const moving = drawn();
+  for (const dimension of ["top", "left", "width", "height"] as const) {
+    expect(moving[dimension]).toBeGreaterThan(
+      Math.min(from[dimension], to[dimension]),
+    );
+    expect(moving[dimension]).toBeLessThan(
+      Math.max(from[dimension], to[dimension]),
+    );
+  }
+  await runMotionFrames(24);
+  expect(drawn()).toEqual(to);
+}
+
 test("the card grows into its sheet, the sheet takes over, and closing shrinks it back into the card", async () => {
   reducedMotion(false);
   layingOut();
@@ -199,7 +242,8 @@ test("the card grows into its sheet, the sheet takes over, and closing shrinks i
   expect(opening.getAttribute("aria-hidden")).toBe("true");
   expect(opening.textContent).toContain("Mugs per day");
   expect(opening.textContent).toContain("Hearth & Co orders");
-  expect(sheet.querySelector("[data-morph-hidden]") === null).toBe(false);
+  const measured = expectSheetGeometry(sheet);
+  await expectTravel(opening, CARD, SHEET);
 
   // It lands: the sheet shows and the stand-in goes.
   await waitFor(
@@ -207,12 +251,14 @@ test("the card grows into its sheet, the sheet takes over, and closing shrinks i
     { timeout: 2_000 },
   );
   expect(sheet.querySelector("[data-morph-hidden]") === null).toBe(true);
+  expect(measured.getBoundingClientRect()).toMatchObject(SHEET);
   expect(router.state.location.pathname).toBe("/make/deck");
 
   // Closing runs it back to the card, then the sheet is gone and nothing is left behind.
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   await waitFor(() => expect(ghost("close") === null).toBe(false));
   expect(sheet.querySelector("[data-morph-hidden]") === null).toBe(false);
+  await expectTravel(ghost("close")!, SHEET, CARD);
   await waitFor(() => expect(router.state.location.pathname).toBe("/make"), {
     timeout: 2_000,
   });
@@ -236,7 +282,7 @@ test("with reduced motion the sheet fades in and out, with no stand-in", async (
   expect(document.querySelector("[data-morph]") === null).toBe(true);
   expect(sheet.querySelector("[data-morph-hidden]") === null).toBe(true);
 
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   // It fades: the veil goes clear, then the sheet is gone.
   await waitFor(() => expect(sheet.getAttribute("data-closing")).toBe("true"));
   expect(sheet.className).toContain("opacity-0");
@@ -257,7 +303,7 @@ test("with no card on screen to come from, the sheet fades", async () => {
   );
   const sheet = await view.findByRole("dialog", { name: "Hearth & Co orders" });
   expect(document.querySelector("[data-morph]") === null).toBe(true);
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   await waitFor(() => expect(sheet.getAttribute("data-closing")).toBe("true"));
 });
 
@@ -302,12 +348,16 @@ test("in Chat the card grows into the sheet over the conversation, and closing r
   await waitFor(() => expect(ghost("open") === null).toBe(false));
   // The stand-in carries the card's face.
   expect(ghost("open")?.textContent).toContain("Mugs per day");
+  const measured = expectSheetGeometry(sheet);
+  await expectTravel(ghost("open")!, CARD, SHEET);
   await waitFor(
     () => expect(document.querySelector("[data-morph]") === null).toBe(true),
     { timeout: 2_000 },
   );
-  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  expect(measured.getBoundingClientRect()).toMatchObject(SHEET);
+  fireEvent.click(within(sheet).getByRole("button", { name: "Back" }));
   await waitFor(() => expect(ghost("close") === null).toBe(false));
+  await expectTravel(ghost("close")!, SHEET, CARD);
   await waitFor(
     () => expect(document.querySelector('[role="dialog"]') === null).toBe(true),
     { timeout: 2_000 },
