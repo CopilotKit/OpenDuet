@@ -151,7 +151,6 @@ export function CapabilityDemo({ kind }: { kind: CapabilityDemoKind }) {
               needsYou={[
                 {
                   id: "delivery",
-                  icon: "mail",
                   title: "Confirm the delivery",
                   why: "Ana needs a yes for Friday.",
                 },
@@ -159,7 +158,6 @@ export function CapabilityDemo({ kind }: { kind: CapabilityDemoKind }) {
               today={[
                 {
                   id: "visit",
-                  icon: "calendar",
                   title: "Studio visit at 2",
                   why: "The samples are ready.",
                 },
