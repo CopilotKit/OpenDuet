@@ -9,6 +9,7 @@ import {
 } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { frameFirstDay } from "@openbot/shared/first-day";
+import { frameMorningBrief } from "@openbot/shared/morning-brief";
 import {
   frameTaskBrief,
   frameTaskInput,
@@ -37,6 +38,7 @@ import {
   markAttachmentsSent,
 } from "../src/channels/attachments";
 import { FIRST_DAY_KIND } from "../src/channels/first-day";
+import { MORNING_BRIEF_KIND } from "../src/channels/morning-brief";
 import { createChannelStore } from "../src/channels/routes";
 import { createThreadIdentity } from "../src/channels/thread-identity";
 import { createCredentialStore } from "../src/credentials";
@@ -2706,6 +2708,72 @@ test("a first-day greeting survives the claiming browser disappearing and is del
     runId: `first-day-${claim.channel.id}`,
     scope: { channelId: claim.channel.id },
   });
+});
+
+test("a morning brief survives the asking browser disappearing and is delivered once, as that day's run", async () => {
+  const brief = frameMorningBrief("Give me my morning brief.");
+  const chat = await chatOf();
+  // A day after the first: something has been said in Chat.
+  await channelStore.recordActivity(owner, chat.id, {
+    text: "What's on today?",
+    agentId: null,
+    at: new Date(),
+  });
+  // The browser never receives this result. Both claim and dispatch are already committed.
+  const claim = await channelStore.morningBrief(
+    owner,
+    bot,
+    "2026-11-02",
+    brief,
+  );
+  expect(claim).toMatchObject({ claimed: true, channel: { id: chat.id } });
+  expect(
+    (await channelStore.morningBrief(owner, bot, "2026-11-02", brief)).claimed,
+  ).toBe(false);
+  const queue = createWorkQueue(database);
+  const scoped: WorkQueue = {
+    ...queue,
+    claim: (input) =>
+      input.kind === MORNING_BRIEF_KIND
+        ? queue.claim(input)
+        : Promise.resolve([]),
+  };
+  const restarted = engineFor(async () => {}, scoped);
+  await restarted.engine.sweep();
+  await restarted.engine.sweep();
+  expect(restarted.started).toHaveLength(1);
+  expect(restarted.started[0]).toMatchObject({
+    text: brief,
+    runId: `morning-brief-${chat.id}-2026-11-02`,
+    scope: { channelId: chat.id, agentId: bot },
+  });
+});
+
+test("a morning brief queued just now runs at once, without waiting for the sweep", async () => {
+  const brief = frameMorningBrief("Give me my morning brief.");
+  const chat = await chatOf();
+  await channelStore.recordActivity(owner, chat.id, {
+    text: "What's on today?",
+    agentId: null,
+    at: new Date(),
+  });
+  const queue = createWorkQueue(database);
+  const scoped: WorkQueue = {
+    ...queue,
+    claim: (input) =>
+      input.kind === MORNING_BRIEF_KIND
+        ? queue.claim(input)
+        : Promise.resolve([]),
+  };
+  const { engine, started } = engineFor(async () => {}, scoped);
+  expect(
+    (await channelStore.morningBrief(owner, bot, "2026-11-03", brief)).claimed,
+  ).toBe(true);
+  engine.startMorningBrief();
+  await engine.idle();
+  expect(started.map((run) => run.runId)).toEqual([
+    `morning-brief-${chat.id}-2026-11-03`,
+  ]);
 });
 
 test("queued task replies preserve their accepted question snapshot through retries", async () => {

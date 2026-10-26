@@ -14,6 +14,7 @@ import {
 } from "@openbot/shared/channel-hello";
 import { describeCheckIn, readCheckIn } from "@openbot/shared/check-in";
 import { readFirstDay } from "@openbot/shared/first-day";
+import { readMorningBrief } from "@openbot/shared/morning-brief";
 import { readFiring } from "@openbot/shared/routine-firing";
 import { readTaskBrief } from "@openbot/shared/task-brief";
 import type { Database } from "../db/client";
@@ -305,11 +306,22 @@ async function openingOf(
     threadId: owner.threadId,
     userId: owner.userId,
   });
-  const question = history.messages.find((message) => message.role === "user");
-  if (!question) return null;
-  const answer = history.messages.find(
-    (message) => message.role === "assistant",
+  /*
+   * Not a morning brief. Chat asks for one on later days for the person, and nobody typed it, so it
+   * is neither what they opened the conversation for nor a name for it; the opening is the first
+   * message that is not one.
+   */
+  const at = history.messages.findIndex(
+    (message) =>
+      message.role === "user" &&
+      readMorningBrief(textOf(message.content)) === null,
   );
+  const question = history.messages[at];
+  if (!question) return null;
+  // The answer to that question, so a brief's reply above it is never paired with it.
+  const answer = history.messages
+    .slice(at + 1)
+    .find((message) => message.role === "assistant");
 
   const rawAsked = textOf(question.content);
   if (!rawAsked) return null;

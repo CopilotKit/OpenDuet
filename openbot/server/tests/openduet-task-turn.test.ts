@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { frameMorningBrief } from "@openbot/shared/morning-brief";
 import { frameTaskBrief } from "@openbot/shared/task-brief";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import { ThreadLockBusyError } from "@openbot/toolkit/lease";
@@ -19,7 +20,7 @@ const ASK = "Prepare notes for the Hearth & Co visit.";
 
 function turnWith(
   runTurn: TurnRunner,
-  options: { final?: boolean; failWhile?: string } = {},
+  options: { final?: boolean; failWhile?: string; text?: string } = {},
 ) {
   const said: {
     text: string;
@@ -54,7 +55,7 @@ function turnWith(
     start: () =>
       run(SCOPE, {
         runId: "task-1",
-        text: frameTaskBrief(ASK),
+        text: options.text ?? frameTaskBrief(ASK),
         signal: new AbortController().signal,
         final: options.final ?? false,
       }),
@@ -163,6 +164,35 @@ describe("a task's turn", () => {
       agentId: "openduet",
       id: "task-1:failed",
     });
+    expect(turn.busy).toEqual([true, false]);
+  });
+});
+
+describe("a morning brief's turn", () => {
+  test("puts no line of the person's on the roster, only the Bot's reply: nobody typed it", async () => {
+    const brief = frameMorningBrief("Give me my morning brief.");
+    const asked: Parameters<TurnRunner>[0][] = [];
+    const turn = turnWith(
+      async (input) => {
+        asked.push(input);
+        return { replyText: "Ana's Friday date is the one thing today." };
+      },
+      { text: brief },
+    );
+    await turn.start();
+    // The model still reads the frame, as the person's message in the thread.
+    expect(asked[0]?.userMessage).toMatchObject({
+      id: "task-1",
+      role: "user",
+      content: brief,
+    });
+    expect(turn.said).toEqual([
+      {
+        text: "Ana's Friday date is the one thing today.",
+        agentId: "openduet",
+        id: "task-1:reply",
+      },
+    ]);
     expect(turn.busy).toEqual([true, false]);
   });
 });

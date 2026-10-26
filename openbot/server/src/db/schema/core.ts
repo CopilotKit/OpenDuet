@@ -325,6 +325,20 @@ export const channels = pgTable(
     firstDayStartedAt: timestamp("first_day_started_at", {
       withTimezone: true,
     }),
+    /**
+     * The person's local date (`YYYY-MM-DD`) whose morning brief this conversation has already had,
+     * or null for none yet. The claim that makes the Bot post the brief once a day, per person and
+     * per Bot (`morningBrief` in channels/routes.ts); the first day's claim writes it too, because
+     * that day belongs to the greeting.
+     *
+     * A column rather than the work item's key. The queue holds work still wanted, not a record of
+     * what happened: `purge` (work/queue.ts) deletes finished and abandoned items, and a key it has
+     * forgotten can be offered again, so a claim that lived only there would hand the same day's
+     * brief out twice. And the first day takes its date here too, with no brief to queue. Text
+     * rather than a date, because it is the browser's calendar date and nothing here may move it
+     * into another time zone.
+     */
+    morningBriefOn: text("morning_brief_on"),
     /** Independent run owners: a rejected run may clear only its own announcement. */
     busyClaims: jsonb("busy_claims")
       .$type<Record<string, number>>()

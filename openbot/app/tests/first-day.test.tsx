@@ -573,9 +573,11 @@ describe("Chat on the first day", () => {
     expect(routed()).toHaveLength(2);
     expect(routed()[1]?.body).toMatchObject({ text: "Try this message" });
     expect(created()).toHaveLength(2);
+    // Both carry the person's local date, which the first day takes as its morning brief.
+    const date = expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/);
     expect(created().map((request) => request.body)).toEqual([
-      { agentId: BOT.id, greeting: frameFirstDay(FIRST_DAY_REQUEST) },
-      { agentId: BOT.id },
+      { agentId: BOT.id, greeting: frameFirstDay(FIRST_DAY_REQUEST), date },
+      { agentId: BOT.id, date },
     ]);
     expect(takeFirstMessage(CREATED.id)).toBe("Try this message");
     expect(takeFirstMessage(CREATED.id)).toBeNull();

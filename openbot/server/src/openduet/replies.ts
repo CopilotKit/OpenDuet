@@ -48,6 +48,11 @@ export const REPLIES_AFTER_APPROVAL =
 /** The first day's own replies are drawn by the app (`FirstDayReplies`), under its answer. */
 export const REPLIES_FIRST_DAY = `Refused. Not on the first day: the app draws this turn's own replies under your answer. Don't call ${REPLIES_TOOL} in this turn.`;
 /**
+ * The morning brief nobody typed: its card puts Start on each thing that needs the person, so chips
+ * under it would be a second set of answers to a question nobody asked (shared/morning-brief.ts).
+ */
+export const REPLIES_MORNING_BRIEF = `Refused. Not in the morning brief: its card already puts Start on each thing that needs the person. Don't call ${REPLIES_TOOL} in this turn.`;
+/**
  * A second set while the first is held for an answer still to come: this one is not drawn, and the
  * answer is still owed. Told "end your turn" here instead, beside the held answer, the model wrote
  * "Nothing more to add for now." in place of its answer.

@@ -10,6 +10,7 @@ import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import { readThreadMessages } from "@/lib/copilot/thread-messages";
 import { readFirstDay } from "./first-day";
+import { readMorningBrief } from "./morning-brief";
 import { readFiring } from "./routine-firing";
 import { readTaskBrief } from "./task-brief";
 
@@ -50,6 +51,8 @@ function titleText(text: string | null | undefined): string {
   if (hello !== null) return plainText(describeChannelHello(hello));
   const checkIn = readCheckIn(text);
   if (checkIn !== null) return plainText(describeCheckIn(checkIn));
+  // Asked for in the person's place on a later day, so it names nothing: the menu says no title.
+  if (readMorningBrief(text) !== null) return "";
   return isFirstDayMessage(text)
     ? "Getting to know you"
     : plainText(readFiring(text) ?? text);
@@ -66,7 +69,10 @@ function isFirstDayMessage(text: string): boolean {
   );
 }
 
-/** What the person first said in a thread: their own words, not a routine firing or Chat's greeting. */
+/**
+ * What the person first said in a thread: their own words, not a routine firing, Chat's greeting or
+ * a morning brief Chat asked for in their place.
+ */
 export function firstPersonMessage(
   messages: readonly Message[],
 ): string | null {
@@ -83,6 +89,7 @@ export function firstPersonMessage(
     if (isFirstDayMessage(text)) continue;
     if (readChannelHello(text) !== null) continue;
     if (readCheckIn(text) !== null) continue;
+    if (readMorningBrief(text) !== null) continue;
     if (text.trim()) return text;
   }
   return null;
