@@ -641,21 +641,27 @@ export function createChannelStore(
           )
           .returning({ id: channels.id });
         if (claim) {
-          await transaction
-            .insert(workItems)
-            .values({
-              kind: MORNING_BRIEF_KIND,
-              // The column is the claim; the key only keeps one claim from queueing twice.
-              key: `${channel.id}:${date}`,
-              payload: {
-                ownerUserId: actor.id,
-                agentId,
-                channelId: channel.id,
-                date,
-                text: brief,
-              },
-            })
-            .onConflictDoNothing();
+          /*
+           * ONE WORK ITEM PER CLAIM, NOT PER DATE. The column above already lets a date through
+           * once, so the key does not need to dedupe dates; keyed by date alone, a claim taken again
+           * after the column was cleared collided with that date's finished item, which the queue
+           * keeps, and queued nothing. The claim's own token keys the item and names the run, so a
+           * second brief on the same date also records its reply under ids of its own rather than
+           * the first one's. A retry of this item reads the same token from its payload.
+           */
+          const token = crypto.randomUUID().slice(0, 8);
+          await transaction.insert(workItems).values({
+            kind: MORNING_BRIEF_KIND,
+            key: `${channel.id}:${date}:${token}`,
+            payload: {
+              ownerUserId: actor.id,
+              agentId,
+              channelId: channel.id,
+              date,
+              claim: token,
+              text: brief,
+            },
+          });
           await transaction.execute(
             sql`select pg_notify(${WORK_OFFERED_TOPIC}, ${MORNING_BRIEF_KIND})`,
           );

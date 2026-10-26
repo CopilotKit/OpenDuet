@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
 import { CardRow, DuetCard, Rule, SectionLabel } from "./kit";
@@ -78,6 +78,13 @@ export function MorningBriefCard({
   );
 }
 
+/**
+ * The rows a section shows before "Show N more". A day of mail can sort dozens into "Needs you",
+ * and 27 rows on a phone are a second inbox, not a brief. Every row is still one tap away rather
+ * than dropped. A section only one row over is shown whole, since "Show 1 more" saves nothing.
+ */
+export const SECTION_ROWS = 5;
+
 function BriefSection({
   label,
   items,
@@ -87,12 +94,16 @@ function BriefSection({
   items: BriefItem[];
   tone: "accent" | "muted";
 }) {
+  const [open, setOpen] = useState(false);
   if (items.length === 0) return null;
+  const folded = !open && items.length > SECTION_ROWS + 1;
+  const shown = folded ? items.slice(0, SECTION_ROWS) : items;
+  const hidden = items.length - shown.length;
   return (
     <section className="mt-4">
       <SectionLabel tone={tone}>{label}</SectionLabel>
       <ul className="mt-1.5">
-        {items.map((item, index) => {
+        {shown.map((item, index) => {
           const row = (
             <CardRow
               detail={item.why}
@@ -130,6 +141,19 @@ function BriefSection({
           );
         })}
       </ul>
+      {folded ? (
+        <div className="px-4 pt-0.5 pb-1">
+          <button
+            aria-label={`Show ${hidden} more in ${label}`}
+            // The Start line's look and 44px target, so the card has one kind of text action.
+            className="type-sub -mx-2 inline-flex h-11 items-center gap-1 rounded-full px-2 font-medium text-duet-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 active:opacity-60"
+            onClick={() => setOpen(true)}
+            type="button"
+          >
+            Show {hidden} more
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -98,11 +98,22 @@ export function briefCard(brief: Brief): {
       day: "numeric",
     }),
     greeting: greetingFor(at, brief.name),
-    needsYou: brief.needsYou.map((item) => ({
-      id: item.id,
-      title: item.subject ? `${item.from} · ${item.subject}` : item.from,
-      why: item.reason,
-    })),
+    /*
+     * What was sorted as needing the person first, and what could not be sorted after it. Those
+     * are only here to be safe, and the card shows its first few rows before "Show more", so they
+     * should not take those places from mail that does need the person.
+     */
+    needsYou: [...brief.needsYou]
+      .sort(
+        (a, b) =>
+          Number(a.decidedBy === "unsorted") -
+          Number(b.decidedBy === "unsorted"),
+      )
+      .map((item) => ({
+        id: item.id,
+        title: item.subject ? `${item.from} · ${item.subject}` : item.from,
+        why: item.reason,
+      })),
     canWait: brief.canWait.length
       ? [
           {
@@ -170,9 +181,11 @@ export function StartableBrief({ brief }: { brief: Brief }) {
   const conversation = useConversationSend();
   const [started, setStarted] = useState<ReadonlySet<string>>(new Set());
   const card = briefCard(brief);
+  // By id, not position: the card puts mail that could not be sorted last.
+  const mailById = new Map(brief.needsYou.map((item) => [item.id, item]));
   const needsYou = conversation
-    ? card.needsYou.map((row, index) => {
-        const item = brief.needsYou[index];
+    ? card.needsYou.map((row) => {
+        const item = mailById.get(row.id);
         if (!item) return row;
         return {
           ...row,

@@ -2744,7 +2744,9 @@ test("a morning brief survives the asking browser disappearing and is delivered 
   expect(restarted.started).toHaveLength(1);
   expect(restarted.started[0]).toMatchObject({
     text: brief,
-    runId: `morning-brief-${chat.id}-2026-11-02`,
+    runId: expect.stringMatching(
+      new RegExp(`^morning-brief-${chat.id}-2026-11-02-[0-9a-f]{8}$`),
+    ),
     scope: { channelId: chat.id, agentId: bot },
   });
 });
@@ -2772,7 +2774,9 @@ test("a morning brief queued just now runs at once, without waiting for the swee
   engine.startMorningBrief();
   await engine.idle();
   expect(started.map((run) => run.runId)).toEqual([
-    `morning-brief-${chat.id}-2026-11-03`,
+    expect.stringMatching(
+      new RegExp(`^morning-brief-${chat.id}-2026-11-03-[0-9a-f]{8}$`),
+    ),
   ]);
 });
 
