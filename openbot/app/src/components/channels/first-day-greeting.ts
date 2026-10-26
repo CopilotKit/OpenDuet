@@ -1,3 +1,5 @@
+import { FIRST_DAY_REQUEST_WITHOUT_MAIL } from "@openbot/shared/first-day";
+
 /**
  * What the Bot says on the person's first day, drawn in place of the message Chat sent for them.
  *
@@ -32,17 +34,11 @@ export const FIRST_DAY_PLAN =
 
 /**
  * What Chat asks for on the first day when the primary Bot can't read the person's mail and
- * calendar: no promise to read them, what it can do now, and the card that connects them.
- *
- * A run that asks the Bot to read mail it cannot reach can only end in a refusal under a bubble that
- * said it was reading. So this run asks for what it can do, and for the app-access card
- * (`show_app_access`), whose Connect is the connection itself. It names the app by its id: asked for
- * "Gmail and Google Calendar", the model asked the tool for "Gmail", "Google Calendar" and "Google
- * Workspace", none of which is an app here, and no card was drawn. Its words are matched exactly by
- * {@link firstDayPlan}, so the transcript draws the plan that goes with it, on every reload.
+ * calendar, declared in `shared/first-day.ts` (with why it reads as it does) because the server
+ * builds the message from it. Its words are matched exactly by {@link firstDayPlan}, so the
+ * transcript draws the plan that goes with it, on every reload.
  */
-export const FIRST_DAY_REQUEST_WITHOUT_MAIL =
-  "Get to know me. My Gmail and Google Calendar aren't connected yet, so don't try to read them. In a few sentences, tell me what you can do for me now. Then show me the card to connect them: it is one app, google-workspace, but don't write that id to me. Say in one line what you'll do once it's connected.";
+export { FIRST_DAY_REQUEST_WITHOUT_MAIL };
 
 /** The second bubble when the mail and calendar aren't connected: no promise to read them. */
 export const FIRST_DAY_PLAN_WITHOUT_MAIL =

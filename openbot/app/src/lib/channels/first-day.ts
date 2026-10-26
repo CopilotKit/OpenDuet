@@ -3,4 +3,9 @@
  * `routine-firing.ts` beside it does for the firing frame: browser code keeps importing through
  * `@/`, and the path to `shared/` is written down once.
  */
-export { frameFirstDay, readFirstDay } from "@openbot/shared/first-day";
+export {
+  type FirstDayGreeting,
+  firstDayGreeting,
+  frameFirstDay,
+  readFirstDay,
+} from "@openbot/shared/first-day";

@@ -1,5 +1,13 @@
-import { readFirstDay } from "@openbot/shared/first-day";
-import { readMorningBrief, utcMidnightOf } from "@openbot/shared/morning-brief";
+import {
+  FIRST_DAY_REQUEST_WITHOUT_MAIL,
+  type FirstDayGreeting,
+  firstDayGreeting,
+  readFirstDay,
+} from "@openbot/shared/first-day";
+import {
+  morningBriefMessage,
+  utcMidnightOf,
+} from "@openbot/shared/morning-brief";
 import {
   and,
   asc,
@@ -1247,6 +1255,25 @@ export function parseActivityInput(
   };
 }
 
+/**
+ * Which first day a caller asked for: `with_mail`, `without_mail`, or undefined for none (the
+ * person's own first message, which goes through the composer). Null for anything else.
+ *
+ * The message itself is built by the server from this alone (`firstDayGreeting`). An app from
+ * before that sent the whole framed text instead; it is read only for which of the two it was,
+ * and never run, so a tab left open across a deploy still greets.
+ */
+function firstDayChoice(value: unknown): FirstDayGreeting | undefined | null {
+  if (value === undefined) return undefined;
+  if (value === "with_mail" || value === "without_mail") return value;
+  if (typeof value !== "string" || value.length > 8000) return null;
+  const request = readFirstDay(value);
+  if (request === null) return null;
+  return request === FIRST_DAY_REQUEST_WITHOUT_MAIL
+    ? "without_mail"
+    : "with_mail";
+}
+
 export function createChannelRoutes(
   store: ChannelStore,
   requireUser: MiddlewareHandler<{ Variables: AppVariables }>,
@@ -1379,31 +1406,36 @@ export function createChannelRoutes(
     const body = await context.req.json().catch(() => null);
     if (typeof body?.agentId !== "string" || !body.agentId.trim())
       return context.json({ error: "A Bot is required." }, 400);
-    if (
-      body.greeting !== undefined &&
-      (typeof body.greeting !== "string" ||
-        body.greeting.length > 8000 ||
-        readFirstDay(body.greeting) === null)
-    )
+    const which = firstDayChoice(body.greeting);
+    if (which === null)
       return context.json({ error: "A first-day greeting is required." }, 400);
     /*
-     * The person's local date, which the first day takes as its brief. Its shape is checked and
-     * nothing more: a clock a day out must not keep somebody from their first conversation. The
-     * brief's own route refuses that clock, so it gets no brief either way.
+     * The person's local date, which the first day takes as its brief, within a day of the server's
+     * as the brief's own date is (`briefDate`). A date further out is a wrong clock, and taken it
+     * would be written as the day's brief: `9999-12-31` was, and no brief came again on any day
+     * before it. So it is IGNORED, not refused: a clock that is out must not keep somebody from
+     * their first conversation. The cost is that Chat opened again later that day may post a brief
+     * under the greeting, which is the smaller harm. A date that is not a date at all is a broken
+     * caller, and is refused as before.
      */
     if (
       body.date !== undefined &&
       (typeof body.date !== "string" || utcMidnightOf(body.date) === null)
     )
       return context.json({ error: "A date must be YYYY-MM-DD." }, 400);
+    const date =
+      body.date === undefined
+        ? undefined
+        : (briefDate(body.date, new Date()) ?? undefined);
+    const greeting = which ? firstDayGreeting(which) : undefined;
     try {
       const { channel, claimed } = await store.firstDay(
         context.var.actor,
         body.agentId,
-        body.greeting,
-        body.date,
+        greeting,
+        date,
       );
-      if (body.greeting) startFirstDay?.();
+      if (greeting) startFirstDay?.();
       return context.json({ start: { channel: channelDto(channel), claimed } });
     } catch (error) {
       return mapStoreError(context, error);
@@ -1425,21 +1457,18 @@ export function createChannelRoutes(
         { error: "A date must be YYYY-MM-DD, within a day of today." },
         400,
       );
-    if (
-      typeof body.brief !== "string" ||
-      body.brief.length > 8000 ||
-      readMorningBrief(body.brief) === null
-    )
-      return context.json(
-        { error: "A morning brief request is required." },
-        400,
-      );
+    /*
+     * The brief's message is the server's, whatever the body says. It runs as a turn nobody typed,
+     * in the person's name, and this used to take up to 8,000 characters of the caller's text after
+     * the frame and run them; the request is a constant, so there was never anything to take. A
+     * `brief` an older app still sends is ignored.
+     */
     try {
       const { channel, claimed } = await store.morningBrief(
         context.var.actor,
         body.agentId,
         date,
-        body.brief,
+        morningBriefMessage(),
       );
       if (claimed) startMorningBrief?.();
       return context.json({ brief: { channel: channelDto(channel), claimed } });
