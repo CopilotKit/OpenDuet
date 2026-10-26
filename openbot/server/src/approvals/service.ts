@@ -853,8 +853,9 @@ function publicApproval(request: ApprovalRecord) {
       threadId: action.threadId,
       // The owner's own call id, so the conversation can draw this request where the action was.
       toolCallId: action.toolCallId,
-      args: approvalPreview(action.args),
-      target: approvalPreview(action.target),
+      // Whole: the person decides from this, so it is never a cut copy. See `approvalPreview`.
+      args: approvalPreview(action.args, 0, { whole: true }),
+      target: approvalPreview(action.target, 0, { whole: true }),
       ...(action.policy
         ? {
             policy: {

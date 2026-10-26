@@ -376,20 +376,43 @@ export function confirmWriteInterrupt(input: {
   };
 }
 
+/** The longest a chat card's row may be. */
+const CLIP = 300;
+
+/**
+ * What a chat card says when it could not carry all of a request: never a silent cut.
+ *
+ * A chat card has room for ten rows of 300 characters, and an email body or a long post is more than
+ * that. The app's own card shows the whole request (approvals/service.ts `publicApproval`); this one
+ * cannot, so it says it was cut and where the rest is, rather than ending a body on an ellipsis a
+ * person reads as the end of the message.
+ */
+export const APPROVAL_FIELDS_CUT = {
+  label: "Not all shown",
+  value:
+    "Part of this request is cut short here. Read all of it on the Bot's page in OpenBot before you allow it.",
+};
+
 /** Approver-readable rows from an already-redacted approval preview. */
 export function approvalFields(preview: unknown) {
-  if (!preview || typeof preview !== "object" || Array.isArray(preview))
-    return preview === undefined
-      ? []
-      : [{ label: "Arguments", value: clip(JSON.stringify(preview)) }];
-  return Object.entries(preview)
-    .slice(0, 10)
-    .map(([label, value]) => ({
-      label: clip(label, 60),
-      value: clip(typeof value === "string" ? value : JSON.stringify(value)),
-    }));
+  if (!preview || typeof preview !== "object" || Array.isArray(preview)) {
+    if (preview === undefined) return [];
+    const value = JSON.stringify(preview);
+    return [
+      { label: "Arguments", value: clip(value) },
+      ...(value.length > CLIP ? [APPROVAL_FIELDS_CUT] : []),
+    ];
+  }
+  const entries = Object.entries(preview);
+  let cut = entries.length > 10;
+  const fields = entries.slice(0, 10).map(([label, value]) => {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    if ((text ?? "").length > CLIP) cut = true;
+    return { label: clip(label, 60), value: clip(text) };
+  });
+  return cut ? [...fields, APPROVAL_FIELDS_CUT] : fields;
 }
-function clip(value: string | undefined, max = 300) {
+function clip(value: string | undefined, max = CLIP) {
   const text = value ?? "";
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }

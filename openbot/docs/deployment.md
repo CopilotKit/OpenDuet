@@ -16,6 +16,11 @@ docker run -p 3001:3001 --env-file .env \
   -e EMBEDDED_POSTGRES=on -v openbot-data:/var/lib/postgresql "$image"
 ```
 
+**With `OPENBOT_SINGLE_USER=true`, publish on loopback: `-p 127.0.0.1:3001:3001`.** The image
+listens on every interface inside the container (`OPENBOT_HOST=0.0.0.0`), so what decides who can
+reach it is the address `-p` publishes on, and `-p 3001:3001` publishes on every address this
+machine has. With no sign-in, everybody who reaches that port is the administrator.
+
 `docker build -t openbot .` from a clone produces the same thing, for anyone deploying a tree of
 their own. What a release publishes is digest-pinned in its `container-images.json`, and deploying
 those digests rather than a moving tag is what [releasing.md](releasing.md) recommends.

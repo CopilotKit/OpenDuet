@@ -15,6 +15,11 @@
 
 import { join, normalize, sep } from "node:path";
 import { DICTATION_HTTP_IDLE_SECONDS } from "@openbot/shared/dictation";
+import {
+  LISTEN_HOST_VARIABLE,
+  listenAddress,
+  listenHosts,
+} from "@openbot/shared/listen-host";
 import { listenPort } from "@openbot/shared/listen-port";
 import { file, type ServerWebSocket } from "bun";
 
@@ -192,11 +197,16 @@ function prepareWebSocketBridge(upstream: BunWebSocket, signal: AbortSignal) {
 }
 
 if (import.meta.main) {
-  Bun.serve<WebSocketBridge>({
+  /*
+   * Both loopbacks, 127.0.0.1 and ::1, as two listeners, unless OPENBOT_HOST names others
+   * (shared/listen-host.ts). This was `::`, which its comment called both loopbacks and which is
+   * every interface: an installed OpenDuet, which is one administrator with no sign-in, proxied its
+   * `/api` to anybody on the same network.
+   */
+  const hosts = listenHosts(process.env[LISTEN_HOST_VARIABLE], "loopback");
+  if (!hosts.ok) throw new Error(hosts.reason);
+  const options: Parameters<typeof Bun.serve<WebSocketBridge>>[0] = {
     port: PORT,
-    // Both loopbacks, which is what `::` gets you: a dual-stack socket answers on 127.0.0.1 and
-    // ::1 alike. Bound to one, whoever is told the URL has no way to know which they were given.
-    hostname: "::",
     // `ws: true` on the old proxy was required for the live screen, so the upgrade is forwarded
     // rather than answered with the app's HTML, which failed with an opaque socket error.
     websocket: {
@@ -270,9 +280,20 @@ if (import.meta.main) {
       }
       return new Response("not found", { status: 404 });
     },
-  });
+  };
 
-  console.log(
-    `OpenBot app on http://127.0.0.1:${PORT} and http://[::1]:${PORT}`,
-  );
+  const listening: string[] = [];
+  for (const { host, required } of hosts.hosts) {
+    try {
+      Bun.serve<WebSocketBridge>({
+        ...options,
+        ...(host === undefined ? {} : { hostname: host }),
+      });
+      listening.push(listenAddress(host, PORT));
+    } catch (error) {
+      // Only ::1 may be missing, on a machine with IPv6 switched off.
+      if (required) throw error;
+    }
+  }
+  console.log(`OpenBot app on ${listening.join(" and ")}`);
 }

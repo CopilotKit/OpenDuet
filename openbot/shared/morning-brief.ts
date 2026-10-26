@@ -36,6 +36,17 @@ export const MORNING_BRIEF_FRAME = [
   NO_BUTTONS,
 ] as const;
 
+/**
+ * What Chat asks for the first time it opens on a day that is not the first. It goes out wrapped in
+ * the frame above, which tells the model nobody typed it, to call `morning_brief`, and to say at most
+ * one sentence after it; the transcript draws nothing where it sits, so the Bot's reply and the
+ * brief's card are what the person finds.
+ *
+ * Plain, because the frame says everything about how to answer. The brief itself is the tool's,
+ * sorted on the server the way evals/triage measures, and the card is the app's.
+ */
+export const MORNING_BRIEF_REQUEST = "Give me my morning brief.";
+
 /** The frame and the blank line under it, which is what `readMorningBrief` strips. */
 const PREFIX = [...MORNING_BRIEF_FRAME, "", ""].join("\n");
 
@@ -49,6 +60,15 @@ const PREFIX = [...MORNING_BRIEF_FRAME, "", ""].join("\n");
  */
 export function frameMorningBrief(request: string): string {
   return [...MORNING_BRIEF_FRAME, "", request].join("\n");
+}
+
+/**
+ * The morning brief's message, framed. Built by the server and never taken from the browser, for
+ * the reason `firstDayGreeting` in `first-day.ts` gives: it runs as a turn in the person's
+ * name, and the request is a constant, so there is nothing for a caller to say.
+ */
+export function morningBriefMessage(): string {
+  return frameMorningBrief(MORNING_BRIEF_REQUEST);
 }
 
 /**

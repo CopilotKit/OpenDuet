@@ -524,7 +524,7 @@ describe("Chat on the first day", () => {
     expect(ongoing.getAttribute("data-channel")).toBe(CREATED.id);
     expect(created()).toHaveLength(1);
     expect(created()[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+      greeting: "with_mail",
     });
     expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
@@ -576,7 +576,7 @@ describe("Chat on the first day", () => {
     // Both carry the person's local date, which the first day takes as its morning brief.
     const date = expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/);
     expect(created().map((request) => request.body)).toEqual([
-      { agentId: BOT.id, greeting: frameFirstDay(FIRST_DAY_REQUEST), date },
+      { agentId: BOT.id, greeting: "with_mail", date },
       { agentId: BOT.id, date },
     ]);
     expect(takeFirstMessage(CREATED.id)).toBe("Try this message");
@@ -600,7 +600,7 @@ describe("Chat on the first day", () => {
     });
     // The server owns greeting delivery; a browser remount cannot send it again.
     expect(created()[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+      greeting: "with_mail",
     });
     expect(takeFirstMessage(CREATED.id)).toBeNull();
     await settleReactWork();
@@ -621,7 +621,7 @@ describe("Chat on the first day", () => {
       text: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
     });
     expect(created()[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+      greeting: "without_mail",
     });
     expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
@@ -649,7 +649,7 @@ describe("Chat on the first day", () => {
 
     await view.findByTestId("ongoing-chat");
     expect(created()[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
+      greeting: "without_mail",
     });
     expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
@@ -669,7 +669,7 @@ describe("Chat on the first day", () => {
     );
     await view.findByTestId("ongoing-chat");
     expect(created()[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+      greeting: "with_mail",
     });
     expect(takeFirstMessage(CREATED.id)).toBeNull();
   });
@@ -699,7 +699,7 @@ describe("Chat on the first day", () => {
     expect(created()).toHaveLength(1);
     expect(routed()).toHaveLength(1);
     expect(created()[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+      greeting: "with_mail",
     });
     expect(takeFirstMessage(quiet.id)).toBeNull();
   });

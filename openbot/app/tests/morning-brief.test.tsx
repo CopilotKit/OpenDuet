@@ -233,7 +233,7 @@ function held() {
 }
 
 describe("Chat on a later day", () => {
-  test("asks for the morning brief once, framed, with today's local date, StrictMode and all", async () => {
+  test("asks for the morning brief once, with today's local date and no text of its own, StrictMode and all", async () => {
     answerBrief = async () =>
       Response.json({ brief: { channel: USED, claimed: true } });
     const view = openChat([USED], {
@@ -243,10 +243,10 @@ describe("Chat on a later day", () => {
 
     await view.findByTestId("ongoing-chat");
     await waitFor(() => expect(briefs()).toHaveLength(1));
+    // The server writes the brief's message itself (`morningBriefMessage`); the app sends none.
     expect(briefs()[0]?.body).toEqual({
       agentId: BOT.id,
       date: localDateOf(new Date()),
-      brief: frameMorningBrief(MORNING_BRIEF_REQUEST),
     });
     await settleReactWork();
     expect(briefs()).toHaveLength(1);
@@ -350,7 +350,7 @@ describe("Chat on the first day", () => {
     expect(created).toHaveLength(1);
     // The first day takes today's brief on the server, so a later open today posts none under it.
     expect(created[0]?.body).toMatchObject({
-      greeting: frameFirstDay(FIRST_DAY_REQUEST),
+      greeting: "with_mail",
       date: localDateOf(new Date()),
     });
     expect(briefs()).toHaveLength(0);

@@ -1,4 +1,10 @@
-import { type ComponentProps, Fragment, type ReactNode, useId } from "react";
+import {
+  type ComponentProps,
+  Fragment,
+  type ReactNode,
+  useId,
+  useState,
+} from "react";
 import { DuetIcon, type DuetIconName } from "@/components/duet/icons";
 import { DuetCard, OutcomePill, Rule, Tile } from "@/components/duet/kit";
 import {
@@ -196,14 +202,7 @@ function ApprovalContent({
           </div>
         </Fragment>
       ))}
-      {view.body ? (
-        <>
-          <Rule />
-          <p className="type-row max-h-64 overflow-y-auto whitespace-pre-wrap px-4 py-3 leading-6 [overflow-wrap:anywhere]">
-            {view.body}
-          </p>
-        </>
-      ) : null}
+      {view.body ? <ApprovalBody body={view.body} /> : null}
       {request.action.policy?.reason ? (
         <p className="type-label px-4 pt-1 pb-1 text-duet-ink-2">
           {handOff ? "Handed to you: " : ""}
@@ -230,6 +229,62 @@ function ApprovalContent({
           {JSON.stringify(request.action.args, null, 2)}
         </pre>
       </details>
+    </>
+  );
+}
+
+/** A body past this many characters, or lines, starts folded with "Show all" under it. */
+export const FOLD_CHARS = 600;
+export const FOLD_LINES = 10;
+
+/**
+ * What the Bot would send, all of it, folded when it is long.
+ *
+ * It was a box of fixed height that scrolled, over a body the server had already cut to 280
+ * characters: the card stopped mid-word, nothing said there was more, and Allow once sent the rest
+ * unseen. The server now sends the whole body (approvals/service.ts `publicApproval`), and a long
+ * one is folded rather than boxed: the whole text is on the page, cut off visibly at the fold with
+ * a fade, and "Show all" under it says how much there is and opens it in place. Nothing is ever
+ * held back from the page, so a screen reader reads it all, folded or not.
+ */
+function ApprovalBody({ body }: { body: string }) {
+  const bodyId = useId();
+  const [open, setOpen] = useState(false);
+  const long = body.length > FOLD_CHARS || body.split("\n").length > FOLD_LINES;
+  const folded = long && !open;
+  return (
+    <>
+      <Rule />
+      <p
+        className={cn(
+          "type-row whitespace-pre-wrap px-4 py-3 leading-6 [overflow-wrap:anywhere]",
+          folded &&
+            "max-h-60 overflow-hidden [mask-image:linear-gradient(to_bottom,black_65%,transparent)]",
+        )}
+        data-folded={folded ? "true" : undefined}
+        id={bodyId}
+      >
+        {body}
+      </p>
+      {long ? (
+        <button
+          aria-controls={bodyId}
+          aria-expanded={open}
+          className="type-label mx-4 mb-1 inline-flex min-h-11 items-center gap-1 rounded-full font-semibold text-duet-ink-2 hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40"
+          onClick={() => setOpen((shown) => !shown)}
+          type="button"
+        >
+          {open
+            ? "Show less"
+            : `Show all ${body.length.toLocaleString()} characters`}
+          <DuetIcon
+            className={open ? "-rotate-90" : "rotate-90"}
+            name="chevronRight"
+            size={14}
+            stroke={2.2}
+          />
+        </button>
+      ) : null}
     </>
   );
 }

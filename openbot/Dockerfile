@@ -249,6 +249,11 @@ ENV DATABASE_URL=postgres://openbot@127.0.0.1:5432/openbot
 
 ENV NODE_ENV=production
 ENV PORT=3001
+# Every interface, inside the container. Without it a single-user server listens on loopback
+# (shared/listen-host.ts), and a container's loopback is its own: `-p 3001:3001` would publish a
+# port nothing answers on. Who can reach the container is then what `-p` publishes it on, so a
+# single-user one belongs on `-p 127.0.0.1:3001:3001` (docs/deployment.md).
+ENV OPENBOT_HOST=0.0.0.0
 EXPOSE 3001
 
 # One port out. The browser's 4100 is deliberately not exposed: it holds real logins and its only
