@@ -4,6 +4,10 @@ import {
   useRenderActivityMessage,
   useRenderToolCall,
 } from "@copilotkit/react-core/v2";
+import {
+  readConnectPrompt,
+  SHOW_APP_ACCESS_TOOL,
+} from "@openbot/shared/connect-prompt";
 import { useQuery } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import {
@@ -18,6 +22,8 @@ import {
 } from "react";
 import { Streamdown } from "streamdown";
 import { PendingApprovals } from "@/components/approvals/inline-approval";
+import { DuetIcon } from "@/components/duet/icons";
+import { Seen, TypingDots } from "@/components/duet/kit";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
   Dialog,
@@ -41,32 +47,22 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DuetIcon } from "@/components/duet/icons";
-import { Seen, TypingDots } from "@/components/duet/kit";
+import { approvalInboxOptions } from "@/lib/approvals";
+import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { attachmentUrl } from "@/lib/channels/attachments";
-import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
-import { readFiring } from "@/lib/channels/routine-firing";
-import { readFirstDay } from "@/lib/channels/first-day";
-import { readMorningBrief } from "@/lib/channels/morning-brief";
-import { readTaskBrief } from "@/lib/channels/task-brief";
 import {
   type CheckIn,
   CheckInArrivalContext,
   readCheckIn,
 } from "@/lib/channels/check-in";
-import { currentUserQueryOptions } from "@/lib/auth/queries";
-import { queryClient } from "@/query-client";
-import { splitChatOrigin } from "./chat-origin";
-import {
-  FIRST_DAY_PLAN,
-  firstDayPlan,
-  firstDayWelcome,
-  firstNameOf,
-} from "./first-day-greeting";
+import { readFirstDay } from "@/lib/channels/first-day";
+import { readMorningBrief } from "@/lib/channels/morning-brief";
+import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
+import { readFiring } from "@/lib/channels/routine-firing";
+import { readTaskBrief } from "@/lib/channels/task-brief";
 import { ReplyChips } from "@/lib/copilot/reply-chips-tool";
 import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
-import { approvalInboxOptions } from "@/lib/approvals";
 import { personToolLabel, readToolName } from "@/lib/plugins/tool-name";
 import {
   asText,
@@ -76,30 +72,34 @@ import {
   toolResultFailed,
 } from "@/lib/plugins/tool-result";
 import { readTeamBotConsent } from "@/lib/team-bots";
-import {
-  readConnectPrompt,
-  SHOW_APP_ACCESS_TOOL,
-} from "@openbot/shared/connect-prompt";
 import { cn } from "@/lib/utils";
 import { VOICE_CHAT_ACTIVITY, type VoiceChatEntry } from "@/lib/voice/archive";
-import {
-  groupToolSteps,
-  ToolActivity,
-  useDrawnTool,
-  type TranscriptItem,
-} from "./tool-activity";
+import { queryClient } from "@/query-client";
+import { AppAccessCard } from "./app-access-card";
 import {
   attachmentModality,
   repliesLast,
   type SentAttachment,
   toVisibleChatItems,
 } from "./chat-messages";
+import { splitChatOrigin } from "./chat-origin";
 import type { QueuedMessage } from "./composer";
-import { AppAccessCard } from "./app-access-card";
-import { TeamBotConsentCard } from "./team-bot-consent";
+import {
+  FIRST_DAY_PLAN,
+  firstDayPlan,
+  firstDayWelcome,
+  firstNameOf,
+} from "./first-day-greeting";
 import { ReplyHoldProvider } from "./reply-hold";
-import { ToolRenderBoundary } from "./tool-boundary";
 import { splitBubbles } from "./split-bubbles";
+import { TeamBotConsentCard } from "./team-bot-consent";
+import {
+  groupToolSteps,
+  ToolActivity,
+  type TranscriptItem,
+  useDrawnTool,
+} from "./tool-activity";
+import { ToolRenderBoundary } from "./tool-boundary";
 import { ToolLine } from "./tool-line";
 import { VoiceChatCard } from "./voice-chat-card";
 
@@ -1833,11 +1833,39 @@ function turnOf(item: TranscriptItem): string {
  * end to hold: the picture is the top of what the person sent, and anchoring on the caption
  * underneath it would scroll the picture off the top of the pane.
  */
-function anchorRowIds(items: readonly TranscriptItem[]): Set<string> {
+function anchorRowIds(
+  items: readonly TranscriptItem[],
+  thread: readonly TranscriptItem[] = items,
+): Set<string> {
   const anchors = new Set<string>();
   const claimed = new Set<string>();
+  const drawn = new Set(items.map((item) => item.id));
+  /*
+   * A MORNING BRIEF'S TURN IS HELD BY ITS FIRST ROW. Nobody typed it, and its request is taken out
+   * of `items`, so the turn had no row of the person's to hold; with no anchor among the rows it
+   * appended, the scroller kept to the end, and a brief taller than the pane arrived bottom first,
+   * its greeting and first rows building in above the fold where nobody saw them. The first row
+   * the turn draws, the brief's own line and then its card, is held at the top instead, the way a
+   * question is, and the card builds in below it. Read off `thread`, which still has the request.
+   */
+  let briefTurn = false;
 
-  for (const item of items) {
+  for (const item of thread) {
+    if (
+      item.kind === "text" &&
+      item.role === "user" &&
+      readMorningBrief(item.text) !== null
+    ) {
+      briefTurn = true;
+      continue;
+    }
+    if (!drawn.has(item.id)) continue;
+    if (briefTurn) {
+      briefTurn = false;
+      anchors.add(item.id);
+      claimed.add(turnOf(item));
+      continue;
+    }
     const sent =
       item.kind === "attachments" ||
       (item.kind === "text" &&
@@ -2006,7 +2034,7 @@ export function ChatTranscript({
     : -1;
 
   /* One rule for both kinds of row — see `anchorRowIds`, which is where it is written down. */
-  const anchorRows = anchorRowIds(items);
+  const anchorRows = anchorRowIds(items, thread);
   const seenId = useSettled(seenMessageId(items), SEEN_SETTLE_MS);
 
   /*
@@ -2127,7 +2155,11 @@ export function ChatTranscript({
             ) : null}
             {items.map((item, index) =>
               item.kind === "tools" ? (
-                <MessageScrollerItem key={item.id} messageId={item.id}>
+                <MessageScrollerItem
+                  key={item.id}
+                  messageId={item.id}
+                  scrollAnchor={anchorRows.has(item.id)}
+                >
                   <Arriving
                     delay={delays.delayFor(item.id, index, items.length)}
                   >
@@ -2138,7 +2170,11 @@ export function ChatTranscript({
                   </Arriving>
                 </MessageScrollerItem>
               ) : item.kind === "tool" ? (
-                <MessageScrollerItem key={item.id} messageId={item.id}>
+                <MessageScrollerItem
+                  key={item.id}
+                  messageId={item.id}
+                  scrollAnchor={anchorRows.has(item.id)}
+                >
                   <ReplyHoldProvider value={busy && index > turnStart}>
                     <TranscriptToolCall
                       args={item.toolCall.function.arguments}
@@ -2150,7 +2186,11 @@ export function ChatTranscript({
                   </ReplyHoldProvider>
                 </MessageScrollerItem>
               ) : item.kind === "activity" ? (
-                <MessageScrollerItem key={item.id} messageId={item.id}>
+                <MessageScrollerItem
+                  key={item.id}
+                  messageId={item.id}
+                  scrollAnchor={anchorRows.has(item.id)}
+                >
                   <TranscriptActivity
                     delay={delays.delayFor(item.id, index, items.length)}
                     message={item.message}
