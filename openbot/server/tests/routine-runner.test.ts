@@ -110,6 +110,7 @@ function harness(options: {
 
   const channelStore: ChannelStore = {
     firstDay: () => unreachable("channels.firstDay"),
+    morningBrief: () => unreachable("channels.morningBrief"),
     direct: () => unreachable("channels.direct"),
     signalBusy: () => unreachable("channels.signalBusy"),
     signalChannelBusy: () => unreachable("channels.signalChannelBusy"),

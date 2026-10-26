@@ -47,6 +47,7 @@ import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
 import { readFirstDay } from "@/lib/channels/first-day";
+import { readMorningBrief } from "@/lib/channels/morning-brief";
 import { readTaskBrief } from "@/lib/channels/task-brief";
 import {
   type CheckIn,
@@ -704,7 +705,8 @@ export const FIRST_DAY_REPLIES = ["Sounds right", "Something's off"] as const;
 
 /**
  * Where the first day stands in a conversation: the first-day message's place, whether it read
- * mail, the Bot's answer to it, and whether the person has said anything since.
+ * mail, the Bot's answer to it, and whether anything has come from the person's side since: a
+ * message of their own, or a later day's morning brief, which Chat asked for in their place.
  */
 export function firstDayOf(items: readonly TranscriptItem[]): {
   mail: boolean;
@@ -1787,11 +1789,13 @@ export function isPersonSentMessage(
   replay = false,
 ): boolean {
   // A check-in is the same: the Bot started it, and it must not scroll the person's place away.
+  // So is a morning brief, which Chat asked for in the person's place.
   return (
     role === "user" &&
     !replay &&
     readFiring(text) === null &&
-    readCheckIn(text) === null
+    readCheckIn(text) === null &&
+    readMorningBrief(text) === null
   );
 }
 
@@ -1919,15 +1923,35 @@ export function ChatTranscript({
    * cost was markdown parsing and chart SVGs, and those are skipped by the memoised children below,
    * which is where the 25x came from. This runs per render and is not worth guarding.
    */
-  const items = folded
+  const thread = folded
     ? []
     : groupToolSteps(repliesLast(toVisibleChatItems(messages)), isDrawn);
   /*
    * The first day's answer and its two replies. The replies only once the run has ended, while
    * nothing the person said or parked comes after it, and only on a first day that read mail: they
    * answer "who you are", which the first day without mail doesn't say.
+   *
+   * Read off the whole thread, morning briefs included. A later day's brief ends the first day's
+   * answer just as a message of the person's would: without it, the brief's reply read as more of
+   * that answer, and "Sounds right" moved down under the brief.
    */
-  const firstDay = firstDayOf(items);
+  const firstDay = firstDayOf(thread);
+  /*
+   * A MORNING BRIEF DRAWS NOTHING WHERE IT SITS. Chat asked for it in the person's place, so it is
+   * not their bubble, and the Bot speaks first: what the person finds is its reply and the brief's
+   * card (shared/morning-brief.ts). Taken out here rather than in `toVisibleChatItems`, where a new
+   * channel's hello is dropped, so the turn it starts keeps its start for `firstDayOf` above and for
+   * the grouping before it; everything below (rows, "Seen", the scroll anchors, the Thinking line)
+   * reads the thread without it.
+   */
+  const items = thread.filter(
+    (item) =>
+      !(
+        item.kind === "text" &&
+        item.role === "user" &&
+        readMorningBrief(item.text) !== null
+      ),
+  );
   const firstDayReplies =
     firstDay?.mail === true &&
     firstDay.answer.size > 0 &&

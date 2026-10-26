@@ -1,3 +1,4 @@
+import { MORNING_BRIEF_TOOL } from "@openbot/shared/morning-brief";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import type { AuditInitiator } from "../audit";
 import { z } from "zod";
@@ -21,7 +22,8 @@ import {
  * so a brief can only ever contain what this Bot was granted and this person connected.
  */
 
-export const BRIEF_TOOL = "morning_brief";
+/** Declared with the frame that asks for it (shared/morning-brief.ts), which names it to the model. */
+export const BRIEF_TOOL = MORNING_BRIEF_TOOL;
 export const GMAIL_SEARCH = "google-workspace/gmail_search_messages";
 export const CALENDAR_LIST = "google-workspace/calendar_list_events";
 

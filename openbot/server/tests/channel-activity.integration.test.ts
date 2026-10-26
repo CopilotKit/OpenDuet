@@ -1,8 +1,10 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { frameFirstDay } from "@openbot/shared/first-day";
 import { FIRST_DAY_KIND } from "../src/channels/first-day";
+import { MORNING_BRIEF_KIND } from "../src/channels/morning-brief";
+import { frameMorningBrief } from "@openbot/shared/morning-brief";
 import { randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 import {
   AgentNotFoundError,
   createAgentProfileStore,
@@ -52,6 +54,10 @@ afterEach(async () => {
       .delete(intelligenceChannelMappings)
       .where(eq(intelligenceChannelMappings.channelId, channelId));
     await database.delete(workItems).where(eq(workItems.key, channelId));
+    // A morning brief's key is its conversation and its date.
+    await database
+      .delete(workItems)
+      .where(like(workItems.key, `${channelId}:%`));
     await database.delete(channels).where(eq(channels.id, channelId));
   }
   for (const agentId of createdAgentIds.splice(0)) {
@@ -582,6 +588,193 @@ test("simultaneous first-day starts share one conversation and only one greeting
     .where(eq(workItems.key, starts[0]!.channel.id));
   expect(greetings).toHaveLength(1);
   expect(greetings[0]?.kind).toBe(FIRST_DAY_KIND);
+});
+
+/*
+ * The day's morning brief: once per person, per Bot, per local date, never on the first day, and
+ * durable, because the claim is a column on the conversation rather than a work item's key, which
+ * is free again once the queue purges the finished item.
+ */
+describe("the morning brief's claim", () => {
+  const BRIEF = frameMorningBrief("Give me my morning brief.");
+
+  /** The person's conversation with the Bot, with something said in it: a day after the first. */
+  async function usedChat(owner: AgentActor, bot: string) {
+    const chat = await store.direct(owner, bot);
+    createdChannelIds.push(chat.id);
+    await store.recordActivity(owner, chat.id, {
+      text: "What's on today?",
+      agentId: null,
+      at: new Date(),
+    });
+    return chat;
+  }
+
+  async function briefsIn(channelId: string) {
+    return database
+      .select({ key: workItems.key, payload: workItems.payload })
+      .from(workItems)
+      .where(
+        and(
+          eq(workItems.kind, MORNING_BRIEF_KIND),
+          like(workItems.key, `${channelId}:%`),
+        ),
+      )
+      .orderBy(workItems.key);
+  }
+
+  async function claimedOn(channelId: string) {
+    const [row] = await database
+      .select({ on: channels.morningBriefOn })
+      .from(channels)
+      .where(eq(channels.id, channelId));
+    return row?.on ?? null;
+  }
+
+  test("is taken once per local date, with the brief queued in the same transaction", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const chat = await usedChat(owner, bot);
+
+    const first = await store.morningBrief(owner, bot, "2026-10-26", BRIEF);
+    expect(first).toMatchObject({ claimed: true, channel: { id: chat.id } });
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(false);
+    expect(await claimedOn(chat.id)).toBe("2026-10-26");
+    expect(await briefsIn(chat.id)).toEqual([
+      {
+        key: `${chat.id}:2026-10-26`,
+        payload: {
+          ownerUserId: owner.id,
+          agentId: bot,
+          channelId: chat.id,
+          date: "2026-10-26",
+          text: BRIEF,
+        },
+      },
+    ]);
+
+    // The next day is a day of its own.
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-27", BRIEF)).claimed,
+    ).toBe(true);
+    expect((await briefsIn(chat.id)).map((brief) => brief.key)).toEqual([
+      `${chat.id}:2026-10-26`,
+      `${chat.id}:2026-10-27`,
+    ]);
+  });
+
+  test("holds after the queue has forgotten the brief's work item", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const chat = await usedChat(owner, bot);
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(true);
+    // What `purge` (work/queue.ts) does to a finished item once its window has passed.
+    await database.delete(workItems).where(like(workItems.key, `${chat.id}:%`));
+
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(false);
+    expect(await briefsIn(chat.id)).toEqual([]);
+  });
+
+  test("is refused while nothing has been said: the first day still owns the conversation", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const start = await store.morningBrief(owner, bot, "2026-10-26", BRIEF);
+    createdChannelIds.push(start.channel.id);
+
+    expect(start.claimed).toBe(false);
+    expect(await claimedOn(start.channel.id)).toBeNull();
+    expect(await briefsIn(start.channel.id)).toEqual([]);
+  });
+
+  test("is refused on the day the first day took, and taken on the next", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const greeting = await store.firstDay(
+      owner,
+      bot,
+      frameFirstDay("Get to know me."),
+      "2026-10-26",
+    );
+    createdChannelIds.push(greeting.channel.id);
+    expect(greeting.claimed).toBe(true);
+    // The greeting's turn has run and said something; Chat is opened again later that day.
+    await store.recordActivity(owner, greeting.channel.id, {
+      text: "Get to know me.",
+      agentId: null,
+      at: new Date(),
+    });
+
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(false);
+    expect(await briefsIn(greeting.channel.id)).toEqual([]);
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-27", BRIEF)).claimed,
+    ).toBe(true);
+  });
+
+  test("is refused for a date before the one already claimed, so two clocks cannot take turns", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const chat = await usedChat(owner, bot);
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-27", BRIEF)).claimed,
+    ).toBe(true);
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(false);
+    expect(await claimedOn(chat.id)).toBe("2026-10-27");
+  });
+
+  test("is given to a conversation with messages and no first-day stamp, which had its first day before the stamp", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const chat = await usedChat(owner, bot);
+    const [row] = await database
+      .select({ startedAt: channels.firstDayStartedAt })
+      .from(channels)
+      .where(eq(channels.id, chat.id));
+    expect(row?.startedAt).toBeNull();
+
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(true);
+  });
+
+  test("simultaneous asks from two tabs and two devices on two replicas queue one brief", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const chat = await usedChat(owner, bot);
+    const databases = [0, 1].map(() => createDatabase(databaseUrl, TEST_POOL));
+    try {
+      const replicas = databases.map((connection) =>
+        createChannelStore(
+          connection,
+          profileStore,
+          createThreadIdentity("test-deployment"),
+        ),
+      );
+      const asks = await Promise.all(
+        [0, 1, 2, 3].map((index) =>
+          replicas[index % 2]!.morningBrief(owner, bot, "2026-10-26", BRIEF),
+        ),
+      );
+
+      expect(new Set(asks.map((ask) => ask.channel.id))).toEqual(
+        new Set([chat.id]),
+      );
+      expect(asks.filter((ask) => ask.claimed)).toHaveLength(1);
+      expect(await briefsIn(chat.id)).toHaveLength(1);
+    } finally {
+      for (const connection of databases) await connection.$client.close();
+    }
+  });
 });
 
 for (const deletionAt of ["before hydration", "before claim"] as const) {

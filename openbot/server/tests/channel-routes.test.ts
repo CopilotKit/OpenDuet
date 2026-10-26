@@ -29,6 +29,7 @@ import {
   parseChannelInput,
 } from "../src/channels/routes";
 import { createThreadIdentity } from "../src/channels/thread-identity";
+import { frameMorningBrief } from "@openbot/shared/morning-brief";
 import { loadConfig } from "../src/config";
 import { createDatabase } from "../src/db/client";
 import {
@@ -71,6 +72,9 @@ function fakeStore(
   const base: ChannelStore = {
     firstDay: async () => {
       throw new Error("unused first day");
+    },
+    morningBrief: async () => {
+      throw new Error("unused morning brief");
     },
     async create(receivedActor, agentIds) {
       calls.push(["create", receivedActor, agentIds]);
@@ -553,6 +557,179 @@ describe("channel routes", () => {
  * can: `deleted_at` is a timestamp with no actor. Untested, it is also the easiest thing to drop in
  * a later refactor without anything going red — which is exactly how it was lost once already.
  */
+/*
+ * The day's morning brief, asked for by Chat. The claim itself is the store's and is tested against
+ * PostgreSQL in channel-activity.integration.test.ts; this is the door in front of it.
+ */
+describe("asking for the morning brief", () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  /** A `YYYY-MM-DD` some whole days from the server's UTC date. */
+  const dayFromToday = (days: number) =>
+    new Date(Date.now() + days * DAY_MS).toISOString().slice(0, 10);
+  const BRIEF = frameMorningBrief("Give me my morning brief.");
+
+  function post(
+    store: ChannelStore,
+    body: unknown,
+    startMorningBrief?: () => void,
+  ) {
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.route(
+      "/",
+      createChannelRoutes(
+        store,
+        requireUser,
+        undefined,
+        undefined,
+        undefined,
+        startMorningBrief,
+      ),
+    );
+    return app.request("http://openbot.test/morning-brief", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test("claims the caller's day with the Bot, and runs it at once only when this call claimed it", async () => {
+    for (const claimed of [true, false]) {
+      const calls: unknown[][] = [];
+      let started = 0;
+      const store = fakeStore({
+        async morningBrief(...args) {
+          calls.push(args);
+          return { channel: channel({ agentIds: ["agent-1"] }), claimed };
+        },
+      });
+      const date = dayFromToday(0);
+      const response = await post(
+        store,
+        { agentId: "agent-1", date, brief: BRIEF },
+        () => {
+          started += 1;
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((await json(response)).brief).toMatchObject({
+        claimed,
+        channel: { id: "channel-1", agentIds: ["agent-1"] },
+      });
+      expect(calls).toEqual([[actor, "agent-1", date, BRIEF]]);
+      expect(started).toBe(claimed ? 1 : 0);
+    }
+  });
+
+  test("takes a local date up to a day either side of the server's, as every time zone keeps", async () => {
+    for (const days of [-1, 1]) {
+      const store = fakeStore({
+        morningBrief: async () => ({ channel: channel(), claimed: true }),
+      });
+      const response = await post(store, {
+        agentId: "agent-1",
+        date: dayFromToday(days),
+        brief: BRIEF,
+      });
+      expect(response.status).toBe(200);
+    }
+  });
+
+  test("refuses a date that is not a real YYYY-MM-DD, or is further than a day from the server's", async () => {
+    for (const date of [
+      undefined,
+      42,
+      "2026-02-30",
+      "26-10-2026",
+      `${dayFromToday(0)}T00:00:00Z`,
+      dayFromToday(2),
+      dayFromToday(-2),
+    ]) {
+      const store = fakeStore();
+      const response = await post(store, {
+        agentId: "agent-1",
+        date,
+        brief: BRIEF,
+      });
+      expect(response.status).toBe(400);
+      expect((await json(response)).error).toBe(
+        "A date must be YYYY-MM-DD, within a day of today.",
+      );
+      expect(store.calls).toEqual([]);
+    }
+  });
+
+  test("refuses a request that is not the brief's frame, and one with no Bot", async () => {
+    const date = dayFromToday(0);
+    for (const brief of [
+      undefined,
+      "Give me my morning brief.",
+      `${BRIEF}${"x".repeat(8000)}`,
+    ]) {
+      const response = await post(fakeStore(), {
+        agentId: "agent-1",
+        date,
+        brief,
+      });
+      expect(response.status).toBe(400);
+      expect((await json(response)).error).toBe(
+        "A morning brief request is required.",
+      );
+    }
+    const response = await post(fakeStore(), {
+      agentId: " ",
+      date,
+      brief: BRIEF,
+    });
+    expect(response.status).toBe(400);
+    expect((await json(response)).error).toBe("A Bot is required.");
+  });
+});
+
+describe("the first day's date", () => {
+  function post(store: ChannelStore, body: unknown) {
+    return appFor(store).request("http://openbot.test/first-day", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test("goes to the first day's claim, which takes that day's brief", async () => {
+    const calls: unknown[][] = [];
+    const store = fakeStore({
+      async firstDay(...args) {
+        calls.push(args);
+        return { channel: channel(), claimed: true };
+      },
+    });
+    const response = await post(store, {
+      agentId: "agent-1",
+      date: "2026-10-26",
+    });
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([[actor, "agent-1", undefined, "2026-10-26"]]);
+  });
+
+  test("is checked for its shape only, so a clock a day out still starts the first conversation", async () => {
+    const store = fakeStore({
+      firstDay: async () => ({ channel: channel(), claimed: true }),
+    });
+    const far = new Date(Date.now() + 5 * 24 * 60 * 60_000)
+      .toISOString()
+      .slice(0, 10);
+    expect((await post(store, { agentId: "agent-1", date: far })).status).toBe(
+      200,
+    );
+    const refused = await post(store, {
+      agentId: "agent-1",
+      date: "2026-02-30",
+    });
+    expect(refused.status).toBe(400);
+    expect((await json(refused)).error).toBe("A date must be YYYY-MM-DD.");
+  });
+});
+
 describe("channel delete audit", () => {
   /** Rows written by the route under test, in order. */
   let audited: AuditEventInput[] = [];

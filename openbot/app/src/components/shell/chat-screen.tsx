@@ -17,6 +17,11 @@ import {
   useFirstDayGreeting,
 } from "@/components/shell/first-day";
 import {
+  MORNING_BRIEF_REQUEST,
+  PersonWatch,
+  useMorningBrief,
+} from "@/components/shell/morning-brief";
+import {
   seedMessage,
   stashFirstMessage,
 } from "@/components/channels/transcript-messages";
@@ -28,6 +33,7 @@ import { botAttentionQueryOptions } from "@/lib/bot-lifecycle/queries";
 import { CheckInArrivalContext } from "@/lib/channels/check-in";
 import { frameFirstDay } from "@/lib/channels/first-day";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
+import { frameMorningBrief, localDateOf } from "@/lib/channels/morning-brief";
 import { client } from "@/lib/client";
 import { ONGOING_SEARCH_LIMIT, ongoingChannel } from "@/lib/channels/ongoing";
 import {
@@ -124,9 +130,49 @@ function OngoingChat({
     () => ({ id: bot.id, name: bot.name }),
     [bot.id, bot.name],
   );
+
+  /*
+   * THE MORNING BRIEF, POSTED BEFORE ANYONE ASKS. The first open of Chat on a day that is not the
+   * first asks the server for it; the server claims the day once for this person and Bot, and runs
+   * the turn in this conversation, which picks up the reply as it does any turn the server runs.
+   *
+   * The date is the one Chat opened on, fixed for this mount: opening is what the brief answers,
+   * and a screen left open past midnight is not a second opening. Nothing is asked while nothing has
+   * been said here, which is the first day: the conversation the first day just started arrives
+   * with no message yet, and that day is the greeting's. A failed ask says nothing, because the
+   * person asked for nothing, and the claim is given back for the next open to try.
+   */
+  const me = useQuery(currentUserQueryOptions());
+  const [today] = useState(() => localDateOf(new Date()));
+  /** The person has typed, or started a turn, since Chat opened. */
+  const spoke = useRef(false);
+  useMorningBrief({
+    claimKey:
+      me.isPending || channel.lastMessageAt === null
+        ? null
+        : `${me.data?.id ?? "unknown"}:${bot.id}:${today}`,
+    clear: () => !spoke.current,
+    ask: async () => {
+      await client<{ claimed: boolean }>(
+        "/api/channels/morning-brief",
+        "brief",
+        {
+          method: "POST",
+          body: {
+            agentId: bot.id,
+            date: today,
+            brief: frameMorningBrief(MORNING_BRIEF_REQUEST),
+          },
+          fallback: "Couldn't ask for the morning brief.",
+        },
+      );
+    },
+  });
+
   return (
     <ChatSuggestionProvider bot={chatBot}>
       <CheckInArrivalContext.Provider value={checkInArrived}>
+        <PersonWatch into={spoke} />
         <ChannelChat
           channel={channel}
           inShell
@@ -163,7 +209,7 @@ function FirstMessage({
 }) {
   const queryClient = useQueryClient();
   const createChannel = useMutation({
-    mutationFn: (input: { agentId: string; greeting?: string }) =>
+    mutationFn: (input: { agentId: string; greeting?: string; date: string }) =>
       client<{ channel: AgentChannel; claimed: boolean }>(
         "/api/channels/first-day",
         "start",
@@ -205,6 +251,9 @@ function FirstMessage({
           const result = await createChannel.mutateAsync({
             agentId,
             ...(greeting ? { greeting: first } : {}),
+            // The first day takes its own date's morning brief, so none is posted under the
+            // greeting when Chat is opened again later today (`morningBrief` on the server).
+            date: localDateOf(new Date()),
           });
           const channel = result.channel;
           if (greeting) {

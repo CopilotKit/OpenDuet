@@ -1,4 +1,5 @@
 import { readFirstDay } from "@openbot/shared/first-day";
+import { readMorningBrief } from "@openbot/shared/morning-brief";
 import { existsSync } from "node:fs";
 import { frameTaskInput, readTaskBrief } from "@openbot/shared/task-brief";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
@@ -149,15 +150,22 @@ export function createTaskTurn(deps: {
         },
         { id },
       );
-    // The roster's line is the person's ask, never the frame the model reads around it.
-    await record(
-      input.acceptedReply?.text ??
-        readTaskBrief(input.text) ??
-        readFirstDay(input.text) ??
-        (input.text || "Sent attachments"),
-      null,
-      readTaskBrief(input.text) === null ? input.runId : `${input.runId}:input`,
-    );
+    /*
+     * The roster's line is the person's ask, never the frame the model reads around it. A morning
+     * brief has no ask: nobody typed it, so it gets no line of the person's at all, as a check-in
+     * gets none, and the roster shows the Bot's reply recorded below.
+     */
+    if (readMorningBrief(input.text) === null)
+      await record(
+        input.acceptedReply?.text ??
+          readTaskBrief(input.text) ??
+          readFirstDay(input.text) ??
+          (input.text || "Sent attachments"),
+        null,
+        readTaskBrief(input.text) === null
+          ? input.runId
+          : `${input.runId}:input`,
+      );
     await deps.channels
       .signalBusy(scope.threadId, true, input.runId)
       .catch(() => {});

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { BaseEvent, Message } from "@ag-ui/client";
 import { LLMock } from "@copilotkit/aimock";
 import { frameFirstDay } from "@openbot/shared/first-day";
+import { frameMorningBrief } from "@openbot/shared/morning-brief";
 import type { GrantedTool } from "@openbot/toolkit/granted-tool";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import { z } from "zod";
@@ -590,5 +591,39 @@ describe("the first day", () => {
     const [refused] = replyAnswers(calls);
     expect(refused).toStartWith("Refused.");
     expect(refused).toContain("first day");
+  });
+});
+
+describe("the morning brief", () => {
+  test("a chips call on the brief nobody typed is refused: its card already holds what can be started", async () => {
+    const { calls } = await turn(
+      [{ calls: [reads(), chips()] }, { text: ANSWER }],
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: frameMorningBrief("Give me my morning brief."),
+        },
+      ],
+    );
+    const [refused] = replyAnswers(calls);
+    expect(refused).toStartWith("Refused.");
+    expect(refused).toContain("morning brief");
+  });
+
+  test("a chips call after the person answered the brief is theirs to get again", async () => {
+    const { calls } = await turn(
+      [{ text: ANSWER }, { calls: [chips()] }],
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: frameMorningBrief("Give me my morning brief."),
+        },
+        { id: "a1", role: "assistant", content: "One thing needs you." },
+        { id: "u2", role: "user", content: "Should I say yes to Ana?" },
+      ],
+    );
+    expect(replyAnswers(calls)[0]).not.toStartWith("Refused.");
   });
 });

@@ -1543,6 +1543,7 @@ export function createApp(
         channelEvents,
         auditStore,
         coworker?.proactive?.engine.startFirstDay,
+        coworker?.proactive?.engine.startMorningBrief,
       ),
     );
   }

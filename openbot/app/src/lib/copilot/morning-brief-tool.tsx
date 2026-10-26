@@ -7,6 +7,7 @@ import {
   type BriefItem,
   MorningBriefCard,
 } from "@/components/duet/morning-brief-card";
+import { MORNING_BRIEF_TOOL } from "@/lib/channels/morning-brief";
 import { readToolName } from "@/lib/plugins/tool-name";
 
 /*
@@ -128,7 +129,7 @@ export function briefCard(brief: Brief): {
   };
 }
 
-const TOOL = "morning_brief";
+const TOOL = MORNING_BRIEF_TOOL;
 const parameters = z.object({ since: z.string().optional() });
 
 export function MorningBriefTool() {

@@ -4,6 +4,10 @@ import { eq } from "drizzle-orm";
 import { CHECK_IN_FRAME, frameCheckIn } from "@openbot/shared/check-in";
 import { frameTaskBrief, TASK_FRAME } from "@openbot/shared/task-brief";
 import { FIRST_DAY_FRAME, frameFirstDay } from "@openbot/shared/first-day";
+import {
+  frameMorningBrief,
+  MORNING_BRIEF_FRAME,
+} from "@openbot/shared/morning-brief";
 import { FIRING_FRAME, frameFiring } from "@openbot/shared/routine-firing";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
@@ -360,6 +364,73 @@ describe("naming a claimed conversation", () => {
     );
     for (const line of FIRST_DAY_FRAME) expect(excerptSeen).not.toContain(line);
     expect((await summaryOf(channel.id))?.summary).toBe("Getting to know you");
+  });
+
+  test("never titles a conversation from a morning brief: it waits for what the person says", async () => {
+    const owner = await createUser();
+    const channel = await createUsedChannel(owner);
+    await offer(channel.id);
+    const brief = frameMorningBrief("Give me my morning brief.");
+
+    // Chat asks for the brief for the person on a later day, so it is no opening of theirs.
+    let excerptSeen = "";
+    const report = await summariseClaimedChannels(
+      options({
+        transcript: {
+          getThreadMessages: async () => ({
+            messages: [
+              { role: "user", content: brief },
+              { role: "assistant", content: "Ana's Friday date needs you." },
+            ],
+          }),
+        },
+        title: async (excerpt) => {
+          excerptSeen = excerpt;
+          return "Morning brief";
+        },
+      }),
+    );
+    expect(excerptSeen).toBe("");
+    expect(report.skipped).toContainEqual({
+      channelId: channel.id,
+      reason: "not readable yet",
+    });
+    expect((await summaryOf(channel.id))?.summary).toBeNull();
+  });
+
+  test("titles a conversation that opened on a morning brief from the person's first words after it", async () => {
+    const owner = await createUser();
+    const channel = await createUsedChannel(owner);
+    await offer(channel.id);
+
+    let excerptSeen = "";
+    await summariseClaimedChannels(
+      options({
+        transcript: {
+          getThreadMessages: async () => ({
+            messages: [
+              {
+                role: "user",
+                content: frameMorningBrief("Give me my morning brief."),
+              },
+              { role: "assistant", content: "Ana's Friday date needs you." },
+              { role: "user", content: "Draft the reply to Ana." },
+              { role: "assistant", content: "Here is a draft for Ana." },
+            ],
+          }),
+        },
+        title: async (excerpt) => {
+          excerptSeen = excerpt;
+          return "Reply to Ana";
+        },
+      }),
+    );
+    expect(excerptSeen).toBe(
+      "Asked: Draft the reply to Ana. Answered: Here is a draft for Ana.",
+    );
+    for (const line of MORNING_BRIEF_FRAME)
+      expect(excerptSeen).not.toContain(line);
+    expect((await summaryOf(channel.id))?.summary).toBe("Reply to Ana");
   });
 
   test("titles a conversation a check-in opened from what it found, not the check-in frame", async () => {

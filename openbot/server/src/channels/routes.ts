@@ -1,4 +1,5 @@
 import { readFirstDay } from "@openbot/shared/first-day";
+import { readMorningBrief, utcMidnightOf } from "@openbot/shared/morning-brief";
 import {
   and,
   asc,
@@ -6,6 +7,7 @@ import {
   eq,
   exists,
   inArray,
+  isNotNull,
   isNull,
   lt,
   ne,
@@ -41,6 +43,7 @@ import {
 import { replyEnding } from "../proactive/engine";
 import { WORK_OFFERED_TOPIC } from "../work/queue";
 import { FIRST_DAY_KIND } from "./first-day";
+import { briefDate, MORNING_BRIEF_KIND } from "./morning-brief";
 import { upgradeWebSocket } from "./socket";
 import { oneLine } from "./text";
 import type { ThreadIdentity } from "./thread-identity";
@@ -217,10 +220,28 @@ export type ChannelStore = {
    * would look for the answer.
    */
   direct(actor: AgentActor, agentId: string): Promise<AgentChannel>;
+  /**
+   * The person's first day with this Bot, claimed once, with its greeting queued in the same
+   * transaction. `date` is the person's local date, written as the day's morning brief so the brief
+   * stays off the day the greeting owns (`morningBrief`).
+   */
   firstDay(
     actor: AgentActor,
     agentId: string,
     greeting?: string,
+    date?: string,
+  ): Promise<{ channel: AgentChannel; claimed: boolean }>;
+  /**
+   * The day's morning brief in the person's conversation with this Bot, claimed once per local
+   * `date` and queued in the same transaction, so it is delivered even if the browser that asked
+   * goes away. `claimed` is false when the day already had one, when that day was the first day,
+   * or when nothing has been said here yet, which is the first day still to come.
+   */
+  morningBrief(
+    actor: AgentActor,
+    agentId: string,
+    date: string,
+    brief: string,
   ): Promise<{ channel: AgentChannel; claimed: boolean }>;
   get(actor: AgentActor, channelId: string): Promise<AgentChannel | null>;
   list(actor: AgentActor, query?: ChannelQuery): Promise<ChannelPage>;
@@ -529,12 +550,17 @@ export function createChannelStore(
       return channel ?? store.direct(actor, agentId);
     },
 
-    async firstDay(actor, agentId, greeting) {
+    async firstDay(actor, agentId, greeting, date) {
       const channel = await store.direct(actor, agentId);
       const claimed = await database.transaction(async (transaction) => {
         const [claim] = await transaction
           .update(channels)
-          .set({ firstDayStartedAt: sql`now()` })
+          .set({
+            firstDayStartedAt: sql`now()`,
+            // The first day's brief is the greeting: taken here, so Chat opened again later the
+            // same day does not post a brief under it. See `morningBrief`.
+            ...(date ? { morningBriefOn: date } : {}),
+          })
           .where(
             and(
               eq(channels.id, channel.id),
@@ -567,7 +593,78 @@ export function createChannelStore(
       // Deletion may commit after direct() returns. Claim only a live row, then reselect
       // under direct()'s advisory lock if that destination disappeared before the claim.
       if (!claimed && !(await store.get(actor, channel.id))) {
-        return store.firstDay(actor, agentId, greeting);
+        return store.firstDay(actor, agentId, greeting, date);
+      }
+      return { channel, claimed };
+    },
+
+    async morningBrief(actor, agentId, date, brief) {
+      // The same conversation the first day greets into and a hop answers in: the person's one
+      // conversation with this Bot alone, which is the one Chat shows.
+      const channel = await store.direct(actor, agentId);
+      const claimed = await database.transaction(async (transaction) => {
+        /*
+         * ONE ROW UPDATE IS THE WHOLE CLAIM. Two tabs, or a phone and a laptop, opening Chat in the
+         * same second both get here. PostgreSQL makes the second update wait on the first one's row
+         * lock and then reads the row again, where it finds the date already taken and matches
+         * nothing. So one caller queues the brief, on any number of replicas, with no lock of ours.
+         *
+         * A DATE AFTER THE ONE ALREADY CLAIMED, not merely a different one. Two devices whose clocks
+         * sit in different time zones each send their own date, and "not today's" would let them
+         * take turns, a brief on every open. A date before the claimed one belongs to the device
+         * that is behind, and its day has had its brief. `YYYY-MM-DD` sorts as text the way it
+         * sorts as a date.
+         */
+        const [claim] = await transaction
+          .update(channels)
+          .set({ morningBriefOn: date })
+          .where(
+            and(
+              eq(channels.id, channel.id),
+              isNull(channels.deletedAt),
+              /*
+               * Nothing said here yet means the first day has not happened, or is happening now:
+               * the greeting owns it. The first day's own claim writes its date into the column, so
+               * Chat opened again later that day is turned away by the comparison below.
+               *
+               * NOT `firstDayStartedAt`. A conversation with messages and no first-day stamp is one
+               * from before the stamp existed, or one Chat did not start (a hop's answer, a
+               * check-in); it has had its first day, and refusing it would leave that person
+               * without a brief for good.
+               */
+              isNotNull(channels.lastMessageAt),
+              or(
+                isNull(channels.morningBriefOn),
+                lt(channels.morningBriefOn, date),
+              ),
+            ),
+          )
+          .returning({ id: channels.id });
+        if (claim) {
+          await transaction
+            .insert(workItems)
+            .values({
+              kind: MORNING_BRIEF_KIND,
+              // The column is the claim; the key only keeps one claim from queueing twice.
+              key: `${channel.id}:${date}`,
+              payload: {
+                ownerUserId: actor.id,
+                agentId,
+                channelId: channel.id,
+                date,
+                text: brief,
+              },
+            })
+            .onConflictDoNothing();
+          await transaction.execute(
+            sql`select pg_notify(${WORK_OFFERED_TOPIC}, ${MORNING_BRIEF_KIND})`,
+          );
+        }
+        return Boolean(claim);
+      });
+      // As `firstDay`: a conversation deleted after `direct` chose it is chosen again.
+      if (!claimed && !(await store.get(actor, channel.id))) {
+        return store.morningBrief(actor, agentId, date, brief);
       }
       return { channel, claimed };
     },
@@ -1152,6 +1249,8 @@ export function createChannelRoutes(
   /** Where a channel's removal is written. Absent in tests that do not care about the trail. */
   auditStore?: AuditStore,
   startFirstDay?: () => void,
+  /** Runs a morning brief this replica just queued now, rather than at the next sweep. */
+  startMorningBrief?: () => void,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
 
@@ -1281,14 +1380,63 @@ export function createChannelRoutes(
         readFirstDay(body.greeting) === null)
     )
       return context.json({ error: "A first-day greeting is required." }, 400);
+    /*
+     * The person's local date, which the first day takes as its brief. Its shape is checked and
+     * nothing more: a clock a day out must not keep somebody from their first conversation. The
+     * brief's own route refuses that clock, so it gets no brief either way.
+     */
+    if (
+      body.date !== undefined &&
+      (typeof body.date !== "string" || utcMidnightOf(body.date) === null)
+    )
+      return context.json({ error: "A date must be YYYY-MM-DD." }, 400);
     try {
       const { channel, claimed } = await store.firstDay(
         context.var.actor,
         body.agentId,
         body.greeting,
+        body.date,
       );
       if (body.greeting) startFirstDay?.();
       return context.json({ start: { channel: channelDto(channel), claimed } });
+    } catch (error) {
+      return mapStoreError(context, error);
+    }
+  });
+
+  /*
+   * The day's morning brief, asked for by Chat the first time it opens on a day that is not the
+   * first. Answered with whether this call claimed it; either way there is nothing more for the
+   * browser to do, because the server runs the turn and the conversation picks up the reply.
+   */
+  routes.post("/morning-brief", requireUser, async (context) => {
+    const body = await context.req.json().catch(() => null);
+    if (typeof body?.agentId !== "string" || !body.agentId.trim())
+      return context.json({ error: "A Bot is required." }, 400);
+    const date = briefDate(body.date, new Date());
+    if (date === null)
+      return context.json(
+        { error: "A date must be YYYY-MM-DD, within a day of today." },
+        400,
+      );
+    if (
+      typeof body.brief !== "string" ||
+      body.brief.length > 8000 ||
+      readMorningBrief(body.brief) === null
+    )
+      return context.json(
+        { error: "A morning brief request is required." },
+        400,
+      );
+    try {
+      const { channel, claimed } = await store.morningBrief(
+        context.var.actor,
+        body.agentId,
+        date,
+        body.brief,
+      );
+      if (claimed) startMorningBrief?.();
+      return context.json({ brief: { channel: channelDto(channel), claimed } });
     } catch (error) {
       return mapStoreError(context, error);
     }
