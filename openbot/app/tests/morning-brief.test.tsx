@@ -22,11 +22,17 @@ import {
 import { type ReactNode, StrictMode, useState } from "react";
 import * as ChannelChatModule from "@/components/channels/channel-chat";
 import {
+  repliesLast,
+  toVisibleChatItems,
+} from "@/components/channels/chat-messages";
+import {
   ChatTranscript,
   FIRST_DAY_REPLIES,
+  newestTurnIsBrief,
 } from "@/components/channels/chat-transcript";
 import { ConversationSendContext } from "@/components/channels/conversation-send";
 import { ConversationView } from "@/components/channels/conversation-view";
+import { groupToolSteps } from "@/components/channels/tool-activity";
 import {
   ChatPresenceProvider,
   useReportChatPresence,
@@ -502,6 +508,26 @@ describe("the transcript on a later day", () => {
     // The brief's reply is its own message, not one more part of the first day's answer.
     expect(after.getByText(REPLY)).toBeTruthy();
     expect(after.container.textContent).not.toContain(MORNING_BRIEF_FRAME[0]);
+  });
+});
+
+describe("following the bottom", () => {
+  test("is off while the newest turn is a morning brief, so its card arriving does not pull the view to its end", () => {
+    const thread = groupToolSteps(
+      repliesLast(toVisibleChatItems(briefed)),
+      () => true,
+    );
+    expect(newestTurnIsBrief(thread)).toBe(true);
+    const asked = groupToolSteps(
+      repliesLast(
+        toVisibleChatItems([
+          ...briefed,
+          { id: "u2", role: "user", content: "What about Northline?" },
+        ]),
+      ),
+      () => true,
+    );
+    expect(newestTurnIsBrief(asked)).toBe(false);
   });
 });
 
