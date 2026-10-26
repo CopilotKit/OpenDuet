@@ -2834,4 +2834,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
-console.info(`OpenBot server listening on http://127.0.0.1:${port}`);
+// The product's own name, from the tenant package, because this is the line a person reads when
+// the server comes up. Nothing parses it.
+console.info(
+  `${tenantPackage.productName} server listening on http://127.0.0.1:${port}`,
+);

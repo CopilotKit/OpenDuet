@@ -114,7 +114,13 @@ function Block({
           {block.text}
         </p>
       ) : (
-        <p className="type-body mt-3 whitespace-pre-line text-duet-ink leading-[27px] [overflow-wrap:anywhere] first:mt-0">
+        /*
+         * LINE HEIGHTS HERE ARE RATIOS, NOT PIXELS. `type-body` is in rem so it follows the person's
+         * text size, and a pixel line height beside it does not: at 200% the text grew to 34px and
+         * the lines stayed 27px apart, so every line overlapped the one above. 1.6 is the 27px the
+         * reader was drawn with, at the default 17px.
+         */
+        <p className="type-body mt-3 whitespace-pre-line text-duet-ink leading-[1.6] [overflow-wrap:anywhere] first:mt-0">
           {block.text}
         </p>
       );
@@ -123,13 +129,15 @@ function Block({
         <ul className="mt-3 flex flex-col gap-2 first:mt-0">
           {block.items.map((item, index) => (
             <li
-              className="type-body flex gap-3 text-duet-ink leading-[26px] [overflow-wrap:anywhere]"
+              // 26px at the default size, as a ratio for the reason the paragraph above gives.
+              className="type-body flex gap-3 text-duet-ink leading-[1.53] [overflow-wrap:anywhere]"
               // biome-ignore lint/suspicious/noArrayIndexKey: two bullets may say the same thing.
               key={index}
             >
+              {/* Centred on the first line at any text size: half the line, less half the dot. */}
               <span
                 aria-hidden
-                className="mt-[11px] size-[5px] shrink-0 rounded-full bg-duet-ink-3"
+                className="mt-[calc(0.765em-2.5px)] size-[5px] shrink-0 rounded-full bg-duet-ink-3"
               />
               <span className="min-w-0">{item}</span>
             </li>

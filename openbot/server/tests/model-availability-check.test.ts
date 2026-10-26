@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isCustomModelBase,
   modelCheckOutcome,
   reportModelAvailability,
 } from "../src/model-availability-check";
@@ -136,6 +137,44 @@ describe("asking at boot", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("asks Anthropic when the base URL is Anthropic's own API, written out", async () => {
+    for (const base of [
+      "https://api.anthropic.com",
+      "https://api.anthropic.com/",
+      // What `normalizeModelBaseUrls` turns the line above into before this runs.
+      "https://api.anthropic.com/v1",
+      " https://api.anthropic.com/v1/ ",
+    ]) {
+      const { fetcher, calls } = fakeFetch(200);
+      const outcome = await reportModelAvailability({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        apiKey: async () => KEY,
+        environment: { ANTHROPIC_BASE_URL: base },
+        fetch: fetcher,
+        log: () => {},
+      });
+      expect(outcome).toEqual({ kind: "available" });
+      expect(calls[0]?.url).toBe(
+        "https://api.anthropic.com/v1/models/claude-sonnet-4-5",
+      );
+    }
+  });
+
+  test("asks OpenAI when the base URL is OpenAI's own API, written out", async () => {
+    const { fetcher, calls } = fakeFetch(200);
+    const outcome = await reportModelAvailability({
+      provider: "openai",
+      model: "gpt-5.6-terra",
+      apiKey: async () => KEY,
+      environment: { OPENAI_BASE_URL: "https://api.openai.com/v1" },
+      fetch: fetcher,
+      log: () => {},
+    });
+    expect(outcome).toEqual({ kind: "available" });
+    expect(calls).toHaveLength(1);
+  });
+
   test("says nothing while no key is configured yet", async () => {
     const { fetcher, calls } = fakeFetch(200);
     const lines: string[] = [];
@@ -168,5 +207,46 @@ describe("asking at boot", () => {
       "model-check-unreadable",
     );
     expect(JSON.parse(lines[0] ?? "{}").reason).toContain("ENOTFOUND");
+  });
+});
+
+describe("which base URLs are custom", () => {
+  test("unset and blank are the provider itself", () => {
+    expect(isCustomModelBase("anthropic", undefined)).toBe(false);
+    expect(isCustomModelBase("openai", "  ")).toBe(false);
+  });
+
+  test("the provider's own API, with or without its version, is not custom", () => {
+    expect(isCustomModelBase("anthropic", "https://api.anthropic.com")).toBe(
+      false,
+    );
+    expect(
+      isCustomModelBase("anthropic", "https://api.anthropic.com/v1/"),
+    ).toBe(false);
+    expect(isCustomModelBase("openai", "https://api.openai.com/v1")).toBe(
+      false,
+    );
+    // The default port, written out, is the same address.
+    expect(isCustomModelBase("openai", "https://api.openai.com:443/v1")).toBe(
+      false,
+    );
+  });
+
+  test("anything that could send the call elsewhere is custom", () => {
+    for (const [provider, base] of [
+      ["anthropic", "http://api.anthropic.com"],
+      ["anthropic", "https://api.anthropic.com.evil.example"],
+      ["anthropic", "https://api.anthropic.com:8443/v1"],
+      ["anthropic", "https://user:pass@api.anthropic.com"],
+      ["anthropic", "https://api.anthropic.com/proxy/v1"],
+      ["anthropic", "https://api.anthropic.com/v1?via=gateway"],
+      // Another provider's address is a custom endpoint for this one.
+      ["anthropic", "https://api.openai.com/v1"],
+      ["openai", "https://gateway.internal/v1"],
+      ["openai", "http://localhost:11434/v1"],
+      ["openai", "not a url"],
+    ] as const) {
+      expect(isCustomModelBase(provider, base)).toBe(true);
+    }
   });
 });

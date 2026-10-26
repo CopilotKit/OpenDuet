@@ -88,6 +88,50 @@ export function modelCheckOutcome(input: {
   };
 }
 
+/** Each provider's own API origin, the one {@link ENDPOINTS} asks. */
+const OFFICIAL_HOST: Record<Provider, string> = {
+  openai: "api.openai.com",
+  anthropic: "api.anthropic.com",
+};
+
+/**
+ * Whether a base URL sends this provider's calls somewhere other than the provider itself.
+ *
+ * THE PROVIDER'S OWN ADDRESS, WRITTEN OUT, IS NOT CUSTOM. A base URL set to
+ * `https://api.anthropic.com` (with or without `/v1`, which `normalizeModelBaseUrls` in `copilot.ts`
+ * adds anyway) still reaches Anthropic, so the model lookup below answers for it exactly as it does
+ * with nothing set. Treating any set value as custom skipped the check, and the setup checklist then
+ * said "It uses a custom endpoint, which OpenDuet can't check" about the official API.
+ *
+ * Exact on everything that could move the call: https only, the provider's own host, no port other
+ * than the default, no credentials, query or fragment, and a path of nothing or one version segment.
+ * Anything else is a gateway or a proxy, which the provider's lookup cannot vouch for.
+ */
+export function isCustomModelBase(
+  provider: Provider,
+  base: string | undefined,
+): boolean {
+  const value = base?.trim();
+  if (!value) return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return true;
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  return !(
+    url.protocol === "https:" &&
+    url.hostname === OFFICIAL_HOST[provider] &&
+    url.port === "" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
+    (path === "" || path === "/v1")
+  );
+}
+
 /** Ask once and log what was found. Resolves either way and never throws. */
 export async function reportModelAvailability(options: {
   provider: Provider;
@@ -103,11 +147,11 @@ export async function reportModelAvailability(options: {
   const request = options.fetch ?? fetch;
   const { provider, model } = options;
 
-  const customBase =
+  const base =
     provider === "anthropic"
       ? environment.ANTHROPIC_BASE_URL
       : environment.OPENAI_BASE_URL;
-  if (customBase?.trim()) return { kind: "skipped" };
+  if (isCustomModelBase(provider, base)) return { kind: "skipped" };
 
   let outcome: ModelCheckOutcome;
   try {

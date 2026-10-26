@@ -152,7 +152,7 @@ test.each([
   [
     { enabled: true, defaultTarget: { containerId: "openbot" }, agents: {} },
     { state: "assigned", containerId: "openbot" },
-    'OpenBot assigned this Intelligence project\'s "openbot" container automatically',
+    'OpenDuet assigned this Intelligence project\'s "openbot" container automatically',
   ],
   [
     { enabled: true, defaultTarget: null, agents: {} },
@@ -182,7 +182,7 @@ test("a deployment that chose its own container hears nothing about automatic as
   await waitFor(() =>
     expect(view.queryByText("Loading Learning settings…")).toBeNull(),
   );
-  expect(view.queryByText("OpenBot assigned", { exact: false })).toBeNull();
+  expect(view.queryByText("OpenDuet assigned", { exact: false })).toBeNull();
   expect(
     view.queryByText("Learning container yet", { exact: false }),
   ).toBeNull();

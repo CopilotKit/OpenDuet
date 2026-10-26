@@ -52,6 +52,7 @@ import {
   startChatLinkMutationOptions,
   startSmsMutationOptions,
 } from "@/lib/delivery";
+import { appConfig } from "@/lib/generated/application-config";
 import { queryClient } from "@/query-client";
 
 /**
@@ -513,7 +514,7 @@ function ConnectDialog({
             <Item size="sm" variant="muted">
               <ItemContent>
                 <ItemDescription className="line-clamp-none">
-                  Send this message to the OpenBot app in{" "}
+                  Send this message to the {appConfig.brand.productName} app in{" "}
                   {linked.platform === "teams" ? "Microsoft Teams" : "Slack"}{" "}
                   within {Math.ceil((linked.expiresAt - Date.now()) / 60_000)}{" "}
                   minutes. It links that account to this conversation and Bot.

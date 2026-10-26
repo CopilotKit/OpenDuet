@@ -46,6 +46,11 @@ import {
   channelKeys,
 } from "@/lib/channels/queries";
 import {
+  forgetRunError,
+  recalledRunError,
+  rememberRunError,
+} from "@/lib/channels/run-error-memory";
+import {
   claimSeed,
   interruptsToAnswer,
   isApprovalWaitingResult,
@@ -892,7 +897,25 @@ export function ChannelChat({
   });
 
   // Run failures arrive as events and are reported only for turns started in this mount.
-  const [runError, setRunError] = useState<string | null>(null);
+  const [runError, setRunErrorState] = useState<string | null>(null);
+  /**
+   * Every report goes through here, so the note kept for a reload is always the one on screen, kept
+   * with the conversation's last message so a reload shows it only while it is still the latest
+   * news (`lib/channels/run-error-memory.ts`). A new turn's `null` forgets it.
+   */
+  const setRunError = useCallback(
+    (said: string | null) => {
+      setRunErrorState(said);
+      if (said === null) forgetRunError(channel.id);
+      else
+        rememberRunError(
+          channel.id,
+          said,
+          agentRef.current.messages.at(-1)?.id ?? null,
+        );
+    },
+    [channel.id],
+  );
   const awaitingReply = useRef(false);
   /**
    * WHY THIS TURN ENDED WITHOUT AN ANSWER, KEPT WHERE `deliver` CAN STILL SEE IT — because the one
@@ -1377,7 +1400,7 @@ export function ChannelChat({
       },
     });
     return () => subscription?.unsubscribe();
-  }, [agent, runtimeAgentId]);
+  }, [agent, runtimeAgentId, setRunError]);
 
   /** Stable reference for effects and component callbacks. */
   const sayRef = useRef(say);
@@ -1613,6 +1636,16 @@ export function ChannelChat({
     ...(task?.queued ?? []).map((reply) => reply.messageId),
   ]);
 
+  /*
+   * The failed turn's sentence from before a reload, while nothing has happened since: read only
+   * once history is back and no turn is going, and only while the last message is the one it was
+   * about. See `lib/channels/run-error-memory.ts`.
+   */
+  const recalledError =
+    runError === null && !restoring && turnsInFlight === 0 && !agent.isRunning
+      ? recalledRunError(channel.id, agent.messages.at(-1)?.id ?? null)
+      : null;
+
   return (
     // Activity renderers resolve their agent through this SDK context. It must match useAgent's
     // channel instance so an action continues this thread instead of looking for a default agent.
@@ -1831,7 +1864,7 @@ export function ChannelChat({
             stopped={
               runError && THREAD_LOCKED.test(runError)
                 ? STILL_FINISHING
-                : (runError ?? undefined)
+                : (runError ?? recalledError ?? undefined)
             }
           />
         </div>

@@ -145,6 +145,42 @@ describe("sayableReason", () => {
     const said = "The Bot stopped responding, so this turn was ended.";
     expect(sayableReason(said)).toBe(said);
   });
+
+  test("a model that could not be reached is said plainly, never in the SDK's words", () => {
+    // What the release review saw, word for word: "the computer" is Bun's, not a Bot's computer.
+    const seen =
+      "Failed after 3 attempts. Last error: Cannot connect to API: Unable to connect. Is the computer able to access the url?";
+    expect(sayableReason(seen)).toBe(
+      "Couldn't reach the AI model. Check your internet connection, then try again.",
+    );
+    expect(sayableReason(seen)).not.toContain("computer");
+  });
+
+  test("each kind of model failure gets its own next step", () => {
+    expect(sayableReason("The operation timed out.")).toBe(
+      "That took too long, so it was stopped. Try again.",
+    );
+    // The retry wrapper names the cause last, and the cause is what is said.
+    expect(
+      sayableReason("Failed after 3 attempts. Last error: Overloaded"),
+    ).toBe("The AI model is busy right now. Try again in a minute.");
+    expect(sayableReason("429 Too Many Requests: rate limit reached")).toBe(
+      "The AI model is busy right now. Try again in a minute.",
+    );
+    expect(sayableReason("401 invalid x-api-key")).toBe(
+      "The AI model didn't accept this install's key. An admin needs to update it.",
+    );
+  });
+
+  test("a bare connection error with no model in it is the Bot's endpoint", () => {
+    for (const raw of [
+      "Unable to connect. Is the computer able to access the url?",
+      "connect ECONNREFUSED 127.0.0.1:4210",
+      "fetch failed",
+    ]) {
+      expect(sayableReason(raw)).toBe("Couldn't reach the Bot. Try again.");
+    }
+  });
 });
 
 describe("joinOrFollow", () => {

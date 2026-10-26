@@ -1,4 +1,11 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
@@ -253,5 +260,97 @@ test("editing a channel starts from it, saves only what changed, and can archive
   expect(sent.at(-1)).toMatchObject({
     method: "POST",
     path: "/api/openduet/channels/c-kiln/archive",
+  });
+});
+
+describe("Escape closes only the innermost thing, and never drops what was typed", () => {
+  test("with the icon picker open, Escape folds the picker and keeps the sheet and its fields", async () => {
+    serving(() => Response.json({}));
+    const user = userEvent.setup({ document });
+    let closed = 0;
+    const { view } = draw({ onClose: () => closed++ });
+    const dialog = await view.findByRole("dialog", { name: "New channel" });
+    await user.type(within(dialog).getByLabelText("Name"), "Kiln move");
+    const change = within(dialog).getByRole("button", { name: "Change icon" });
+    await user.click(change);
+    await user.click(
+      within(within(dialog).getByRole("group", { name: "Icon" })).getByRole(
+        "radio",
+        { name: "Home" },
+      ),
+    );
+
+    await user.keyboard("{Escape}");
+
+    expect(closed).toBe(0);
+    expect(change.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(change);
+    expect(
+      (within(dialog).getByLabelText("Name") as HTMLInputElement).value,
+    ).toBe("Kiln move");
+    expect(preview(dialog)?.getAttribute("data-channel-icon")).toBe("home");
+  });
+
+  test("with something typed, Escape asks first; Keep editing keeps it, Discard closes", async () => {
+    serving(() => Response.json({}));
+    const user = userEvent.setup({ document });
+    let closed = 0;
+    const { view } = draw({ onClose: () => closed++ });
+    const dialog = await view.findByRole("dialog", { name: "New channel" });
+    await user.type(
+      within(dialog).getByLabelText("Purpose"),
+      "Moving the kiln by March.",
+    );
+
+    await user.keyboard("{Escape}");
+    expect(closed).toBe(0);
+    expect(within(dialog).getByText("Discard this channel?")).toBeTruthy();
+    // Keep editing is focused, so a second Escape or a Return keeps the draft.
+    const keep = within(dialog).getByRole("button", { name: "Keep editing" });
+    expect(document.activeElement).toBe(keep);
+
+    await user.keyboard("{Escape}");
+    expect(closed).toBe(0);
+    expect(within(dialog).queryByText("Discard this channel?")).toBeNull();
+    expect(
+      (within(dialog).getByLabelText("Purpose") as HTMLTextAreaElement).value,
+    ).toBe("Moving the kiln by March.");
+
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
+    expect(closed).toBe(1);
+  });
+
+  test("with nothing typed, Escape simply closes", async () => {
+    serving(() => Response.json({}));
+    const user = userEvent.setup({ document });
+    let closed = 0;
+    const { view } = draw({ onClose: () => closed++ });
+    await view.findByRole("dialog", { name: "New channel" });
+
+    await user.keyboard("{Escape}");
+    expect(closed).toBe(1);
+  });
+
+  test("editing asks about changes only once something differs", async () => {
+    serving(() => Response.json({}));
+    const user = userEvent.setup({ document });
+    let closed = 0;
+    const { view } = draw({ channel: kiln, onClose: () => closed++ });
+    const dialog = await view.findByRole("dialog", { name: "Edit channel" });
+
+    await user.click(within(dialog).getByLabelText("Name"));
+    await user.keyboard("{Escape}");
+    expect(closed).toBe(1);
+
+    cleanup();
+    const again = draw({ channel: kiln, onClose: () => closed++ });
+    const edited = await again.view.findByRole("dialog", {
+      name: "Edit channel",
+    });
+    await user.type(within(edited).getByLabelText("Name"), " soon");
+    await user.keyboard("{Escape}");
+    expect(within(edited).getByText("Discard your changes?")).toBeTruthy();
+    expect(closed).toBe(1);
   });
 });

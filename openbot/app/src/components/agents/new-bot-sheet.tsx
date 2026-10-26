@@ -40,6 +40,7 @@ import {
   testAgentConnection,
 } from "@/lib/agents/queries";
 import { isComposing } from "@/lib/composing";
+import { appConfig } from "@/lib/generated/application-config";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 
@@ -493,7 +494,7 @@ const VISIBILITY_OPTIONS: Array<{
   {
     value: "public",
     title: "Public",
-    description: "Everyone in your OpenBot can find and use it.",
+    description: `Everyone in your ${appConfig.brand.productName} can find and use it.`,
     icon: IconUsers,
   },
 ];
@@ -685,7 +686,7 @@ function RuntimeStep({
           <span className="block font-semibold text-base">Run it here</span>
           <span className="mt-1 block text-pretty text-muted-foreground text-sm">
             {builtInAvailable
-              ? "OpenBot runs it for you. Nothing to set up, and it can start right away."
+              ? `${appConfig.brand.productName} runs it for you. Nothing to set up, and it can start right away.`
               : "Not available yet. An admin has to turn this on first."}
           </span>
         </span>
@@ -786,8 +787,9 @@ function EndpointStep({
             />
           ) : (
             <FieldDescription>
-              Any agent that speaks AG-UI works. OpenBot connects to it, so it
-              has to be reachable from OpenBot's server.
+              Any agent that speaks AG-UI works. {appConfig.brand.productName}{" "}
+              connects to it, so it has to be reachable from{" "}
+              {appConfig.brand.productName}'s server.
             </FieldDescription>
           )}
         </Field>

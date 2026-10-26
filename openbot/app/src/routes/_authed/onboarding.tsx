@@ -239,15 +239,20 @@ function RosterStep() {
     })),
   ];
 
+  /*
+   * THE ROSTER IS THIS STEP'S PICTURE, AND THE ONLY ONE. It used to sit under an animated approval
+   * card (the hand-off demo), which filled a phone's screen by itself: the step about picking a Bot
+   * opened on Refuse and Allow once, with the Bots to pick from cut off below the fold. Asking
+   * before acting has its own step, so here the roster is drawn first and whole.
+   */
   return (
     <div className="w-full flex flex-col items-center justify-center">
       <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
         Pick a Bot or make your own
       </h1>
       <div className="h-8" />
-      <CapabilityDemo kind="handoff" />
       <IllustrationFrame
-        className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 p-4"
+        className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4"
         label={`Bot roster: ${roster.map((a) => `${a.name} (${a.example ? "example" : "available"})`).join(", ")}, and one of your own`}
       >
         {roster.map((a) => {
@@ -292,20 +297,43 @@ function RosterStep() {
  * the product backlog). None of it is said to an organization's own people, who are past all three.
  */
 
+/**
+ * Where an evaluator's data is kept, said as the server actually keeps it.
+ *
+ * IT USED TO SAY CONVERSATIONS STAYED ON THIS COMPUTER, AND THEY DO NOT. The server refuses to start
+ * without CopilotKit Intelligence (`INTELLIGENCE_API_URL` and `INTELLIGENCE_API_KEY`, see
+ * `.env.example` and `docs/telemetry.md`), because Intelligence owns durable threads and memory. Its
+ * address defaults to CopilotKit's managed service, and only somebody who runs Intelligence
+ * themselves points it elsewhere. So each sentence below is one thing this install verifiably does:
+ *
+ * - Bots and settings are rows in this install's own Postgres (`agents`, preferences, rules).
+ *   "This install's database", not "this computer": `DATABASE_URL` decides where that is, and
+ *   nothing here reads it. Files and connected accounts are left out on purpose. A file's bytes are
+ *   in that database, but what a message carries about it also reaches the thread and the model;
+ *   and an app connected through Composio or Arcade is held by that service, not here.
+ * - Conversations and memory are in Intelligence, named, with where it runs by default.
+ * - Every message goes to the model provider this install was set up with.
+ * - The CopilotKit runtime sends usage events to CopilotKit unless `DO_NOT_TRACK=1` or
+ *   `COPILOTKIT_TELEMETRY_DISABLED=true` is set (`server/src/telemetry.ts`). Naming the variable is
+ *   fine here: this step is shown only to a single-user install, whose one reader runs the server.
+ *
+ * Nothing about sign-in: activating a local install signs you in to CopilotKit, which is its own
+ * question and not this step's.
+ */
 function LocalStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
       <h1 className="text-3xl font-semibold tracking-tight max-w-md text-center [overflow-wrap:anywhere]">
-        It runs on your machine
+        Where your data lives
       </h1>
-      {/*
-       * "Stored", and the model named, because "your data never leaves" would be untrue: every turn
-       * goes to the model provider this install was set up with. What stays is everything kept. No
-       * word about sign-in either: activating a local install signs you in to CopilotKit.
-       */}
       <p className="mt-3 max-w-md text-center text-muted-foreground">
-        Your conversations, files and Bots are stored on this computer. Only
-        what you send to your model leaves it.
+        Your Bots and settings stay in this install's database. Conversations
+        and memory are kept in CopilotKit Intelligence, in CopilotKit's cloud
+        unless you host it yourself. What you ask goes to your AI model.
+      </p>
+      <p className="type-caption mt-3 max-w-md text-center text-duet-ink-3">
+        CopilotKit also receives usage events. Set DO_NOT_TRACK=1 to turn them
+        off.
       </p>
       <div className="h-8" />
       <CapabilityDemo kind="approval" />

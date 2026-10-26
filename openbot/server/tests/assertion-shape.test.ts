@@ -582,13 +582,6 @@ const ALLOW: Allowed[] = [
     why: 'expect( stampSignIn(broken, "anybody", SIGNED_IN_AT), ).resolves.toBeUndefined();',
   },
   {
-    file: "server/tests/plugin-user-credential.integration.test.ts",
-    line: 369,
-    shape: "a",
-    finding: "round 2 — plugin-user-credential.integration.test.ts:361",
-    why: 'describe("a person who has not connected", () => { test("is refused, and told to connect rather than told it b',
-  },
-  {
     file: "app/tests/bot-setup.test.tsx",
     line: 178,
     shape: "b",

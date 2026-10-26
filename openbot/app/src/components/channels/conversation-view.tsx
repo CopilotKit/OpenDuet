@@ -29,6 +29,7 @@ import {
 import { PageSheetHost } from "@/components/duet/page-sheet";
 import {
   stepFor,
+  usePatientStep,
   useReportChatPresence,
 } from "@/components/shell/chat-presence";
 import { ChatSuggestionCard } from "@/components/shell/chat-suggestion";
@@ -222,12 +223,24 @@ export function ConversationView({
   // The app shell's orb follows Chat: thinking for the turn, listening to the draft. Not while
   // history is restoring: joining the thread is a run of its own, and it is not an answer.
   const working = (busy || inFlight) && !restoring;
+  /*
+   * What moves when the turn does: another message, the last one growing as it is written, or a
+   * tool call added to it. The pill's quiet clock (`usePatientStep`) starts again on each.
+   */
+  const last = messages.at(-1);
+  const progress = `${messages.length}:${JSON.stringify(last?.content ?? "").length}:${
+    last && "toolCalls" in last ? (last.toolCalls?.length ?? 0) : 0
+  }`;
+  const step = usePatientStep(
+    // Read off the messages on every render, as the transcript reads them, because the agent
+    // grows the same array in place. Only Chat's conversation has a pill to say it in.
+    inShell ? stepFor(messages, working, approvals) : null,
+    progress,
+  );
   const presence = useReportChatPresence(inShell, {
     working,
     failed: Boolean(stopped),
-    // Read off the messages on every render, as the transcript reads them, because the agent
-    // grows the same array in place. Only Chat's conversation has a pill to say it in.
-    step: inShell ? stepFor(messages, working, approvals) : null,
+    step,
   });
 
   /**

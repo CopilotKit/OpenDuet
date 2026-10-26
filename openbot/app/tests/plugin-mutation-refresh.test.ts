@@ -18,6 +18,7 @@ import {
   connectAccountMutationOptions,
   connectBrokeredWithFieldsMutationOptions,
   disconnectBrokeredMutationOptions,
+  disconnectHeldMutationOptions,
   enableComposioAppMutationOptions,
   recheckBrokeredConnectionMutationOptions,
   refreshPluginServerMutationOptions,
@@ -267,6 +268,15 @@ const REFUSALS: {
     message: "Composio would not end this account, and gave no reason.",
     factory: disconnectBrokeredMutationOptions,
     variables: "gmail",
+  },
+  {
+    name: "disconnecting an account this deployment holds",
+    route: "DELETE /api/plugins/servers/:id/connection",
+    status: 502,
+    message:
+      "Couldn't reach Google, so nothing was disconnected. Try again in a moment.",
+    factory: disconnectHeldMutationOptions,
+    variables: "google-workspace",
   },
   {
     name: "handing over a typed key",
@@ -523,6 +533,12 @@ const ENCODED_REQUESTS: {
     name: "disconnecting a brokered account",
     url: `/api/plugins/servers/${ENCODED_ID}/connection`,
     build: disconnectBrokeredMutationOptions,
+    variables: HOSTILE_ID,
+  },
+  {
+    name: "disconnecting an account this deployment holds",
+    url: `/api/plugins/servers/${ENCODED_ID}/connection`,
+    build: disconnectHeldMutationOptions,
     variables: HOSTILE_ID,
   },
   {

@@ -136,7 +136,8 @@ export function PageSheet({
           <div className="mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col px-3 pt-[max(env(safe-area-inset-top),12px)] pb-[max(env(safe-area-inset-bottom),10px)]">
             <div
               className={cn(
-                "flex min-h-0 flex-1 flex-col overflow-hidden motion-reduce:transition-none",
+                // A size container, so the header below can ask how much room it has.
+                "@container flex min-h-0 flex-1 flex-col overflow-hidden motion-reduce:transition-none",
                 morph.morphing
                   ? "transition-opacity duration-150 ease-out"
                   : "transition-transform duration-300 ease-out motion-safe:group-data-starting-style:translate-y-6",
@@ -145,22 +146,31 @@ export function PageSheet({
               data-morph-hidden={morph.hidden || undefined}
               ref={morph.sheetRef}
             >
+              {/*
+               * THE TITLE GETS A ROW OF ITS OWN WHEN THE TEXT IS LARGE. Back and "…" are 44px each
+               * in rem, so at 200% text they took 176px of a 342px row between them, and the title
+               * was squeezed into a column a few letters wide. It broke anywhere to fit, one syllable
+               * per line ("Prep / note / s: / Hea / rth"). Below 20rem of room, which is 320px at the
+               * default size and so no phone at it, the title moves under the two discs and takes the
+               * whole width. It breaks only between words, and a title longer than two lines ends in
+               * an ellipsis, with the whole of it still the dialog's name.
+               */}
               <header className="relative grid min-h-14 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-2 py-1">
                 <button
                   aria-label="Back"
-                  className="grid size-11 place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
+                  className="col-start-1 row-start-1 grid size-11 place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
                   onClick={morph.close}
                   type="button"
                 >
                   <DuetIcon name="chevronLeft" size={22} stroke={2.1} />
                 </button>
-                <DialogPrimitive.Title className="type-row min-w-0 justify-self-center rounded-full bg-duet-card px-4 py-2 text-center font-semibold [overflow-wrap:anywhere]">
+                <DialogPrimitive.Title className="type-row col-start-2 row-start-1 line-clamp-2 min-w-0 justify-self-center text-balance rounded-[1.25rem] bg-duet-card px-4 py-2 text-center font-semibold [overflow-wrap:break-word] @max-[20rem]:col-span-3 @max-[20rem]:col-start-1 @max-[20rem]:row-start-2">
                   {title}
                 </DialogPrimitive.Title>
                 <button
                   aria-label="Page actions"
                   aria-expanded={actions}
-                  className="grid size-11 place-items-center rounded-full bg-duet-card text-duet-ink"
+                  className="col-start-3 row-start-1 grid size-11 place-items-center rounded-full bg-duet-card text-duet-ink"
                   onClick={() => setActions(!actions)}
                   type="button"
                 >
