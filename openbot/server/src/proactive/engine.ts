@@ -857,6 +857,8 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
     text: z.string(),
     /** The person's local date, on a morning brief. */
     date: z.string().optional(),
+    /** The claim that queued a morning brief, so the same date claimed again runs under new ids. */
+    claim: z.string().optional(),
   });
   type Opening = z.infer<typeof openingSchema>;
   const openings = {
@@ -866,7 +868,9 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
       error: "first-day-greeting-error",
     },
     [MORNING_BRIEF_KIND]: {
-      runId: (work: Opening) => `morning-brief-${work.channelId}-${work.date}`,
+      // An item queued before claims carried a token has none, and keeps the run id it had.
+      runId: (work: Opening) =>
+        `morning-brief-${work.channelId}-${work.date}${work.claim ? `-${work.claim}` : ""}`,
       error: "morning-brief-error",
     },
   } as const;

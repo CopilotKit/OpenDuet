@@ -209,3 +209,70 @@ describe("Start on what needs her", () => {
     ).toBeTruthy();
   });
 });
+
+describe("a long brief", () => {
+  const mailOf = (count: number, decidedBy = "model:triage") =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `m${index}`,
+      threadId: `t${index}`,
+      from: `Sender ${index}`,
+      subject: `Subject ${index}`,
+      reason: `Reason ${index}`,
+      decidedBy,
+    }));
+  const briefWith = (needsYou: ReturnType<typeof mailOf>) => {
+    const parsed = readBrief(JSON.stringify({ ...BRIEF, needsYou }));
+    if (!parsed) throw new Error("no brief");
+    return parsed;
+  };
+
+  test("shows five rows that need her, and the rest one tap away", () => {
+    const view = render(
+      <MorningBriefCard {...briefCard(briefWith(mailOf(27)))} />,
+    );
+    expect(view.getByText("Sender 4 · Subject 4")).toBeTruthy();
+    expect(view.queryByText("Sender 5 · Subject 5")).toBe(null);
+
+    fireEvent.click(
+      view.getByRole("button", { name: "Show 22 more in Needs you" }),
+    );
+    expect(view.getByText("Sender 26 · Subject 26")).toBeTruthy();
+    expect(view.queryByRole("button", { name: /^Show \d+ more/ })).toBe(null);
+  });
+
+  test("a section one row over is shown whole, since Show 1 more saves nothing", () => {
+    const view = render(
+      <MorningBriefCard {...briefCard(briefWith(mailOf(6)))} />,
+    );
+    expect(view.getByText("Sender 5 · Subject 5")).toBeTruthy();
+    expect(view.queryByRole("button", { name: /^Show \d+ more/ })).toBe(null);
+  });
+
+  test("mail that could not be sorted goes last, and Start still takes on the row it is on", () => {
+    const unsorted = mailOf(1, "unsorted").map((item) => ({
+      ...item,
+      id: "u0",
+      from: "Unsorted",
+    }));
+    const brief = briefWith([...unsorted, ...mailOf(1)]);
+    expect(briefCard(brief).needsYou.map((row) => row.id)).toEqual([
+      "m0",
+      "u0",
+    ]);
+
+    const send = mock((_text: string) => true);
+    const view = render(
+      <ConversationSendContext.Provider
+        value={{ send, isLatestTurn: () => true }}
+      >
+        <StartableBrief brief={brief} />
+      </ConversationSendContext.Provider>,
+    );
+    fireEvent.click(
+      view.getByRole("button", { name: "Start: Sender 0 · Subject 0" }),
+    );
+    expect(send).toHaveBeenCalledWith(
+      "Take care of Sender 0's email: Subject 0",
+    );
+  });
+});

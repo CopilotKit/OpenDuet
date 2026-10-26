@@ -642,27 +642,56 @@ describe("the morning brief's claim", () => {
       (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
     ).toBe(false);
     expect(await claimedOn(chat.id)).toBe("2026-10-26");
-    expect(await briefsIn(chat.id)).toEqual([
-      {
-        key: `${chat.id}:2026-10-26`,
-        payload: {
-          ownerUserId: owner.id,
-          agentId: bot,
-          channelId: chat.id,
-          date: "2026-10-26",
-          text: BRIEF,
-        },
+    const [queued, ...more] = await briefsIn(chat.id);
+    expect(more).toEqual([]);
+    const token = (queued?.payload as { claim?: string } | undefined)?.claim;
+    expect(token).toMatch(/^[0-9a-f]{8}$/);
+    expect(queued).toEqual({
+      key: `${chat.id}:2026-10-26:${token}`,
+      payload: {
+        ownerUserId: owner.id,
+        agentId: bot,
+        channelId: chat.id,
+        date: "2026-10-26",
+        claim: token,
+        text: BRIEF,
       },
-    ]);
+    });
 
     // The next day is a day of its own.
     expect(
       (await store.morningBrief(owner, bot, "2026-10-27", BRIEF)).claimed,
     ).toBe(true);
-    expect((await briefsIn(chat.id)).map((brief) => brief.key)).toEqual([
-      `${chat.id}:2026-10-26`,
-      `${chat.id}:2026-10-27`,
-    ]);
+    expect(
+      (await briefsIn(chat.id))
+        .map((brief) => (brief.payload as { date: string }).date)
+        .sort(),
+    ).toEqual(["2026-10-26", "2026-10-27"]);
+  });
+
+  test("queues a brief of its own when the same date is claimed again after the claim was cleared", async () => {
+    const owner = await createUser();
+    const bot = await createAgent(owner);
+    const chat = await usedChat(owner, bot);
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(true);
+    // The first brief ran and finished; the queue keeps its item.
+    await database
+      .update(workItems)
+      .set({ finishedAt: new Date() })
+      .where(like(workItems.key, `${chat.id}:%`));
+    await database
+      .update(channels)
+      .set({ morningBriefOn: null })
+      .where(eq(channels.id, chat.id));
+
+    expect(
+      (await store.morningBrief(owner, bot, "2026-10-26", BRIEF)).claimed,
+    ).toBe(true);
+    const briefs = await briefsIn(chat.id);
+    expect(briefs).toHaveLength(2);
+    expect(new Set(briefs.map((brief) => brief.key)).size).toBe(2);
   });
 
   test("holds after the queue has forgotten the brief's work item", async () => {

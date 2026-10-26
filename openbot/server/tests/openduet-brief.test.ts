@@ -5,6 +5,7 @@ import {
   CALENDAR_LIST,
   type CallTool,
   displayName,
+  firstNameOf,
   GMAIL_SEARCH,
   inboxOwner,
   openduetTools,
@@ -241,6 +242,15 @@ describe("morning brief", () => {
       "Coastal Bank",
     );
     expect(displayName("ana@hearthandco.com")).toBe("ana@hearthandco.com");
+  });
+
+  test("greets by first name, and by no name when the name on file is an email address", () => {
+    expect(firstNameOf("Maya Okafor")).toBe("Maya");
+    expect(firstNameOf("  Maya  ")).toBe("Maya");
+    // A single-user install keeps the sign-in email as the name.
+    expect(firstNameOf("dev@openbot.local")).toBeNull();
+    expect(firstNameOf("")).toBeNull();
+    expect(firstNameOf(null)).toBeNull();
   });
 });
 

@@ -144,6 +144,16 @@ export function inboxOwner(
   return best ?? own ?? null;
 }
 
+/**
+ * The first name the card greets. A single-user install keeps the sign-in email as the person's
+ * name, and "Afternoon, dev@openbot.local." greets an address; with no name the card says
+ * "Afternoon." instead.
+ */
+export function firstNameOf(name: string | null): string | null {
+  const first = name?.trim().split(/\s+/)[0];
+  return first && !first.includes("@") ? first : null;
+}
+
 async function inParallel<T, R>(
   items: readonly T[],
   limit: number,
@@ -187,7 +197,7 @@ export async function buildMorningBrief(
   const couldNotCheck: MorningBrief["couldNotCheck"] = [];
   const brief: MorningBrief = {
     at: now.toISOString(),
-    name: input.person.name?.trim().split(/\s+/)[0] || null,
+    name: firstNameOf(input.person.name),
     needsYou: [],
     canWait: [],
     calendar: [],
