@@ -35,6 +35,11 @@ export type TaskRecord = {
   suggestionId: string | null;
   sourceApp: string | null;
   sourceLink: string | null;
+  /**
+   * The one thing in `sourceApp` it was started for: the Gmail message behind a brief row's Start,
+   * which is how that row knows it was started. Absent on a server from before it was sent.
+   */
+  sourceRef?: string | null;
   /** The channel it was asked for in, which it wears as a tag, or null for Everything. */
   fromChannelId?: string | null;
   status: TaskStatus;
@@ -46,9 +51,9 @@ export type TaskRecord = {
   /** When it failed, alongside `failure`. */
   failedAt: string | null;
   /**
-   * The run's own next step, one line: the last sentence or question of the Bot's newest words, or
-   * the person's reply in quotes while it is worked on. Null before anything was said; absent on a
-   * server from before it was sent.
+   * The run's own next step, one line: what the Bot said its next step is (`task_status`), or else
+   * the last question or sentence of its newest words, or the person's reply in quotes while it is
+   * worked on. Null before anything was said; absent on a server from before it was sent.
    */
   next?: string | null;
   resolvedAt: string | null;
@@ -179,6 +184,11 @@ export type TaskReport = {
   taskId: string;
   entries: ReportEntry[];
   resources: ReportResource[];
+  /**
+   * The pages the task made, as `make_page` answered: unchecked here, and read with the page
+   * summary's own schema where they are drawn. Absent from a server from before it was sent.
+   */
+  pages?: unknown[];
 };
 
 /**

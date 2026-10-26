@@ -21,12 +21,14 @@ describe("frameMorningBrief", () => {
     );
   });
 
-  test("tells the model nobody typed it, to call the brief, and to say at most one sentence", () => {
+  test("tells the model nobody typed it, to call the brief, and to say exactly one sentence", () => {
     const frame = MORNING_BRIEF_FRAME.join(" ");
     expect(frame).toContain("Nobody typed this.");
     expect(frame).toContain("first time today");
     expect(frame).toContain(`Call ${MORNING_BRIEF_TOOL} once.`);
-    expect(frame).toContain("at most one short sentence");
+    expect(frame).toContain("exactly one sentence of at most twenty words");
+    // The second sentence a real brief added was an offer of help, so it is named, not implied.
+    expect(frame).toContain("no second sentence, no offer of help");
   });
 
   test("keeps the model's reply buttons off the brief", () => {
@@ -47,6 +49,18 @@ describe("readMorningBrief", () => {
 
   test("is still a brief around a blank request", () => {
     expect(readMorningBrief(frameMorningBrief(""))).toBe("");
+  });
+
+  test("still reads a brief posted under the frame before this wording", () => {
+    // Verbatim as it was sent, so a thread holding one keeps drawing it as nobody's bubble.
+    const retired = [
+      "Nobody typed this. The person has just opened the app for the first time today, and the app sent the request below for them, so the day's brief is waiting when they look.",
+      `Call ${MORNING_BRIEF_TOOL} once. The app shows what it returns as a card that already greets them, so do not greet them or repeat what it lists. After it, add at most one short sentence, on the one thing that matters most today or on what could not be checked, and do nothing else this turn.`,
+      "Do not call suggest_replies in this turn: the brief's card already puts Start on each thing that needs them.",
+      "",
+      REQUEST,
+    ].join("\n");
+    expect(readMorningBrief(retired)).toBe(REQUEST);
   });
 
   test("says no to a message a person wrote themselves", () => {

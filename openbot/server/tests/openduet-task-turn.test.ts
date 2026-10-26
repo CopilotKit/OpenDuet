@@ -108,6 +108,91 @@ describe("a task's turn", () => {
     expect(turn.said.at(-1)?.needsInput).toBe(true);
   });
 
+  test("asks the turn for what the Bot says through task_status", async () => {
+    const asked: Parameters<TurnRunner>[0][] = [];
+    const turn = turnWith(async (input) => {
+      asked.push(input);
+      return { replyText: "Here are your notes." };
+    });
+    await turn.start();
+    expect(asked[0]?.reportTools).toEqual(["task_status"]);
+  });
+
+  test("records the line and the status the Bot gave, not whatever paragraph its reply ended on", async () => {
+    // A real reply that ended on a section heading and read "Ready for review · Where the website
+    // lives now." on Tasks.
+    const reply =
+      "I moved the site and pointed the domain at it.\n\nWhere the website lives now.\n\nNetlify, under your account.";
+    const turn = turnWith(async () => ({
+      replyText: reply,
+      reports: [
+        {
+          name: "task_status",
+          args: { status: "done", next: "The site is live on Netlify" },
+        },
+      ],
+    }));
+    await turn.start();
+    expect(turn.said.at(-1)).toEqual({
+      text: "The site is live on Netlify",
+      agentId: "openduet",
+      id: "task-1:reply",
+    });
+  });
+
+  test("a task waiting on the person reads Needs input from the Bot's word, question mark or not", async () => {
+    const turn = turnWith(async () => ({
+      replyText: "I read the order and set up the sheet.",
+      reports: [
+        {
+          name: "task_status",
+          args: {
+            status: "needs_you",
+            next: "Send me the label sizes and I'll fill them in",
+          },
+        },
+      ],
+    }));
+    await turn.start();
+    expect(turn.said.at(-1)).toEqual({
+      text: "Send me the label sizes and I'll fill them in",
+      needsInput: true,
+      agentId: "openduet",
+      id: "task-1:reply",
+    });
+  });
+
+  test("done from the Bot outranks a question in its prose; its last word wins; a bad call is ignored", async () => {
+    const turn = turnWith(async () => ({
+      replyText: "Drafted. Want a warmer version?",
+      reports: [
+        { name: "task_status", args: { status: "needs_you", next: "Early" } },
+        { name: "task_status", args: { status: "unsure", next: "Bad" } },
+        { name: "task_status", args: { status: "done", next: "Draft ready" } },
+      ],
+    }));
+    await turn.start();
+    expect(turn.said.at(-1)).toEqual({
+      text: "Draft ready",
+      agentId: "openduet",
+      id: "task-1:reply",
+    });
+  });
+
+  test("without task_status, the reply's own ending still decides, as it did before the tool", async () => {
+    const turn = turnWith(async () => ({
+      replyText:
+        "I read the order.\n\nIf you send me the details, I'll fill in the labels.",
+    }));
+    await turn.start();
+    expect(turn.said.at(-1)).toEqual({
+      text: "If you send me the details, I'll fill in the labels.",
+      needsInput: true,
+      agentId: "openduet",
+      id: "task-1:reply",
+    });
+  });
+
   test("that stops for Allow once ends waiting on the person, not failed", async () => {
     const turn = turnWith(async () => {
       throw new HeadlessToolSuspension(

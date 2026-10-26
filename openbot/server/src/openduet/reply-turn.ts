@@ -3,6 +3,7 @@ import type { BaseEvent } from "@ag-ui/client";
 import { resolveModel } from "@copilotkit/runtime/v2";
 import { readFirstDay } from "@openbot/shared/first-day";
 import { readMorningBrief } from "@openbot/shared/morning-brief";
+import { TASK_STATUS_TOOL } from "@openbot/shared/task-brief";
 import { nativeRunWaiting } from "@openbot/toolkit/native-approval";
 import { Observable } from "rxjs";
 import type { PlanLanguageModel } from "../agents/plan-model";
@@ -102,6 +103,17 @@ type Turn = {
 };
 
 const turns = new AsyncLocalStorage<Turn>();
+
+/**
+ * Calls that say something about the answer rather than read anything for it: a copy of the chips
+ * call, and a task's `task_status`, which a task's turn makes beside its chips at the end. Neither
+ * puts the chips before an answer, so neither holds them; counted as a read, `task_status` held a
+ * finished answer's chips and told the Bot to write the answer again.
+ */
+const NOT_A_READ: ReadonlySet<string> = new Set([
+  REPLIES_TOOL,
+  TASK_STATUS_TOOL,
+]);
 
 /** How long to wait for a call's own start event before deciding without it. */
 const SEEN_TIMEOUT_MS = 2_000;
@@ -258,11 +270,11 @@ async function decide(
   if (readMorningBrief(asked) !== null) return REPLIES_MORNING_BRIEF;
   const earlier = earlierInTurn(messages);
 
-  // A copy of the chips call beside it is not a read; any other tool is.
+  // A copy of the chips call beside it is not a read, nor is a task's status; any other tool is.
   const beside = [
     ...step.map((call) => call.name),
     ...(seen?.step.calls ?? []),
-  ].some((name) => name !== REPLIES_TOOL);
+  ].some((name) => !NOT_A_READ.has(name));
   // Words in this step before the call, or else the answer written since the last other tool.
   const written = seen?.text.trim() ? seen.text : earlier.text;
   const answered = written.trim() !== "";
@@ -363,7 +375,7 @@ function earlierInTurn(messages: readonly unknown[]): {
       for (const part of partsOf(content)) {
         if (part.type === "text" && typeof part.text === "string")
           text += part.text;
-        if (part.type === "tool-call" && part.toolName !== REPLIES_TOOL)
+        if (part.type === "tool-call" && !NOT_A_READ.has(String(part.toolName)))
           text = "";
         if (
           part.type === "tool-call" &&

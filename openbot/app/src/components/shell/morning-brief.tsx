@@ -8,7 +8,7 @@ import { claimMorningBrief } from "@/lib/channels/morning-brief-claim";
 /**
  * What Chat asks for the first time it opens on a day that is not the first. It goes out wrapped in
  * the morning-brief frame (`shared/morning-brief.ts`), which tells the model nobody typed it, to call
- * `morning_brief`, and to say at most one sentence after it; the transcript draws nothing where it
+ * `morning_brief`, and to say exactly one sentence after it; the transcript draws nothing where it
  * sits, so the Bot's reply and the brief's card are what the person finds.
  *
  * Plain, because the frame says everything about how to answer. The brief itself is the tool's,

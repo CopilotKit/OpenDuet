@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readToolName } from "../src/lib/plugins/tool-name";
+import { readToolName, stepPhrase } from "../src/lib/plugins/tool-name";
 
 /**
  * What the person watching is told a Bot just did.
@@ -226,5 +226,12 @@ describe("this deployment's own tools", () => {
       readToolName("mcp__google-workspace__gmail_search_messages", "plain")
         .label,
     ).toBe("Search your email");
+  });
+});
+
+describe("the pill while a step runs", () => {
+  test("names no step for what is not work the person waits on, a task's status among them", () => {
+    for (const name of ["suggest_replies", "ask_person", "task_status"])
+      expect(stepPhrase(name)).toBeNull();
   });
 });

@@ -21,6 +21,13 @@
 export const MORNING_BRIEF_TOOL = "morning_brief";
 
 /**
+ * The source app a task opened by Start on a brief row names, read from both sides: the server writes
+ * it with the message id (`emailTask` in server/src/openduet/tasks.ts), and the row reads Started from
+ * a task that names it and that id (`StartableBrief` in app/src/lib/copilot/morning-brief-tool.tsx).
+ */
+export const BRIEF_EMAIL_SOURCE = "Gmail";
+
+/**
  * NO BUTTONS FROM THE MODEL, for the reason `NO_BUTTONS` in `first-day.ts` gives. A model offered
  * `suggest_replies` beside a read calls it in its first step, before it has written anything, and
  * the turn collapses to a closing question. Here the read is the brief, and its card already puts
@@ -30,14 +37,41 @@ export const MORNING_BRIEF_TOOL = "morning_brief";
 const NO_BUTTONS =
   "Do not call suggest_replies in this turn: the brief's card already puts Start on each thing that needs them.";
 
+/**
+ * WHAT COMES AFTER THE CARD, AS A SHAPE RATHER THAN A LIMIT. "At most one short sentence" was read
+ * as a ceiling to stay near, and a real brief ended on two: the thing that mattered, then an offer
+ * of help, which is what the tool's own description asked for until it was brought into line. The
+ * first-day frame steers by naming the shape the answer takes; this names it the same way, as one
+ * sentence of a stated length on one stated subject, and says what not to add, because the model's
+ * habit is a closing offer and a sentence that only forbids "more" does not name it.
+ */
+const ONE_SENTENCE =
+  "After it, write exactly one sentence of at most twenty words: the one thing that matters most today or, if nothing does, what could not be checked. Then stop: no second sentence, no offer of help, no question.";
+
 export const MORNING_BRIEF_FRAME = [
   "Nobody typed this. The person has just opened the app for the first time today, and the app sent the request below for them, so the day's brief is waiting when they look.",
-  `Call ${MORNING_BRIEF_TOOL} once. The app shows what it returns as a card that already greets them, so do not greet them or repeat what it lists. After it, add at most one short sentence, on the one thing that matters most today or on what could not be checked, and do nothing else this turn.`,
+  `Call ${MORNING_BRIEF_TOOL} once. The app shows what it returns as a card that already greets them, so do not greet them or repeat what it lists. ${ONE_SENTENCE}`,
   NO_BUTTONS,
 ] as const;
 
-/** The frame and the blank line under it, which is what `readMorningBrief` strips. */
-const PREFIX = [...MORNING_BRIEF_FRAME, "", ""].join("\n");
+/**
+ * Frames briefs were posted with before the one above, still in threads. Read, never sent: an
+ * earlier day's brief has to keep drawing as nothing where the person's bubble would be.
+ *
+ * - The first frame, whose second line allowed "at most one short sentence".
+ */
+const RETIRED_FRAMES = [
+  [
+    MORNING_BRIEF_FRAME[0],
+    `Call ${MORNING_BRIEF_TOOL} once. The app shows what it returns as a card that already greets them, so do not greet them or repeat what it lists. After it, add at most one short sentence, on the one thing that matters most today or on what could not be checked, and do nothing else this turn.`,
+    NO_BUTTONS,
+  ],
+];
+
+/** Each frame and the blank line under it, which is what `readMorningBrief` strips. */
+const PREFIXES = [MORNING_BRIEF_FRAME, ...RETIRED_FRAMES].map((frame) =>
+  [...frame, "", ""].join("\n"),
+);
 
 /**
  * The request, wrapped in the sentences that tell the turn nobody asked for it.
@@ -64,7 +98,8 @@ export function frameMorningBrief(request: string): string {
  * Returned untrimmed, exactly as `frameMorningBrief` was given it.
  */
 export function readMorningBrief(text: string): string | null {
-  return text.startsWith(PREFIX) ? text.slice(PREFIX.length) : null;
+  const prefix = PREFIXES.find((candidate) => text.startsWith(candidate));
+  return prefix === undefined ? null : text.slice(prefix.length);
 }
 
 /** `YYYY-MM-DD`: the shape a local date travels in, from the browser to the claim's column. */

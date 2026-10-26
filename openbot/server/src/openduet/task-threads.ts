@@ -12,11 +12,11 @@ import type { Database } from "../db/client";
 import {
   type ProactiveEngineDeps,
   type ProactiveScope,
-  replyTail,
   replyEnding,
   type TaskThreads,
 } from "../proactive/engine";
 import type { createTaskReplyContext } from "./task-reply-context";
+import { readTaskStatus, TASK_STATUS_TOOL } from "./task-status";
 import { plainFailure, type TaskStore } from "./task-store";
 
 /*
@@ -73,6 +73,7 @@ export function createTaskThreads(deps: {
             suggestionId: input.suggestionId,
             sourceApp: input.sourceApp,
             sourceLink: input.sourceLink,
+            sourceRef: input.sourceRef ?? null,
             fromChannelId: input.fromChannelId ?? null,
             thumbnail: input.thumbnail,
           },
@@ -211,6 +212,7 @@ export function createTaskTurn(deps: {
           ? AbortSignal.any([input.signal, cut.signal])
           : input.signal,
         ...(failing ? { onText: () => cut.abort() } : {}),
+        reportTools: [TASK_STATUS_TOOL],
       });
       if (failing) {
         const timer = setTimeout(() => cut.abort(), DEV_FAIL_AFTER_MS);
@@ -225,18 +227,27 @@ export function createTaskTurn(deps: {
       }
       const result = await turn;
       /*
-       * Recorded as how the reply ends, its next step, rather than how it starts: a task's
-       * conversation is never listed by its preview, and Tasks shows this line after the task's
-       * status (`TaskRecord.next`). The preview keeps only its first 200 characters, which for a
-       * long reply would be its opening, not where it leaves things.
+       * Recorded as where the task stands, its next step, rather than how the reply starts: a
+       * task's conversation is never listed by its preview, and Tasks shows this line after the
+       * task's status (`TaskRecord.next`). The preview keeps only its first 200 characters, which
+       * for a long reply would be its opening, not where it leaves things.
+       *
+       * What the Bot said through `task_status` when it called it (openduet/task-status.ts): its
+       * line, and whether the person's move is next. Otherwise how the reply ends, read from the
+       * prose (`replyEnding`). Reply chips under the reply are a choice put to the person whatever
+       * either says, so they always wait on them.
        */
-      if (result.replyText)
+      if (result.replyText) {
+        const reported = readTaskStatus(result.reports);
+        const ending = replyEnding(result.replyText);
         await record(
-          replyTail(result.replyText) ?? result.replyText,
+          reported?.next ?? ending.tail ?? result.replyText,
           scope.agentId,
           `${input.runId}:reply`,
-          replyEnding(result.replyText).asks || result.replyChips === true,
+          result.replyChips === true ||
+            (reported ? reported.status === "needs_you" : ending.asks),
         );
+      }
     } catch (error) {
       if (!(error instanceof HeadlessToolSuspension)) {
         if (input.final && !(error instanceof ThreadLockBusyError))

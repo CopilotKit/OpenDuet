@@ -89,6 +89,50 @@ describe("settle", () => {
     ).not.toHaveProperty("replyChips");
   });
 
+  test("hands back what the turn said through its report tools, and nothing a tool refused", () => {
+    const call = (id: string, args: string): Message => ({
+      id: `a-${id}`,
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id,
+          type: "function",
+          function: { name: "task_status", arguments: args },
+        },
+      ],
+    });
+    const answer = (id: string, content: string): Message => ({
+      id: `r-${id}`,
+      role: "tool",
+      toolCallId: id,
+      content,
+    });
+    const added = [
+      REPLY,
+      call("bad", '{"status":"maybe"}'),
+      answer("bad", "Refused. task_status takes needs_you or done."),
+      // Encoded once more on the way through the runtime, as tool text can be.
+      call("encoded", '{"status":"later"}'),
+      answer("encoded", JSON.stringify("Refused. Not a status.")),
+      call("good", '{"status":"needs_you","next":"Send me the sizes"}'),
+      answer("good", "Noted."),
+    ];
+    expect(
+      settle(evidence({ added, reportNames: new Set(["task_status"]) })),
+    ).toMatchObject({
+      kind: "completed",
+      reports: [
+        {
+          name: "task_status",
+          args: { status: "needs_you", next: "Send me the sizes" },
+        },
+      ],
+    });
+    // A turn that names no report tools collects nothing, whatever it called.
+    expect(settle(evidence({ added }))).not.toHaveProperty("reports");
+  });
+
   test("falls back to the streamed chunks when nothing was added", () => {
     expect(settle(evidence({ chunks: ["One.", "Two."] }))).toEqual({
       kind: "completed",

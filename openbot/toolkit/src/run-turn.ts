@@ -95,14 +95,24 @@ export type TurnRunner = (input: {
   depth?: number;
   /** The reply so far, each time more of it arrives, for a surface that shows a turn in progress. */
   onText?: (text: string) => void;
+  /**
+   * Tools the Bot reports through rather than acts with, whose arguments the caller wants back on
+   * `reports`: a task's status (`task_status`, server/src/openduet/task-status.ts). Absent, nothing
+   * is collected.
+   */
+  reportTools?: readonly string[];
 }) => Promise<{
   replyText: string;
   components?: DrawnComponent[];
   replyChips?: boolean;
+  reports?: TurnReport[];
 }>;
 
 /** A display component the Bot drew in a turn and the server allowed, with the props it drew. */
 export type DrawnComponent = { name: string; args: Record<string, unknown> };
+
+/** A call to one of a turn's `reportTools` that its tool accepted, with what the Bot said in it. */
+export type TurnReport = { name: string; args: Record<string, unknown> };
 
 /**
  * One row of Intelligence history, as `ThreadMessagesResponse` declares it
@@ -262,6 +272,57 @@ export function drawnComponents(
     }
   }
   return drawn;
+}
+
+/** Whether a tool answered with a refusal, read through the one extra JSON encoding a runtime may add. */
+function refusedResult(result: string): boolean {
+  let text = result.trim();
+  if (text.startsWith('"'))
+    try {
+      const decoded: unknown = JSON.parse(text);
+      if (typeof decoded === "string") text = decoded.trim();
+    } catch {
+      // Not an encoded string: read as it is.
+    }
+  return text.startsWith("Refused");
+}
+
+/**
+ * The calls this turn made to its report tools, in order: each one the tool answered without
+ * refusing, with its arguments.
+ *
+ * WHY READ BACK FROM THE TURN AND NOT HANDED OVER BY THE TOOL. A tool's `execute` is given its
+ * arguments and nothing else, and for a remote Bot it runs on the far side of a request; what both
+ * kinds of Bot leave behind is the call and its answer among the messages the run added, which is
+ * also where the reply chips are read from below. A refused call carried arguments the tool would
+ * not take, so it reports nothing.
+ */
+export function reportedCalls(
+  messages: Message[],
+  names: ReadonlySet<string>,
+): TurnReport[] {
+  if (names.size === 0) return [];
+  const results = new Map<string, string>();
+  for (const message of messages)
+    if (message.role === "tool" && typeof message.content === "string")
+      results.set(message.toolCallId, message.content);
+  const reports: TurnReport[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const call of message.toolCalls ?? []) {
+      if (!names.has(call.function.name)) continue;
+      const result = results.get(call.id);
+      if (result === undefined || refusedResult(result)) continue;
+      try {
+        const args = JSON.parse(call.function.arguments || "{}");
+        if (args && typeof args === "object" && !Array.isArray(args))
+          reports.push({ name: call.function.name, args });
+      } catch {
+        // Arguments that are not JSON were refused by the schema check, so nothing was reported.
+      }
+    }
+  }
+  return reports;
 }
 
 /*
@@ -463,6 +524,7 @@ export type TurnOutcome =
       replyText: string;
       components: DrawnComponent[];
       replyChips?: boolean;
+      reports?: TurnReport[];
     }
   /** The run itself failed: a RUN_ERROR, a broken stream, a cancellation, or a stop that never landed. */
   | { kind: "failed"; error: unknown }
@@ -493,6 +555,8 @@ export type TurnEvidence = {
   chunks: string[];
   pendingInterrupts: AbstractAgent["pendingInterrupts"];
   componentNames: ReadonlySet<string>;
+  /** The turn's `reportTools`; absent collects nothing. */
+  reportNames?: ReadonlySet<string>;
 };
 
 /**
@@ -539,10 +603,15 @@ export function settle(evidence: TurnEvidence): TurnOutcome {
     };
   if (evidence.pendingInterrupts.length > 0) return { kind: "interrupted" };
   if (replyText.length === 0) return { kind: "empty" };
+  const reports = reportedCalls(
+    evidence.added,
+    evidence.reportNames ?? new Set(),
+  );
   return {
     kind: "completed",
     replyText,
     components: drawnComponents(evidence.added, evidence.componentNames),
+    ...(reports.length ? { reports } : {}),
     ...(evidence.added.some(
       (message) =>
         message.role === "tool" &&
@@ -578,6 +647,7 @@ async function conclude(
   replyText: string;
   components?: DrawnComponent[];
   replyChips?: boolean;
+  reports?: TurnReport[];
 }> {
   switch (outcome.kind) {
     case "failed":
@@ -605,6 +675,7 @@ async function conclude(
           ? { components: outcome.components }
           : {}),
         ...(outcome.replyChips ? { replyChips: true } : {}),
+        ...(outcome.reports?.length ? { reports: outcome.reports } : {}),
       };
   }
 }
@@ -674,6 +745,7 @@ export function createTurnRunner(options: {
     runId: suppliedRunId,
     depth,
     onText,
+    reportTools,
   }) => {
     if (signal?.aborted) throw new Error("The headless turn was cancelled.");
     // A paused Bot or a refused capability throws here; a pause mid-turn aborts the returned signal.
@@ -993,6 +1065,7 @@ export function createTurnRunner(options: {
       chunks,
       pendingInterrupts: agent.pendingInterrupts,
       componentNames: components?.names ?? new Set(),
+      reportNames: new Set(reportTools ?? []),
     });
     return conclude(outcome, stopPromise, turnTimeoutMs);
   };

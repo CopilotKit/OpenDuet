@@ -320,11 +320,12 @@ test("how a reply ends: its last question even before a remark, past lists and d
     asks: true,
   });
   expect(replyEnding('Which one: "A" or "B?"').asks).toBe(true);
+  // The work cannot go on until the person pastes the terms, so it waits on them like a question.
   expect(
     replyEnding("Paste the key terms here and I'll go through them with you."),
   ).toEqual({
     tail: "Paste the key terms here and I'll go through them with you.",
-    asks: false,
+    asks: true,
   });
 });
 

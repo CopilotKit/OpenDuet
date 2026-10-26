@@ -32,6 +32,7 @@ describe("the suggest_replies tool", () => {
     expect(held.map((granted) => granted.ref)).toEqual([
       "openduet/morning_brief",
       "openduet/suggest_replies",
+      "openduet/task_status",
       "openduet/add_tasks",
       "openduet/offer_task",
       "openduet/read_page",

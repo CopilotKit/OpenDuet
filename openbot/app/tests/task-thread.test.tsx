@@ -1258,6 +1258,51 @@ test("a report with nothing in it yet says what will appear there", () => {
   );
 });
 
+test("a page the task made is in its report as the card Chat draws, opening the page", () => {
+  const page = {
+    id: "page-policies",
+    kind: "doc",
+    title: "Studio policies",
+    summary: "Make-up and cancellation, in one page.",
+    updatedAt: "2026-10-23T09:45:00.000Z",
+    slideCount: 0,
+    preview: { blocks: [] },
+  };
+  const view = render(
+    <TaskReportView
+      botName="OpenDuet"
+      conversationShown={false}
+      error={null}
+      onToggleConversation={() => {}}
+      pending={false}
+      report={{
+        taskId: "rosa",
+        entries: [],
+        resources: [],
+        // One that is not a page summary is passed over rather than drawn half.
+        pages: [page, { id: "broken" }],
+      }}
+    />,
+  );
+  const made = view.getByRole("region", { name: "Made" });
+  expect(made.textContent).toContain("Studio policies");
+  expect(made.querySelectorAll("li")).toHaveLength(1);
+  expect(made.querySelector('a[href="/make/page-policies"]')).not.toBeNull();
+  view.unmount();
+  // A task that made nothing has no Made section at all.
+  const none = render(
+    <TaskReportView
+      botName="OpenDuet"
+      conversationShown={false}
+      error={null}
+      onToggleConversation={() => {}}
+      pending={false}
+      report={{ taskId: "rosa", entries: [], resources: [] }}
+    />,
+  );
+  expect(none.queryByRole("region", { name: "Made" })).toBeNull();
+});
+
 test("accepted task replies reappear as Queued after closing and reopening", async () => {
   tasks = [
     rosa({

@@ -47,6 +47,7 @@ export function MorningBriefCard({
   canWait,
   today = [],
   notes = [],
+  quiet,
 }: {
   /** "Thursday, October 22". */
   date: string;
@@ -56,19 +57,22 @@ export function MorningBriefCard({
   canWait: BriefItem[];
   today?: BriefItem[];
   notes?: BriefItem[];
+  /**
+   * What the sources that were read and found empty came to, said under the greeting: "Nothing new
+   * came in to your inbox." Null says nothing. Absent, for a caller that cannot say which sources
+   * were read, the card says the old line only when every section is empty and nothing failed.
+   */
+  quiet?: string | null;
 }) {
   const nothing =
     needsYou.length === 0 && canWait.length === 0 && today.length === 0;
-  /*
-   * Where each section starts in the order the card builds in when it arrives live (build-in.tsx):
-   * the date and greeting first, then each section's label and the rows it shows, top to bottom.
-   */
-  const sections = [
-    { items: needsYou, label: "Needs you", tone: "accent" },
-    { items: canWait, label: "Can wait", tone: "muted" },
-    { items: today, label: "Today", tone: "muted" },
-    { items: notes, label: "Couldn't check", tone: "muted" },
-  ] as const;
+  const line =
+    quiet !== undefined
+      ? quiet
+      : nothing && notes.length === 0
+        ? "Nothing new needs you, and nothing is on your calendar today."
+        : null;
+  const sections = sectionsOf({ needsYou, canWait, today, notes });
   let next = 1;
   const starts = sections.map((section) => {
     const start = next;
@@ -81,10 +85,8 @@ export function MorningBriefCard({
         <BuildIn className="px-4 pt-[18px]" order={0}>
           <p className="type-sub font-medium text-duet-ink-2">{date}</p>
           <p className="type-display mt-0.5 font-semibold">{greeting}</p>
-          {nothing && notes.length === 0 ? (
-            <p className="type-sub mt-2 text-duet-ink-2">
-              Nothing new needs you, and nothing is on your calendar today.
-            </p>
+          {line ? (
+            <p className="type-sub mt-2 text-duet-ink-2">{line}</p>
           ) : null}
         </BuildIn>
         {sections.map((section, index) => (
@@ -100,6 +102,40 @@ export function MorningBriefCard({
       </DuetCard>
     </BuildIn>
   );
+}
+
+type Sections = {
+  needsYou: BriefItem[];
+  canWait: BriefItem[];
+  today: BriefItem[];
+  notes: BriefItem[];
+};
+
+/**
+ * The card's sections in the order the card builds in when it arrives live (build-in.tsx): the date
+ * and greeting first, then each section's label and the rows it shows, top to bottom.
+ */
+function sectionsOf({ needsYou, canWait, today, notes }: Sections) {
+  return [
+    { items: needsYou, label: "Needs you", tone: "accent" },
+    { items: canWait, label: "Can wait", tone: "muted" },
+    { items: today, label: "Today", tone: "muted" },
+    { items: notes, label: "Couldn't check", tone: "muted" },
+  ] as const;
+}
+
+/**
+ * How many beats the card takes to build in: the greeting, then every section's pieces. What is drawn
+ * under the card, such as the connect card for a source it could not read, arrives after this.
+ */
+export function briefPieceCount(
+  card: Pick<Sections, "needsYou" | "canWait"> & Partial<Sections>,
+): number {
+  return sectionsOf({
+    today: [],
+    notes: [],
+    ...card,
+  }).reduce((total, section) => total + piecesOf(section.items), 1);
 }
 
 /**

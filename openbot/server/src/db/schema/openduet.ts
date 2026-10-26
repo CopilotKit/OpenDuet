@@ -113,6 +113,17 @@ export const openduetTasks = pgTable(
     ),
     sourceApp: text("source_app"),
     sourceLink: text("source_link"),
+    /**
+     * The one thing in `source_app` it was started for, by that app's own id: the Gmail message
+     * behind a morning brief row's Start. Null for everything else.
+     *
+     * A column rather than read out of `source_link`, because the link is for a person to follow
+     * and is only made for ids Gmail's web addresses take; the fake mailbox's are not, and Start
+     * has to know a task for the email exists whatever the id looks like. That is what lets the
+     * brief's row read Started on every device and after every reload, and lets two presses of
+     * Start, in two tabs or on two devices, open one task (the unique index below).
+     */
+    sourceRef: text("source_ref"),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -129,6 +140,10 @@ export const openduetTasks = pgTable(
     uniqueIndex("openduet_tasks_channel_idx").on(table.channelId),
     // A suggestion is started once, so it opens one task. Postgres keeps any number of nulls apart.
     uniqueIndex("openduet_tasks_suggestion_idx").on(table.suggestionId),
+    // An email is handed off once per person, so Start pressed twice opens one task.
+    uniqueIndex("openduet_tasks_owner_source_idx")
+      .on(table.ownerUserId, table.sourceApp, table.sourceRef)
+      .where(sql`${table.sourceRef} is not null`),
     check(
       "openduet_tasks_origin_check",
       sql`${table.origin} IN ('asked', 'suggestion', 'check_in')`,

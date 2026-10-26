@@ -9,6 +9,7 @@ import { z } from "zod";
 import { currentApprovalContext } from "../src/approvals/types";
 import { buildAgents } from "../src/copilot";
 import { REPLIES_TOOL, replyTools } from "../src/openduet/replies";
+import { TASK_STATUS_TOOL, taskStatusTools } from "../src/openduet/task-status";
 
 /*
  * Reply chips as a real built-in run makes them: the CopilotKit agent, the AI SDK's own step loop,
@@ -276,6 +277,30 @@ describe("a suggest_replies call after the answer", () => {
     expect(answers).toHaveLength(3);
     expect(new Set(answers).size).toBe(1);
     expect(answers[0]).toContain("End your turn now and write nothing more.");
+    expect(steps).toBe(2);
+  });
+
+  test("beside a task's status: still after the answer, so shown, never held for a second answer", async () => {
+    // A task's turn ends on its reply, the chips under it and `task_status`, often in one step.
+    const status: Call = {
+      name: TASK_STATUS_TOOL,
+      args: { status: "needs_you", next: "Pick Tuesday or keep 120" },
+    };
+    const { calls, steps } = await turn(
+      [
+        { calls: [reads()] },
+        { text: ANSWER, calls: [chips(), status] },
+        { text: "Here is my full answer again." },
+      ],
+      undefined,
+      { tools: taskStatusTools({ initiator: { kind: "person" } }) },
+    );
+    const [shown] = replyAnswers(calls);
+    expect(shown).toContain("End your turn now and write nothing more.");
+    expect(shown).not.toContain("Write your full answer now");
+    expect(
+      calls.find((call) => call.name === TASK_STATUS_TOOL)?.answer,
+    ).toStartWith("Noted");
     expect(steps).toBe(2);
   });
 

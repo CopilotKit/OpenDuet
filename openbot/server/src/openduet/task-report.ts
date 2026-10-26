@@ -23,6 +23,9 @@ import type { TaskRecord } from "./task-store";
  *   last message.
  * - The person's replies are their own messages after the ask that opened the task.
  * - Resources are the emails and events the task's tool calls read, from the calls' own results.
+ * - Pages are what the task made with `make_page`, from the calls' own results: the same summary
+ *   the conversation's card is drawn from. Found on a real task: the report said "I made a page…"
+ *   and drew nothing to open, so the page was only reachable by unfolding the whole conversation.
  */
 
 /** A message as Intelligence keeps it. Only the fields the report reads. */
@@ -95,10 +98,20 @@ export type ReportEvent = {
 };
 export type ReportResource = ReportEmail | ReportEvent;
 
+/**
+ * A page the task made, as `make_page` answered: its id and title, and the rest of the summary the
+ * card draws (kind, theme, preview…), passed on as the tool wrote it for the app to read.
+ */
+export type ReportPage = { id: string; title: string } & Record<
+  string,
+  unknown
+>;
+
 export type TaskReport = {
   taskId: string;
   entries: ReportEntry[];
   resources: ReportResource[];
+  pages: ReportPage[];
 };
 
 /** What the report is built from, read beforehand so the building can be tested without a database. */
@@ -332,6 +345,42 @@ export function resourcesOf(
   });
 }
 
+/** The tool that makes a page (openduet/pages.ts), by either spelling. */
+const isPageTool = (name: string) =>
+  (name.split(/__|\//).at(-1) ?? name) === "make_page";
+
+/**
+ * The pages the task's calls made, each once, in the order first made, as each was last saved: a
+ * page made and then revised in the same task is one card, with its latest title. A refused call
+ * made nothing, and its answer is not JSON, so it is passed over.
+ */
+export function pagesOf(messages: readonly ReportMessage[]): ReportPage[] {
+  const results = new Map<string, unknown>();
+  for (const message of messages)
+    if (message.role === "tool" && message.toolCallId)
+      results.set(message.toolCallId, message.content);
+  const order: string[] = [];
+  const latest = new Map<string, ReportPage>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const call of message.toolCalls ?? []) {
+      if (!isPageTool(call.name) || !results.has(call.id)) continue;
+      const result = asRecord(readToolJson(results.get(call.id)));
+      const id = asString(result?.id);
+      const title = asString(result?.title);
+      if (!result || !id || !title) continue;
+      // What the tool told the model about a continued page is for the model, not the card.
+      const { note: _forTheModel, ...page } = result;
+      if (!latest.has(id)) order.push(id);
+      latest.set(id, { ...page, id, title });
+    }
+  }
+  return order.flatMap((id) => {
+    const page = latest.get(id);
+    return page ? [page] : [];
+  });
+}
+
 type Turn = {
   id: string;
   /** What opened it: the task's ask or replay, the person's reply, or an approval carried on from. */
@@ -509,6 +558,7 @@ export function buildTaskReport(input: ReportInput): TaskReport {
     taskId: input.task.id,
     entries,
     resources: resourcesOf(input.messages),
+    pages: pagesOf(input.messages),
   };
 }
 
@@ -545,7 +595,8 @@ export function createTaskReportReader(deps: {
   history: ReportHistory;
 }): TaskReportReader {
   return async (ownerUserId, task) => {
-    if (!task.threadId) return { taskId: task.id, entries: [], resources: [] };
+    if (!task.threadId)
+      return { taskId: task.id, entries: [], resources: [], pages: [] };
     const threadId = task.threadId;
     const [messages, rows, turns, channel, answers] = await Promise.all([
       deps.history({ threadId, ownerUserId }),

@@ -11,6 +11,7 @@ import { offerTools } from "./offers";
 import { createPageStore, type PageStore, pageTools } from "./pages";
 import { replyTools } from "./replies";
 import { currentRunChannelId } from "./run-channel";
+import { taskStatusTools } from "./task-status";
 import type { TaskIntake } from "./task-store";
 import {
   type TaskSink,
@@ -200,6 +201,7 @@ export function createOpenDuetTools(deps: {
         ),
     }),
     ...replyTools({ initiator }),
+    ...taskStatusTools({ initiator }),
     ...taskTools({
       actorId,
       botId,

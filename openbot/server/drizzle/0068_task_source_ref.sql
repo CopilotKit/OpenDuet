@@ -1,0 +1,2 @@
+ALTER TABLE "openduet_tasks" ADD COLUMN "source_ref" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "openduet_tasks_owner_source_idx" ON "openduet_tasks" USING btree ("owner_user_id","source_app","source_ref") WHERE "openduet_tasks"."source_ref" is not null;

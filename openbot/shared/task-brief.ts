@@ -14,6 +14,13 @@
 /** The tool that hands work to a task of its own. Named here so the frame and the tool agree. */
 export const START_TASK_TOOL = "start_task";
 
+/**
+ * The tool a task's turn says where it stands with (server/src/openduet/task-status.ts). Named here
+ * because the transcript reads it too: the call is for Tasks, not for the person reading the
+ * conversation, so the transcript draws no row for it.
+ */
+export const TASK_STATUS_TOOL = "task_status";
+
 export const TASK_FRAME = [
   "This conversation is a task the person handed you. It runs on its own, apart from their Chat, and they read it when they open the task.",
   `Do the work here yourself, all of it, and end with what you did and anything still waiting on them. Never call ${START_TASK_TOOL} in this conversation: this is the task.`,

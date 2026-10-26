@@ -19,6 +19,31 @@ export const startTaskMutationOptions = (queryClient: QueryClient) =>
     onSuccess: () => queryClient.invalidateQueries({ queryKey: taskKeys.all }),
   });
 
+/** Start on a morning brief row: which Bot, which email, and what the row showed of it. */
+export type EmailHandOff = {
+  botId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  why?: string;
+};
+
+/**
+ * Hands one email from the brief to a task of its own. The server writes the task's ask from the
+ * message id alone (server/src/openduet/tasks.ts, `emailTask`), and answers with the task an
+ * earlier press already opened rather than opening a second.
+ */
+export const startEmailTaskMutationOptions = (queryClient: QueryClient) =>
+  mutationOptions({
+    mutationFn: (email: EmailHandOff) =>
+      client<TaskRecord>("/api/openduet/tasks/email", "task", {
+        method: "POST",
+        body: email,
+        fallback: "Couldn't start on this email. Try again.",
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: taskKeys.all }),
+  });
+
 /** Save for Up next: the ask waits on Up next as a card the person asked for, with Start and Hide. */
 export const saveForUpNextMutationOptions = (queryClient: QueryClient) =>
   mutationOptions({

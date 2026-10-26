@@ -1,4 +1,6 @@
 import { describeApproval } from "@/lib/approval-view";
+import { ConversationPageCard } from "@/lib/copilot/page-card-tool";
+import { type PageSummary, pageSummarySchema } from "@/lib/pages/queries";
 import type {
   ReportDecision,
   ReportEntry,
@@ -11,9 +13,22 @@ import { DuetIcon, type DuetIconName } from "./icons";
 
 /*
  * A task's page, read as a report: when and why it was noticed (in the sheet's header), then
- * Decisions and updates as a timeline, then Resources, the emails and events it read, then Show
- * conversation, which unfolds the whole thread under it. The reply box stays at the foot.
+ * Decisions and updates as a timeline, then Made, the pages it made, each as the card Chat draws,
+ * then Resources, the emails and events it read, then Show conversation, which unfolds the whole
+ * thread under it. The reply box stays at the foot.
+ *
+ * MADE IS ITS OWN SECTION. A real report said "I made a page…" with nothing to open: the card was
+ * only under Show conversation, in the thread the report exists to save the person reading. What
+ * the task made is the thing they came to see, so it sits right under what it did.
  */
+
+/** The report's pages that read as a page's summary; anything else is passed over, not guessed at. */
+export function reportPages(report: TaskReport | undefined): PageSummary[] {
+  return (report?.pages ?? []).flatMap((page) => {
+    const parsed = pageSummarySchema.safeParse(page);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -131,6 +146,7 @@ export function TaskReportView({
           <Timeline entries={report.entries} now={now} />
         )}
       </section>
+      <MadePages report={pending || error ? undefined : report} />
       <section aria-labelledby="report-resources">
         <ReportHeading id="report-resources">Resources</ReportHeading>
         {pending || error || !report ? null : report.resources.length === 0 ? (
@@ -168,6 +184,24 @@ export function TaskReportView({
         />
       </button>
     </div>
+  );
+}
+
+/** The pages it made, each opening the page; nothing at all for a task that made none. */
+function MadePages({ report }: { report: TaskReport | undefined }) {
+  const pages = reportPages(report);
+  if (pages.length === 0) return null;
+  return (
+    <section aria-labelledby="report-made">
+      <ReportHeading id="report-made">Made</ReportHeading>
+      <ul className="flex flex-col gap-2.5">
+        {pages.map((page) => (
+          <li key={page.id}>
+            <ConversationPageCard page={page} />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
