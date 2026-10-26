@@ -4,6 +4,7 @@
  * `@/`, and the path to `shared/` is written down once.
  */
 export {
+  BRIEF_EMAIL_SOURCE,
   frameMorningBrief,
   localDateOf,
   MORNING_BRIEF_TOOL,

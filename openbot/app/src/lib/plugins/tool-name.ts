@@ -219,10 +219,11 @@ export const STEP_PHRASES = {
 
 /**
  * Tools the pill does not name, because they are not work the person is waiting on: the reply chips
- * under an answer, and an interface drawn for the person to read or fill in (`askForm`,
- * `showBarChart`). While one runs the pill says whatever the turn was doing before it.
+ * under an answer, a task saying where it stands for Tasks (`task_status`), and an interface drawn
+ * for the person to read or fill in (`askForm`, `showBarChart`). While one runs the pill says
+ * whatever the turn was doing before it.
  */
-const UNNAMED_TOOLS = new Set(["suggest_replies", "ask_person"]);
+const UNNAMED_TOOLS = new Set(["suggest_replies", "ask_person", "task_status"]);
 
 /**
  * The pill's phrase for a running tool call, or null for one it does not name.

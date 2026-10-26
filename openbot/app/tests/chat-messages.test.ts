@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { frameChannelHello } from "@openbot/shared/channel-hello";
+import { frameMorningBrief } from "@openbot/shared/morning-brief";
 import type { Message, ToolCall } from "@ag-ui/core";
 import {
+  briefSaysOneSentence,
+  firstSentenceOf,
   repliesLast,
   toVisibleChatItems,
 } from "../src/components/channels/chat-messages";
@@ -1101,6 +1104,34 @@ describe("repliesLast", () => {
     ).toEqual(["u1", "a2", "call-1", "u2", "a3"]);
   });
 
+  test("draws no row for a task's status: it is for Tasks, not for the person reading", () => {
+    const status: ToolCall = {
+      id: "call-status",
+      type: "function",
+      function: {
+        name: "task_status",
+        arguments: '{"status":"done","next":"Draft is ready"}',
+      },
+    };
+    expect(
+      ids([
+        { id: "u1", role: "user", content: "Draft the reply to Priya." },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "Drafted it; it's in your outbox.",
+          toolCalls: [status],
+        },
+        {
+          id: "t1",
+          role: "tool",
+          toolCallId: "call-status",
+          content: "Noted.",
+        },
+      ]),
+    ).toEqual(["u1", "a1"]);
+  });
+
   test("leaves a turn whose chips already come last as it was", () => {
     expect(
       ids([
@@ -1423,4 +1454,83 @@ test("a page revised twice in one turn draws only its latest card", () => {
       .filter((i) => i.kind === "tool")
       .map((i) => i.id),
   ).toEqual(["save-2"]);
+});
+
+describe("the Bot's words after a brief it posted itself", () => {
+  const BRIEF_ASK = frameMorningBrief("Give me my morning brief.");
+  const brief: ToolCall = {
+    id: "call-brief",
+    type: "function",
+    function: { name: "morning_brief", arguments: "{}" },
+  };
+  const texts = (messages: Message[]) =>
+    briefSaysOneSentence(toVisibleChatItems(messages)).flatMap((item) =>
+      item.kind === "text" ? [[item.id, item.text]] : [],
+    );
+
+  test("are held to the one sentence the frame asks for, cut where a sentence ends", () => {
+    expect(
+      texts([
+        { id: "u1", role: "user", content: BRIEF_ASK },
+        {
+          id: "a0",
+          role: "assistant",
+          content: "Good morning! Pulling it now.",
+          toolCalls: [brief],
+        },
+        { id: "t1", role: "tool", toolCallId: "call-brief", content: "{}" },
+        {
+          id: "a1",
+          role: "assistant",
+          // The two sentences a real brief ended on: the thing that mattered, then an offer.
+          content:
+            "Ana needs the Friday date confirmed by noon. Want me to draft a reply to her?",
+        },
+        { id: "a2", role: "assistant", content: "Anything else?" },
+      ]),
+    ).toEqual([
+      ["u1", BRIEF_ASK],
+      ["a1", "Ana needs the Friday date confirmed by noon."],
+    ]);
+  });
+
+  test("leave a brief the person asked for in their own words, and the turns after, whole", () => {
+    const said =
+      "Ana needs the Friday date confirmed. Want me to draft a reply to her?";
+    expect(
+      texts([
+        { id: "u1", role: "user", content: "Give me my morning brief." },
+        { id: "a1", role: "assistant", content: said, toolCalls: [brief] },
+        { id: "u2", role: "user", content: BRIEF_ASK },
+        { id: "a2", role: "assistant", content: "One. Two." },
+        { id: "u3", role: "user", content: "Thanks. Draft it?" },
+        { id: "a3", role: "assistant", content: "Sure. Here it is." },
+      ]),
+    ).toEqual([
+      ["u1", "Give me my morning brief."],
+      ["a1", said],
+      ["u2", BRIEF_ASK],
+      ["a2", "One."],
+      ["u3", "Thanks. Draft it?"],
+      ["a3", "Sure. Here it is."],
+    ]);
+  });
+
+  test("a sentence still streaming, or one with a title or an abbreviation in it, is never cut", () => {
+    expect(firstSentenceOf("Your 3 PM with Dr. Patel moved to 4")).toBe(
+      "Your 3 PM with Dr. Patel moved to 4",
+    );
+    expect(
+      firstSentenceOf("Your 3 PM with Dr. Patel moved. Gmail is fine."),
+    ).toBe("Your 3 PM with Dr. Patel moved.");
+    expect(
+      firstSentenceOf("J. Smith wrote, e.g. about v2.5 pricing. Next."),
+    ).toBe("J. Smith wrote, e.g. about v2.5 pricing.");
+    expect(firstSentenceOf("Is Friday still on? Ana asked.")).toBe(
+      "Is Friday still on?",
+    );
+    expect(firstSentenceOf("**Kiln is down** today\n\nMore later.")).toBe(
+      "**Kiln is down** today",
+    );
+  });
 });

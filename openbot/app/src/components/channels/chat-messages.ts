@@ -2,7 +2,11 @@ import type { ActivityMessage, Message, ToolCall } from "@ag-ui/core";
 import { classifyAttachment } from "@/lib/channels/attachments";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import { readChannelHello } from "@/lib/channels/channel-hello";
-import { readTaskFrame } from "@openbot/shared/task-brief";
+import {
+  MORNING_BRIEF_TOOL,
+  readMorningBrief,
+} from "@/lib/channels/morning-brief";
+import { readTaskFrame, TASK_STATUS_TOOL } from "@openbot/shared/task-brief";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -617,6 +621,12 @@ const SUGGEST_REPLIES = "suggest_replies";
 const MAKE_PAGE = "make_page";
 const OFFER_TASK = "offer_task";
 const START_TASK = "start_task";
+/**
+ * A task's turn saying where it stands, for Tasks (server/src/openduet/task-status.ts). It is for the
+ * list, not for the person reading the conversation, and draws nothing; kept as an item it would
+ * still take a row of the transcript's gap, so it is left out here.
+ */
+const TASK_STATUS = TASK_STATUS_TOOL;
 
 /**
  * How the runtime answers for a tool when it rejected the call's arguments before the tool ran, such
@@ -727,6 +737,8 @@ export function repliesLast(
     sinceRefusal = null;
   };
   for (const item of items) {
+    if (item.kind === "tool" && item.toolCall.function.name === TASK_STATUS)
+      continue;
     if (
       item.kind === "tool" &&
       (item.toolCall.function.name === OFFER_TASK ||
@@ -775,4 +787,136 @@ export function repliesLast(
   }
   close();
   return ordered;
+}
+
+/** Words a stop can follow without ending the sentence: titles, initials' companions, Latin. */
+const ABBREVIATIONS = new Set([
+  "mr",
+  "mrs",
+  "ms",
+  "dr",
+  "prof",
+  "sr",
+  "jr",
+  "st",
+  "mt",
+  "inc",
+  "ltd",
+  "co",
+  "corp",
+  "vs",
+  "etc",
+  "e.g",
+  "i.e",
+  "a.m",
+  "p.m",
+  "no",
+  "approx",
+  "dept",
+  "est",
+]);
+
+/**
+ * The text up to the end of its first whole sentence, or all of it when no sentence has ended yet.
+ *
+ * A sentence ends at a stop, a question mark or an exclamation mark, past any closing quote or
+ * bracket, followed by space and then something that can start a sentence; or at a blank line. Not
+ * at "Dr." in "Dr. Patel", "J." in "J. Smith", "e.g." or "3.5". Never inside a sentence: while one is
+ * still streaming in, all of it is shown.
+ */
+export function firstSentenceOf(text: string): string {
+  const body = text.trimStart();
+  const paragraph = /\n\s*\n/.exec(body);
+  const limit = paragraph ? paragraph.index : body.length;
+  const stop = /[.!?]["”’')\]]*(?=\s+["“‘(*_]*[\p{Lu}\p{N}])/gu;
+  for (const match of body.matchAll(stop)) {
+    const end = (match.index ?? 0) + match[0].length;
+    if (end > limit) break;
+    if (match[0].startsWith(".")) {
+      const word = /(\S+)\.["”’')\]]*$/u
+        .exec(body.slice(0, end))?.[1]
+        ?.replace(/^[("“‘*_]+/, "");
+      if (
+        word &&
+        (/^\p{Lu}$/u.test(word) || ABBREVIATIONS.has(word.toLowerCase()))
+      )
+        continue;
+    }
+    return body.slice(0, end);
+  }
+  return body.slice(0, limit).trimEnd();
+}
+
+/**
+ * The Bot's words after a morning brief it posted by itself, held to the one sentence the frame
+ * asks for (shared/morning-brief.ts).
+ *
+ * FOUND ON A REAL BRIEF. The frame allowed "at most one short sentence" and the Bot wrote two, the
+ * second an offer of help, under a card that already puts Start on what needs the person. The
+ * frame's wording is tightened, and this keeps the screen to what it asks whatever the model writes:
+ * the first whole sentence after the card, never a sentence cut in half. Words written before the
+ * card are a greeting the frame forbids, under a card that already greets, so they are left out.
+ *
+ * Only on a turn the app asked for in the person's place: a brief the person asked for in their
+ * own words gets the Bot's whole answer. The thread keeps every word; this is what is drawn.
+ */
+export function briefSaysOneSentence(
+  items: readonly VisibleChatItem[],
+): VisibleChatItem[] {
+  const out: VisibleChatItem[] = [];
+  let inBrief = false;
+  let carded = false;
+  let said = false;
+  // The turn's text items, so a turn whose card is followed by words can drop what came before it.
+  for (const [index, item] of items.entries()) {
+    if (
+      item.kind === "attachments" ||
+      (item.kind === "text" && item.role === "user")
+    ) {
+      inBrief = item.kind === "text" && readMorningBrief(item.text) !== null;
+      carded = false;
+      said = false;
+      out.push(item);
+      continue;
+    }
+    if (!inBrief) {
+      out.push(item);
+      continue;
+    }
+    if (
+      item.kind === "tool" &&
+      item.toolCall.function.name === MORNING_BRIEF_TOOL
+    ) {
+      carded = true;
+      out.push(item);
+      continue;
+    }
+    if (item.kind !== "text" || !item.text.trim()) {
+      out.push(item);
+      continue;
+    }
+    const cardLater = !carded && laterInTurn(items, index, MORNING_BRIEF_TOOL);
+    if (said || cardLater) continue;
+    said = true;
+    out.push({ ...item, text: firstSentenceOf(item.text) });
+  }
+  return out;
+}
+
+/** Whether a call to `name` comes later in the turn `index` is in, before the person next speaks. */
+function laterInTurn(
+  items: readonly VisibleChatItem[],
+  index: number,
+  name: string,
+): boolean {
+  for (const item of items.slice(index + 1)) {
+    if (
+      item.kind === "attachments" ||
+      (item.kind === "text" && item.role === "user")
+    )
+      return false;
+    if (item.kind === "tool" && item.toolCall.function.name === name)
+      return true;
+  }
+  return false;
 }

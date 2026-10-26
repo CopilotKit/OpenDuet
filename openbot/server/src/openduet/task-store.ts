@@ -32,6 +32,7 @@ import {
 import { ProactiveRefusedError } from "../proactive/types";
 import { DEFAULT_MAX_ATTEMPTS } from "../work/queue";
 import type { TaskReportReader } from "./task-report";
+import { EMAIL_SOURCE, emailTask } from "./tasks";
 
 /*
  * The person's tasks: work OpenDuet does in the background, each in a conversation of its own, so
@@ -90,6 +91,8 @@ export type TaskRecord = {
   suggestionId: string | null;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** The one thing in `sourceApp` it was started for, such as a brief row's Gmail message id. */
+  sourceRef: string | null;
   /** The OpenDuet channel it was asked for in, or null for Everything. */
   fromChannelId: string | null;
   status: TaskStatus;
@@ -101,9 +104,10 @@ export type TaskRecord = {
   /** When it failed, alongside `failure`. */
   failedAt: string | null;
   /**
-   * The run's own next step, one line, for Tasks: the last sentence or question of the Bot's newest
-   * words in its conversation, or the person's own words in quotes while their reply is being
-   * worked on. Null before anything has been said there.
+   * The run's own next step, one line, for Tasks: what the Bot said through `task_status` at the
+   * end of its newest turn (openduet/task-status.ts), or, where it did not, the last question or
+   * waiting sentence of its newest words, or their last sentence; or the person's own words in
+   * quotes while their reply is being worked on. Null before anything has been said there.
    */
   next: string | null;
   /** Null once durable work accepted after the person's last completion supersedes it. */
@@ -123,6 +127,8 @@ export type NewTask = {
   suggestionId: string | null;
   sourceApp: string | null;
   sourceLink: string | null;
+  /** Absent or null: not started for one thing in its source app. See `TaskRecord.sourceRef`. */
+  sourceRef?: string | null;
   /** Absent or null: asked for in Everything. */
   fromChannelId?: string | null;
 };
@@ -219,8 +225,9 @@ type TaskState = {
 const QUOTE_MAX = 120;
 
 /**
- * A task's next step, from the last line said in its conversation: the Bot's words end on what comes
- * next (`replyTail`); the person's are what the Bot is now working on, quoted.
+ * A task's next step, from the last line said in its conversation: the Bot's is what its turn
+ * recorded, its `task_status` line or how its words end (`replyTail`, which leaves a one-line status
+ * as it is); the person's are what the Bot is now working on, quoted.
  */
 export function nextStepOf(
   said: string | null | undefined,
@@ -656,6 +663,7 @@ export function createTaskStore(
       suggestionId: row.suggestionId,
       sourceApp: row.sourceApp,
       sourceLink: row.sourceLink,
+      sourceRef: row.sourceRef,
       fromChannelId: row.fromChannelId,
       status,
       // Kept while it is marked done, too: Reopen brings the failure back, and so may a reply.
@@ -768,6 +776,25 @@ export function createTaskStore(
       return withState(owner, rows);
     },
     get: one,
+    /** The person's task started for this one thing in this app, or null when there is none. */
+    async bySource(
+      owner: string,
+      sourceApp: string,
+      sourceRef: string,
+    ): Promise<TaskRecord | null> {
+      const [row] = await database
+        .select({ id: openduetTasks.id })
+        .from(openduetTasks)
+        .where(
+          and(
+            eq(openduetTasks.ownerUserId, owner),
+            eq(openduetTasks.sourceApp, sourceApp),
+            eq(openduetTasks.sourceRef, sourceRef),
+          ),
+        )
+        .limit(1);
+      return row ? one(owner, row.id) : null;
+    },
     /** Whether this conversation of the person's is a task's own. */
     async isTaskConversation(owner: string, channelId: string) {
       const [row] = await database
@@ -895,7 +922,16 @@ export type TaskIntake = {
   start(
     ownerUserId: string,
     botId: string,
-    task: { title: string; instruction: string },
+    task: {
+      title: string;
+      instruction: string;
+      why?: string;
+      /** Where it came from, as `start_task` says it: "Gmail". */
+      source?: string;
+      link?: string;
+      /** The one thing in `source` it is for. See `TaskRecord.sourceRef`. */
+      ref?: string;
+    },
   ): Promise<{ id: string }>;
   save(
     ownerUserId: string,
@@ -933,6 +969,20 @@ const askSchema = z
     botId: z.string().trim().min(1).max(200),
     instruction: z.string().trim().min(1).max(MAX_ASK),
     title: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+/**
+ * Start on a brief row. The id is checked to be an id, because it goes into the ask the turn reads
+ * (`emailTask`); the sender and subject are only ever a title, so they are only capped.
+ */
+const emailSchema = z
+  .object({
+    botId: z.string().trim().min(1).max(200),
+    messageId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+    from: z.string().max(400).default(""),
+    subject: z.string().max(400).default(""),
+    why: z.string().trim().min(1).max(600).optional(),
   })
   .strict();
 
@@ -1013,6 +1063,36 @@ export function createTaskRoutes(
         instruction: ask.instruction,
       });
       return context.json({ task: await store.get(owner, opened.id) }, 201);
+    });
+    /*
+     * Start on a morning brief row: the email handed to a task of its own (`emailTask` in tasks.ts
+     * says what the ask is and why). One task per email: a second press, in another tab or on
+     * another device, answers with the task the first one opened, 200 rather than 201.
+     */
+    routes.post("/email", async (context) => {
+      const owner = context.var.actor.id;
+      const parsed = emailSchema.safeParse(
+        await context.req.json().catch(() => null),
+      );
+      if (!parsed.success)
+        throw new TaskRefusedError("Couldn't tell which email to start on.");
+      const { botId, ...email } = parsed.data;
+      const existing = () =>
+        store.bySource(owner, EMAIL_SOURCE, email.messageId);
+      const already = await existing();
+      if (already) return context.json({ task: already });
+      try {
+        const opened = await intake.start(owner, botId, emailTask(email));
+        return context.json({ task: await store.get(owner, opened.id) }, 201);
+      } catch (error) {
+        /*
+         * Two presses at once: the other one's insert won the unique index and this one rolled back
+         * with its conversation. Whatever failed, a task for this email existing now is the answer.
+         */
+        const raced = await existing().catch(() => null);
+        if (raced) return context.json({ task: raced });
+        throw error;
+      }
     });
     /*
      * Save for Up next: a card with Start and Hide, the path `add_tasks` takes, marked as one the

@@ -8,6 +8,7 @@ import {
   type ReportApproval,
   type ReportInput,
   type ReportMessage,
+  pagesOf,
   readToolJson,
   resourcesOf,
   type TaskReportReader,
@@ -497,6 +498,99 @@ describe("a task's resources", () => {
   });
 });
 
+describe("the pages a task made", () => {
+  /** `make_page`'s answer as the transcript carries it: the summary, encoded once more. */
+  const saved = (page: Record<string, unknown>) =>
+    JSON.stringify(JSON.stringify(page));
+  const summary = {
+    id: "page-1",
+    kind: "doc",
+    title: "Studio policies",
+    summary: "Make-up and cancellation, in one page.",
+    updatedAt: "2026-10-23T09:45:00.000Z",
+    slideCount: 0,
+    preview: { blocks: [] },
+  };
+
+  test("each page once, as last saved, in the order first made, and nothing from a refusal", () => {
+    const pages = pagesOf([
+      brief,
+      {
+        id: "a1",
+        role: "assistant",
+        toolCalls: [call("make-1", "make_page"), call("make-bad", "make_page")],
+      },
+      { id: "t1", role: "tool", toolCallId: "make-1", content: saved(summary) },
+      {
+        id: "t2",
+        role: "tool",
+        toolCallId: "make-bad",
+        content: "Refused. make_page could not save this.",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        toolCalls: [
+          call("make-2", "mcp__openduet__make_page"),
+          call("make-3", "make_page"),
+        ],
+      },
+      {
+        id: "t3",
+        role: "tool",
+        toolCallId: "make-2",
+        content: saved({ ...summary, id: "page-2", title: "Price list" }),
+      },
+      {
+        id: "t4",
+        role: "tool",
+        toolCallId: "make-3",
+        content: saved({
+          ...summary,
+          title: "Studio policies, revised",
+          note: "Continued from your last save.",
+        }),
+      },
+      {
+        id: "a3",
+        role: "assistant",
+        content: "I made a page with the policies and one with the prices.",
+      },
+    ]);
+    expect(pages.map((page) => [page.id, page.title])).toEqual([
+      ["page-1", "Studio policies, revised"],
+      ["page-2", "Price list"],
+    ]);
+    // What the card draws from comes through; what the tool told the model does not.
+    expect(pages[0]).toMatchObject({ kind: "doc", summary: summary.summary });
+    expect(pages[0]).not.toHaveProperty("note");
+  });
+
+  test("are in the report beside its decisions and resources", () => {
+    const report = buildTaskReport(
+      input({
+        messages: [
+          ...sendConversation,
+          {
+            id: "a5",
+            role: "assistant",
+            toolCalls: [call("make-1", "make_page")],
+          },
+          {
+            id: "t5",
+            role: "tool",
+            toolCallId: "make-1",
+            content: saved(summary),
+          },
+          { id: "a6", role: "assistant", content: "I made a page for it." },
+        ],
+      }),
+    );
+    expect(report.pages.map((page) => page.id)).toEqual(["page-1"]);
+    expect(buildTaskReport(input()).pages).toEqual([]);
+  });
+});
+
 describe("an update's first sentence", () => {
   test("stops at a sentence, not at an abbreviation or a number, without markdown, cut at a word", () => {
     expect(firstSentence("## Done\n\nThe deck is ready.")).toBe("Done");
@@ -528,6 +622,7 @@ describe("GET /api/openduet/tasks/:id/report", () => {
     suggestionId: null,
     sourceApp: null,
     sourceLink: null,
+    sourceRef: null,
     fromChannelId: null,
     status: "ready_for_review",
     failure: null,

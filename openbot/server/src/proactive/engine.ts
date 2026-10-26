@@ -149,6 +149,8 @@ export type TaskThreads = {
     suggestionId: string | null;
     sourceApp: string | null;
     sourceLink: string | null;
+    /** The one thing in `sourceApp` it was started for, such as a brief row's Gmail message id. */
+    sourceRef?: string | null;
     /** The OpenDuet channel it was asked for in; absent or null for Everything. */
     fromChannelId?: string | null;
     thumbnail?: string | null;
@@ -176,6 +178,11 @@ export type AskedTask = {
   why?: string | undefined;
   source?: string | undefined;
   link?: string | undefined;
+  /**
+   * The one thing in `source` it is for, by that app's id: a morning brief row's Gmail message.
+   * Never set by `start_task`, whose model names a source in words; Start on a brief row sets it.
+   */
+  ref?: string | undefined;
   /** The OpenDuet channel `start_task` ran in, or null or absent for Everything. */
   fromChannelId?: string | null | undefined;
 };
@@ -1099,6 +1106,7 @@ export function createProactiveEngine(deps: ProactiveEngineDeps) {
         suggestionId: null,
         sourceApp: input.source ?? null,
         sourceLink: input.link ?? null,
+        sourceRef: input.ref ?? null,
         fromChannelId: input.fromChannelId ?? null,
         thumbnail: input.thumbnail,
       });
@@ -1306,9 +1314,56 @@ const DRAFT =
 /** What can trail a question and still leave it one: closing quotes, brackets, emoji, spaces. */
 const TRAILING = /(?:[\s"”'’)\]}»\p{Extended_Pictographic}]|\uFE0F|\u200D)+$/u;
 
+/**
+ * Headings over what the Bot prepared. Found on Tasks as "Ready for review · Where the website lives
+ * now." and "· Make-up and cancellation policy": a reply's closing section heading, read as its
+ * next step because the list under it was set aside and the heading was not.
+ *
+ * A Markdown heading is never something said to the person. A line that is all bold is a heading
+ * when a list or a draft follows it; at the very end of a reply, with nothing under it, it is the Bot
+ * putting its last sentence in bold, and that stays.
+ */
+const MARKDOWN_HEADING = /^\s*#{1,6}\s+\S/;
+const BOLD_LINE = /^\s*(?:\*\*[^*\n]+\*\*|__[^_\n]+__)\s*:?\s*$/;
+
 /** Whether a sentence asks something, once what trails its question mark is set aside. */
 const asksIn = (sentence: string) =>
   sentence.replace(TRAILING, "").endsWith("?");
+
+/** "I'll", "I will", "I can": the Bot saying what it does once the person has done their part. */
+const THEN_I = String.raw`\bI(?:['’]ll| will| can| could|['’]d)\b`;
+/** What the person is asked to do for the Bot to go on. */
+const THEIR_PART = String.raw`(?:send|share|give|forward|paste|upload|attach|tell|confirm|let me know|provide|reply|pick|choose|decide|approve|say)`;
+
+/**
+ * Sentences that wait on the person without a question mark. Each needs the Bot to say what it does
+ * after, or to name the need outright, so advice ("if you reply to Rosa, mention Friday") and an
+ * optional offer ("let me know if you want changes") are not read as waiting.
+ *
+ * Found on Tasks: "If you send me the details, I'll fill in the labels." read Ready for review.
+ */
+const WAITS_ON_THEM = [
+  // "If you send me the details, I'll fill in the labels." "Once you confirm, I'll send it."
+  new RegExp(
+    String.raw`\b(?:if|once|when|as soon as)\s+you\b[^.?!]*\b${THEIR_PART}\b[^.?!]*${THEN_I}`,
+    "i",
+  ),
+  // "Send me the sizes and I'll fill them in." "Paste the terms here and I'll go through them."
+  new RegExp(
+    String.raw`^(?:just\s+)?${THEIR_PART}\b[^.?!]*\b(?:and|so)\s+${THEN_I}`,
+    "i",
+  ),
+  // "I need your sign-off." "Waiting on you for the PO number." "This needs your OK."
+  /\bI(?:['’]ll| will)? need (?:you|your)\b/i,
+  /\bwaiting (?:on|for) (?:you|your)\b/i,
+  /\bneeds? your (?:input|answer|ok|okay|go-ahead|approval|decision|sign-off|confirmation|reply)\b/i,
+  // "Let me know which one you prefer." Not "let me know if you want changes": that is an offer.
+  /\b(?:let me know|tell me) (?:which|whether|what|when|where|who|how)\b/i,
+];
+
+/** Whether a sentence waits on the person: they have to do something before the work goes on. */
+const waitsIn = (sentence: string) =>
+  WAITS_ON_THEM.some((pattern) => pattern.test(sentence));
 
 const plain = (line: string) =>
   line
@@ -1320,11 +1375,18 @@ const plain = (line: string) =>
  * How a reply ends, for Tasks: the sentence to show as the next step, and whether it asks the
  * person something.
  *
- * A Bot ends a turn on what comes next, in the last paragraph it writes to the person. Lists and
- * drafts that close a reply are what it prepared, not what it says, so they are set aside. Within
- * that last paragraph its last question is the next step, even with a remark after it; without
- * one, its last sentence is. A short closing sentence keeps the one before it, so "Do you want me
- * to?" never stands alone. Null when there is nothing to say.
+ * A Bot ends a turn on what comes next, in the last paragraph it writes to the person. Lists,
+ * drafts and the headings over them that close a reply are what it prepared, not what it says, so
+ * they are set aside. Within that last paragraph its last question is the next step, even with a
+ * remark after it; without one, the last sentence that waits on the person (`WAITS_ON_THEM`); and
+ * without that, its last sentence. Either a question or a sentence that waits on them `asks`. A
+ * short closing sentence keeps the one before it, so "Do you want me to?" never stands alone. Null
+ * when there is nothing to say.
+ *
+ * THE FALLBACK, NOT THE SIGNAL. A task's turn says where it stands through `task_status`
+ * (openduet/task-status.ts), and that wins wherever the Bot called it. This reads prose, and stays
+ * for turns that did not: a run carried on after an approval, a Bot that skipped the call, and every
+ * task recorded before the tool existed.
  */
 export function replyEnding(reply: string | null | undefined): {
   tail: string | null;
@@ -1334,10 +1396,27 @@ export function replyEnding(reply: string | null | undefined): {
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.trim())
     .filter((paragraph) => /[\p{L}\p{N}]/u.test(paragraph));
-  const spoken = paragraphs.filter((paragraph) => {
-    const lines = paragraph.split("\n").filter((line) => line.trim());
+  const linesOf = (paragraph: string) =>
+    paragraph.split("\n").filter((line) => line.trim());
+  /** A list, perhaps under its heading in the same paragraph, or a draft: what the Bot prepared. */
+  const prepared = (paragraph: string | undefined) => {
+    if (paragraph === undefined) return false;
+    const lines = linesOf(paragraph);
+    const heading = (line: string) =>
+      MARKDOWN_HEADING.test(line) || BOLD_LINE.test(line);
+    return (
+      (lines.every((line) => LIST_ITEM.test(line) || heading(line)) &&
+        lines.some((line) => LIST_ITEM.test(line))) ||
+      DRAFT.test(paragraph)
+    );
+  };
+  const spoken = paragraphs.filter((paragraph, index) => {
+    const lines = linesOf(paragraph);
+    if (prepared(paragraph)) return false;
+    if (lines.every((line) => MARKDOWN_HEADING.test(line))) return false;
     return !(
-      lines.every((line) => LIST_ITEM.test(line)) || DRAFT.test(paragraph)
+      lines.every((line) => BOLD_LINE.test(line)) &&
+      prepared(paragraphs[index + 1])
     );
   });
   const kept = spoken.length ? spoken : paragraphs.slice(-1);
@@ -1350,7 +1429,9 @@ export function replyEnding(reply: string | null | undefined): {
       .filter((sentence) => /[\p{L}\p{N}]/u.test(sentence));
   const sentences = sentencesOf(kept.at(-1));
   const question = sentences.findLastIndex(asksIn);
-  const at = question >= 0 ? question : sentences.length - 1;
+  const waits = sentences.findLastIndex(waitsIn);
+  const at =
+    question >= 0 ? question : waits >= 0 ? waits : sentences.length - 1;
   const chosen = sentences[at];
   if (!chosen) return { tail: null, asks: false };
   // A paragraph of its own still leans on the paragraph before it.
@@ -1364,7 +1445,7 @@ export function replyEnding(reply: string | null | undefined): {
             .slice(0, REPLY_TAIL_MAX - 1)
             .join("")}…`
         : sentence,
-    asks: spoken.length > 0 && question >= 0,
+    asks: spoken.length > 0 && (question >= 0 || waits >= 0),
   };
 }
 

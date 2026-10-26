@@ -78,6 +78,7 @@ import { queryClient } from "@/query-client";
 import { AppAccessCard } from "./app-access-card";
 import {
   attachmentModality,
+  briefSaysOneSentence,
   repliesLast,
   type SentAttachment,
   toVisibleChatItems,
@@ -1960,7 +1961,11 @@ export function ChatTranscript({
    */
   const thread = folded
     ? []
-    : groupToolSteps(repliesLast(toVisibleChatItems(messages)), isDrawn);
+    : groupToolSteps(
+        // The Bot's one sentence after a brief it posted itself; see `briefSaysOneSentence`.
+        briefSaysOneSentence(repliesLast(toVisibleChatItems(messages))),
+        isDrawn,
+      );
   /*
    * The first day's answer and its two replies. The replies only once the run has ended, while
    * nothing the person said or parked comes after it, and only on a first day that read mail: they
