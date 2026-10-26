@@ -1833,6 +1833,14 @@ function turnOf(item: TranscriptItem): string {
  * end to hold: the picture is the top of what the person sent, and anchoring on the caption
  * underneath it would scroll the picture off the top of the pane.
  */
+/** Whether the thread's newest turn is a morning brief: its last request is the brief's, not the person's. */
+export function newestTurnIsBrief(thread: readonly TranscriptItem[]): boolean {
+  const last = thread.findLast(
+    (item) => item.kind === "text" && item.role === "user",
+  );
+  return last?.kind === "text" && readMorningBrief(last.text) !== null;
+}
+
 function anchorRowIds(
   items: readonly TranscriptItem[],
   thread: readonly TranscriptItem[] = items,
@@ -2026,6 +2034,16 @@ export function ChatTranscript({
     )?.id ?? null;
   useSmoothSendScroll(viewportRef, newestUserMessageId);
   /*
+   * NO FOLLOWING THE BOTTOM WHILE A MORNING BRIEF ARRIVES. The scroller holds the brief's row at the
+   * top (`anchorRowIds`), but it lets go of a held turn the moment that turn outgrows the pane: its
+   * spare space below drops to nothing and it starts following the bottom, which suits an answer
+   * streaming in a line at a time. A brief's card lands at its full height in one step, so it let
+   * go at once and showed the card's bottom while the greeting built in above the fold (found
+   * recording the demo on 035acb0). Off for that turn only; once the turn ends it is back on, and
+   * the scroller stays where it is until the person moves.
+   */
+  const briefArriving = busy && newestTurnIsBrief(thread);
+  /*
    * Where the turn being written starts: rows after it wait for the Bot's words while `busy`
    * (reply-hold.tsx), so a card made before its line enters under the finished line, not above it.
    */
@@ -2062,7 +2080,10 @@ export function ChatTranscript({
   }, [hasItems, delays]);
 
   return (
-    <MessageScrollerProvider autoScroll={!folded} scrollPreviousItemPeek={48}>
+    <MessageScrollerProvider
+      autoScroll={!folded && !briefArriving}
+      scrollPreviousItemPeek={48}
+    >
       <MessageScroller>
         <MessageScrollerViewport ref={viewportRef}>
           <MessageScrollerContent
