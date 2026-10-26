@@ -160,37 +160,77 @@ const WHITE: Rgb = [255, 255, 255];
 const INK: Rgb = [20, 16, 33];
 
 /**
- * Ocean, as oklch [L, C, h]: four tones for the sphere's drifting colour and its pale base. `violet`
- * is also the deep tone the grilles are made of, and `mag` the light their slots glow with.
+ * The orb's colours, as oklch [L, C, h]: four tones for the sphere's drifting colour and its pale
+ * base. `violet` is also the deep tone the grilles are made of, and `mag` the light their slots glow
+ * with; `shade` tints the sphere's rim, as an rgb triple.
+ *
+ * Ocean is OpenDuet's own. The other three are the orb's other colours, the same four the launch
+ * film's title draws (launch-film/film/src/duet/micorb.ts), and are what every other Bot wears, so a
+ * roster reads as one family of Duets rather than OpenDuet beside unrelated discs.
  */
-const OCEAN = {
-  pink: [0.75, 0.13, 232],
-  blue: [0.74, 0.13, 205],
-  violet: [0.53, 0.2, 262],
-  mag: [0.86, 0.08, 220],
-  bg: [0.93, 0.025, 235],
+const PALETTES = {
+  ocean: {
+    pink: [0.75, 0.13, 232],
+    blue: [0.74, 0.13, 205],
+    violet: [0.53, 0.2, 262],
+    mag: [0.86, 0.08, 220],
+    bg: [0.93, 0.025, 235],
+    shade: "14,30,80",
+  },
+  ember: {
+    pink: [0.66, 0.19, 15],
+    blue: [0.8, 0.15, 72],
+    violet: [0.6, 0.19, 38],
+    mag: [0.88, 0.12, 90],
+    bg: [0.95, 0.03, 70],
+    shade: "92,34,20",
+  },
+  lime: {
+    pink: [0.88, 0.19, 125],
+    blue: [0.74, 0.17, 145],
+    violet: [0.52, 0.14, 150],
+    mag: [0.93, 0.15, 108],
+    bg: [0.96, 0.04, 122],
+    shade: "22,62,36",
+  },
+  graphite: {
+    pink: [0.84, 0.015, 260],
+    blue: [0.64, 0.2, 256],
+    violet: [0.4, 0.03, 265],
+    mag: [0.82, 0.1, 250],
+    bg: [0.86, 0.01, 260],
+    shade: "15,18,30",
+  },
 } as const;
-/** The tint of the sphere's shaded rim, as an rgb triple. */
-const SHADE = "14,30,80";
 
-type Palette = Record<keyof typeof OCEAN, Rgb>;
+/** One of the orb's colours. Ocean is OpenDuet's own. */
+export type OrbColour = keyof typeof PALETTES;
+type Tone = "pink" | "blue" | "violet" | "mag" | "bg";
+
+type Palette = Record<Tone, Rgb> & { shade: string };
 const paletteMemo = new Map<string, Palette>();
 
-/** Ocean with its saturation and hue nudged, as the orb livens when it listens and cools when it works. */
-export function palette(sat: number, hue: number): Palette {
+/** A colour with its saturation and hue nudged, as the orb livens when it listens and cools when it works. */
+export function palette(
+  sat: number,
+  hue: number,
+  colour: OrbColour = "ocean",
+): Palette {
   const ks = Math.round(clamp(sat, 0.5, 1.3) * 50) / 50;
   const kh = Math.round(hue * 2) / 2;
-  const key = `${ks}|${kh}`;
+  const key = `${colour}|${ks}|${kh}`;
   let p = paletteMemo.get(key);
   if (!p) {
-    const c = (k: keyof typeof OCEAN, sk = ks, hk = kh) =>
-      oklch(OCEAN[k][0], OCEAN[k][1] * sk, OCEAN[k][2] + hk);
+    const set = PALETTES[colour];
+    const c = (k: Tone, sk = ks, hk = kh) =>
+      oklch(set[k][0], set[k][1] * sk, set[k][2] + hk);
     p = {
       pink: c("pink"),
       blue: c("blue"),
       violet: c("violet"),
       mag: c("mag"),
       bg: c("bg", 1, kh * 0.5),
+      shade: set.shade,
     };
     paletteMemo.set(key, p);
   }
@@ -353,7 +393,7 @@ function mesh(
 }
 
 /** Lit top edge, shaded bottom: what makes the disc read as a sphere. Call inside the clip. */
-function rim(ctx: Ctx, R: number, dark: boolean) {
+function rim(ctx: Ctx, R: number, dark: boolean, shade: string) {
   const g = ctx.createRadialGradient(
     0,
     -R * 0.3,
@@ -362,9 +402,9 @@ function rim(ctx: Ctx, R: number, dark: boolean) {
     -R * 0.12,
     R * 1.16,
   );
-  g.addColorStop(0, `rgba(${SHADE},0)`);
-  g.addColorStop(0.72, `rgba(${SHADE},0)`);
-  g.addColorStop(1, `rgba(${SHADE},${dark ? 0.3 : 0.24})`);
+  g.addColorStop(0, `rgba(${shade},0)`);
+  g.addColorStop(0.72, `rgba(${shade},0)`);
+  g.addColorStop(1, `rgba(${shade},${dark ? 0.3 : 0.24})`);
   ctx.fillStyle = g;
   ctx.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
   const lw = Math.max(1, R * 0.05);
@@ -527,7 +567,7 @@ function sphere(
   mesh(ctx, R, S, pal, Math.sin(yaw) * 0.2, -Math.sin(pitch) * 0.16);
   light(ctx, -0.42 * R, -0.5 * R, 0.5 * R, 0.26);
   light(ctx, 0, R * 0.05, R * 0.9, 0.28 * S.done);
-  rim(ctx, R, dark);
+  rim(ctx, R, dark, pal.shade);
   const small = size < 40;
   const widen = 1 + 0.16 * perk;
   const open = clamp(1 - 0.94 * S.blink) * (1 - 0.3 * S.think) * widen;
@@ -669,12 +709,13 @@ export function drawMicOrb(
   ctx: Ctx,
   size: number,
   S: OrbPose,
-  { dark }: { dark: boolean },
+  { dark, colour = "ocean" }: { dark: boolean; colour?: OrbColour },
 ) {
   const finish = finishPhase(S.finishAge);
   const pal = palette(
     0.9 + 0.14 * clamp(S.listen) + 0.08 * S.think + 0.12 * clamp(S.done),
     -6 * S.think,
+    colour,
   );
   const r = (size / 2) * 0.72;
   const sc = scaleOf(S, finish);

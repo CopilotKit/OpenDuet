@@ -1,22 +1,36 @@
-import Avatar from "boring-avatars";
 import { MicOrb } from "@/components/duet/mic-orb";
+import type { OrbColour } from "@/components/duet/mic-orb-draw";
 import { isTenantBot } from "@/lib/agents/primary-bot";
-import { cn } from "@/lib/utils";
+
+/** The orb's colours another Bot can wear: every one but Ocean, which is the tenant's own Bot's. */
+const OTHER_COLOURS: readonly OrbColour[] = ["ember", "lime", "graphite"];
+
+/** The same colour for the same Bot, every time and everywhere it is drawn. */
+export function orbColourFor(id: string): OrbColour {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return OTHER_COLOURS[hash % OTHER_COLOURS.length] ?? "ember";
+}
 
 /**
- * A Bot's face. The tenant's own Bot is the mic orb, still, its glow left unclipped; every other Bot
- * is the abstract disc drawn from its seed.
+ * A Bot's face: the mic orb, still, its glow left unclipped. The tenant's own Bot wears Ocean; every
+ * other Bot wears one of the orb's other colours, picked from its id, so a roster reads as one
+ * family of Duets. It used to be an abstract gradient disc, which on the onboarding roster sat beside
+ * OpenDuet's orb as something from another product.
  */
 export function AbstractAvatar({
   id,
   name,
-  seed,
   size = 40,
 }: {
-  /** The Bot's id, which decides whether this is the tenant's own Bot. */
+  /** The Bot's id: whether this is the tenant's own Bot, and which colour any other Bot wears. */
   id: string;
   name: string;
-  seed: string;
+  /**
+   * Kept for callers. The colour follows `id` instead, so a Bot is the same colour here as in the
+   * conversation list (`ChannelAvatar`), which only has its id.
+   */
+  seed?: string;
   size?: number;
 }) {
   const own = isTenantBot(id);
@@ -24,19 +38,12 @@ export function AbstractAvatar({
     <span
       role="img"
       aria-label={name}
-      className={cn(
-        "inline-flex shrink-0",
-        !own && "overflow-hidden rounded-full",
-      )}
+      className="inline-flex shrink-0"
       style={{ height: size, width: size }}
     >
       {/* The drawing carries its own role; hidden so the coworker is announced once, by name. */}
       <span aria-hidden="true" className="contents">
-        {own ? (
-          <MicOrb size={size} still />
-        ) : (
-          <Avatar name={seed} size={size} />
-        )}
+        <MicOrb colour={own ? "ocean" : orbColourFor(id)} size={size} still />
       </span>
     </span>
   );
