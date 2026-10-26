@@ -180,6 +180,73 @@ export function stepFor(
   return running ?? THINKING;
 }
 
+/** What the pill says once the Bot has been thinking with nothing to show for a while. */
+export const STILL_WORKING = "Still working on it";
+/** And once that while has become long. */
+export const TAKING_LONGER = "Taking longer than usual";
+/** How long a quiet "Thinking it through" lasts before the pill says it is still working. */
+export const STILL_WORKING_MS = 20_000;
+/** How long before it says this is taking longer than usual. */
+export const TAKING_LONGER_MS = 60_000;
+
+/**
+ * The pill's phrase for a wait that has gone quiet: "Thinking it through", then "Still working on
+ * it" after {@link STILL_WORKING_MS} with nothing new, then "Taking longer than usual" after
+ * {@link TAKING_LONGER_MS}. Every other phrase is passed through: a named step already says what is
+ * happening, and a turn that is writing is not quiet.
+ */
+export function patientStep(
+  step: string | null,
+  quietForMs: number,
+): string | null {
+  if (step !== THINKING) return step;
+  if (quietForMs >= TAKING_LONGER_MS) return TAKING_LONGER;
+  if (quietForMs >= STILL_WORKING_MS) return STILL_WORKING;
+  return step;
+}
+
+/**
+ * {@link patientStep}, timed from the last sign of progress.
+ *
+ * WHY THE APP SAYS SOMETHING EARLY, AND THE SERVER DOES NOT. A model that hangs held the pill on
+ * "Thinking it through" for more than two minutes, until the request itself timed out and the turn
+ * failed. The server's stall guard (`server/src/channels/stall-guard.ts`) watches remote Bots only,
+ * and ending a slow turn sooner is not obviously right: a long tool call or a slow model may still
+ * answer. So nothing is ended here. The pill only stops implying that all is well: after 20 quiet
+ * seconds it says the Bot is still working, after a minute that this is taking longer than usual.
+ *
+ * `progress` is anything that changes when the turn moves (the transcript's length, the last
+ * message's size), so writing, a new step or a tool result starts the quiet clock again.
+ */
+export function usePatientStep(
+  step: string | null,
+  progress: string,
+): string | null {
+  const moved = `${step ?? ""}\u0000${progress}`;
+  const [quiet, setQuiet] = useState({ since: Date.now(), now: Date.now() });
+  const [movedAt, setMovedAt] = useState(moved);
+  if (movedAt !== moved) {
+    // Reset during render, so the frame that moved never shows a stale "Still working on it".
+    setMovedAt(moved);
+    const now = Date.now();
+    setQuiet({ since: now, now });
+  }
+  const thinking = step === THINKING;
+  useEffect(() => {
+    if (!thinking) return;
+    const timers = [STILL_WORKING_MS, TAKING_LONGER_MS].map((ms) =>
+      setTimeout(
+        () => setQuiet((current) => ({ ...current, now: Date.now() })),
+        Math.max(0, quiet.since + ms - Date.now()),
+      ),
+    );
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, [thinking, quiet.since]);
+  return patientStep(step, quiet.now - quiet.since);
+}
+
 /**
  * Whether the server says Chat's conversation has a turn running, and that conversation's thread,
  * from the busy flag it puts on the conversation list. That flag covers runs this screen never

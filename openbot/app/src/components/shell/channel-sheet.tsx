@@ -1,6 +1,13 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useMutation } from "@tanstack/react-query";
-import { type ComponentProps, useId, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import {
   CHANNEL_COLOUR_LABELS,
   CHANNEL_GLYPHS,
@@ -98,6 +105,10 @@ export function ChannelSheet({
   const [name, setName] = useState(channel?.name ?? "");
   const [purpose, setPurpose] = useState(channel?.purpose ?? "");
   const [picking, setPicking] = useState(false);
+  /** Escape or a tap outside met typed fields, so the sheet asks before dropping them. */
+  const [confirming, setConfirming] = useState(false);
+  const changeIcon = useRef<HTMLButtonElement>(null);
+  const keepEditing = useRef<HTMLButtonElement>(null);
   const nameField = useRef<HTMLInputElement>(null);
   const purposeField = useRef<HTMLTextAreaElement>(null);
   const create = useMutation(createDuetChannelMutationOptions(queryClient));
@@ -110,6 +121,42 @@ export function ChannelSheet({
   const nameId = useId();
   const purposeId = useId();
   const title = editing ? "Edit channel" : "New channel";
+  /*
+   * Whether there is anything typed or chosen that leaving would lose: for a new channel, a name
+   * or a purpose; for one being edited, anything that differs from what it is now.
+   */
+  const dirty = channel
+    ? name.trim() !== channel.name ||
+      purpose.trim() !== (channel.purpose ?? "") ||
+      icon !== channel.icon ||
+      colour !== channel.colour
+    : name.trim() !== "" || purpose.trim() !== "";
+
+  /**
+   * ESCAPE, AND A TAP OUTSIDE, CLOSE THE INNERMOST THING AND NEVER DROP WHAT WAS TYPED.
+   *
+   * The sheet used to close on either, whatever was open inside it: Escape pressed to fold the icon
+   * picker threw away the name and the purpose with it, without a word. Now the first press folds
+   * the picker (and puts focus back on Change icon), and a sheet with something typed in it asks
+   * "Discard this channel?" rather than closing; Escape again answers Keep editing. Only a sheet
+   * with nothing to lose closes straight away. Cancel is unchanged: it is the person saying discard.
+   */
+  const dismiss = () => {
+    if (confirming) {
+      setConfirming(false);
+      return;
+    }
+    if (picking) {
+      setPicking(false);
+      changeIcon.current?.focus();
+      return;
+    }
+    if (dirty) {
+      setConfirming(true);
+      return;
+    }
+    onClose();
+  };
 
   const save = () => {
     if (!ready || busy) return;
@@ -131,8 +178,16 @@ export function ChannelSheet({
 
   return (
     <DialogPrimitive.Root
-      onOpenChange={(next) => {
-        if (!next && !busy) onClose();
+      onOpenChange={(next, details) => {
+        if (next || busy) return;
+        if (
+          details.reason === "escape-key" ||
+          details.reason === "outside-press"
+        ) {
+          dismiss();
+          return;
+        }
+        onClose();
       }}
       open
     >
@@ -190,6 +245,17 @@ export function ChannelSheet({
                 {error.message}
               </p>
             ) : null}
+            {confirming ? (
+              <ConfirmDiscard
+                editing={editing}
+                keepRef={keepEditing}
+                onDiscard={onClose}
+                onKeep={() => {
+                  setConfirming(false);
+                  nameField.current?.focus();
+                }}
+              />
+            ) : null}
 
             <div className="mt-10 flex flex-col items-center gap-3">
               <span data-testid="channel-preview">
@@ -205,6 +271,7 @@ export function ChannelSheet({
                 aria-expanded={picking}
                 className="h-[34px] min-w-0 text-[15px]"
                 onClick={() => setPicking((open) => !open)}
+                ref={changeIcon}
               >
                 Change icon
               </GlassPill>
@@ -342,5 +409,50 @@ export function ChannelSheet({
         </DialogPrimitive.Popup>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+  );
+}
+
+/**
+ * The one question before typed fields are dropped: under the top bar, where the sheet's own error
+ * line goes, with Keep editing first and focused, so a second Escape or a stray Return keeps them.
+ */
+function ConfirmDiscard({
+  editing,
+  keepRef,
+  onKeep,
+  onDiscard,
+}: {
+  editing: boolean;
+  keepRef: RefObject<HTMLButtonElement | null>;
+  onKeep: () => void;
+  onDiscard: () => void;
+}) {
+  useEffect(() => {
+    keepRef.current?.focus();
+  }, [keepRef]);
+  return (
+    <div
+      aria-live="polite"
+      className="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 rounded-[22px] bg-duet-tile px-4 py-3"
+    >
+      <p className="type-label font-medium text-duet-ink">
+        {editing ? "Discard your changes?" : "Discard this channel?"}
+      </p>
+      <div className="flex gap-2">
+        <GlassPill
+          className="h-[36px] min-w-0 text-[15px]"
+          onClick={onKeep}
+          ref={keepRef}
+        >
+          Keep editing
+        </GlassPill>
+        <GlassPill
+          className="h-[36px] min-w-0 text-[15px] text-duet-red"
+          onClick={onDiscard}
+        >
+          Discard
+        </GlassPill>
+      </div>
+    </div>
   );
 }

@@ -705,6 +705,48 @@ test.each([
   15_000,
 );
 
+test("a model that fails mid-turn is said plainly, and still said after a reload until something newer arrives", async () => {
+  const PLAIN =
+    "Couldn't reach the AI model. Check your internet connection, then try again.";
+  const channel = freshChannel();
+  reset();
+  quiet();
+  onRun = (input) =>
+    sse([
+      { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+      {
+        type: "RUN_ERROR",
+        message:
+          "Failed after 3 attempts. Last error: Cannot connect to API: Unable to connect. Is the computer able to access the url?",
+      },
+    ]);
+  const view = render(tree(channel));
+  await waitFor(() => expect(connectCalls).toBe(1));
+  await type(view, "What's on today?");
+  expect(await view.findByText(PLAIN)).toBeTruthy();
+  expect(view.container.textContent).not.toContain("Is the computer able");
+  const sent = runRequests[0]!.messages.at(-1)!;
+
+  // A reload: the thread's stored transcript still ends on the message that failed.
+  cleanup();
+  reset({ stored: [sent] });
+  const reloaded = render(tree(channel));
+  expect(await reloaded.findByText(PLAIN)).toBeTruthy();
+
+  // Once a reply has arrived since, from anywhere, the sentence is old news and is not shown.
+  cleanup();
+  reset({
+    stored: [
+      sent,
+      { id: "reply-later", role: "assistant", content: "Here's your day." },
+    ],
+  });
+  const later = render(tree(channel));
+  expect(await later.findByText("Here's your day.")).toBeTruthy();
+  expect(later.queryByText(PLAIN)).toBeNull();
+  window.sessionStorage.clear();
+}, 15_000);
+
 test.each(["network failure", "thread conflict"])(
   "a failed frontend-tool continuation (%s) restores the draft after the intermediate run finishes",
   async (failure) => {

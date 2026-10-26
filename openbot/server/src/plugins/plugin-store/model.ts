@@ -1029,6 +1029,93 @@ export async function exchangeRefreshTokenOverHttp(input: {
 export const TOKEN_TIMEOUT_MS = 10_000;
 
 /**
+ * What a vendor said when asked to withdraw a refresh token (RFC 7009), as one word.
+ *
+ * - `revoked`: a 2xx. The vendor ended the grant.
+ * - `already_gone`: a 400 whose `error` is `invalid_token` or `invalid_grant`. The vendor no longer
+ *   honours this token, so there was nothing left to withdraw, and the grant is as dead as a revoke
+ *   would have left it. Google answers this way for a token that was already revoked or expired.
+ * - `refused`: any other answer the vendor gave on purpose, a 4xx or a redirect. Nothing was
+ *   withdrawn, and asking the same way again would get the same answer.
+ * - `unreachable`: no answer, a 5xx or a 429. Asking again may well work.
+ */
+export type VendorRevocation =
+  | "revoked"
+  | "already_gone"
+  | "refused"
+  | "unreachable";
+
+/**
+ * Ask the vendor to withdraw a refresh token, the way RFC 7009 says: a form POST to the catalogue's
+ * own `revokeUrl` naming the token, with the client authenticating as it does at the token endpoint.
+ *
+ * THE SAME CLIENT AUTHENTICATION AS {@link exchangeRefreshTokenOverHttp}, in the body. RFC 7009 has a
+ * confidential client authenticate to revoke, and a vendor such as Notion refuses a revocation that
+ * names no client. Google documents only `token` and accepts the request either way. No client is
+ * a client that cannot be named, not a reason to skip the ask: the token alone is still sent.
+ *
+ * NEVER THROWS, AND NEVER CARRIES THE VENDOR'S WORDS OUT. Every outcome is one of four words, so
+ * nothing the vendor wrote, and nothing of the token, can reach an audit row or a screen from here.
+ *
+ * Exported for its own tests. The store reaches it as the default `revokeAtVendor`.
+ */
+export async function revokeRefreshTokenOverHttp(input: {
+  revokeUrl: string;
+  client: OAuthClient | null;
+  refreshToken: string;
+}): Promise<VendorRevocation> {
+  const params = new URLSearchParams({
+    token: input.refreshToken,
+    token_type_hint: "refresh_token",
+  });
+  if (input.client) {
+    params.set("client_id", input.client.clientId);
+    if (input.client.clientSecret) {
+      params.set("client_secret", input.client.clientSecret);
+    }
+  }
+  let response: Response;
+  try {
+    response = await fetch(input.revokeUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: params,
+      // A redirect is a refusal, not a detour: this request carries somebody's refresh token and
+      // the deployment's client secret, and following a 3xx would hand both to the address it named.
+      redirect: "manual",
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+    });
+  } catch {
+    return "unreachable";
+  }
+  if (response.ok) return "revoked";
+  if (response.status >= 500 || response.status === 429) return "unreachable";
+  if (response.status === 400) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: unknown;
+    } | null;
+    if (body?.error === "invalid_token" || body?.error === INVALID_GRANT) {
+      return "already_gone";
+    }
+  }
+  return "refused";
+}
+
+/**
+ * The vendor could not be asked to withdraw somebody's access, so nothing here was changed.
+ *
+ * Its own class so the route can say that in the person's words, and so a disconnect that cannot
+ * reach the vendor is told apart from one the vendor refused: the first is worth pressing again,
+ * the second is not.
+ */
+export class VendorRevocationUnreachableError extends Error {
+  constructor(readonly vendor: string) {
+    super(`Couldn't reach ${vendor} to end access.`);
+    this.name = "VendorRevocationUnreachableError";
+  }
+}
+
+/**
  * The deployment's OAuth client for one vendor, as it is held in the vault.
  *
  * Both halves live in the encrypted value rather than the id sitting in `metadata` and the secret
@@ -1192,6 +1279,15 @@ export type PluginStoreOptions = {
     client: OAuthClient;
     refreshToken: string;
   }) => Promise<AccessToken>;
+  /**
+   * Withdrawing a refresh token at the vendor (RFC 7009), for a person disconnecting their own
+   * account. Defaults to a real HTTP request; see {@link revokeRefreshTokenOverHttp}.
+   */
+  revokeAtVendor?: (input: {
+    revokeUrl: string;
+    client: OAuthClient | null;
+    refreshToken: string;
+  }) => Promise<VendorRevocation>;
   /** RFC 7591 self-registration, for entries whose clientRegistration is dynamic. */
   registerClient?: (input: {
     registrationUrl: string;

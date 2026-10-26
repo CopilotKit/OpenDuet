@@ -1,3 +1,4 @@
+import { appConfig } from "@/lib/generated/application-config";
 import type { IdentityProviders, LinkedAccount } from "@/lib/identity/queries";
 import { brokeredProvenance } from "@/lib/plugins/provider-vocabulary";
 import type { CatalogueItem, PluginServer } from "@/lib/plugins/queries";
@@ -51,9 +52,8 @@ export function isBrokeredGithub(
 }
 
 export const IDENTITY_SUMMARIES = {
-  github:
-    "Lets OpenBot recognise you on GitHub, so a repository's events can start your Bots' work.",
-  slack: "Lets OpenBot recognise you when you message it from Slack.",
+  github: `Lets ${appConfig.brand.productName} recognise you on GitHub, so a repository's events can start your Bots' work.`,
+  slack: `Lets ${appConfig.brand.productName} recognise you when you message it from Slack.`,
 } as const;
 
 const IDENTITY_TITLES = { github: "GitHub", slack: "Slack" } as const;

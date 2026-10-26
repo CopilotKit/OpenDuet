@@ -58,6 +58,8 @@ const originalFetch = globalThis.fetch;
 let saved: number;
 let saves: number[];
 let completed: boolean;
+/** Whether the server says this is somebody trying OpenDuet alone, which adds three steps. */
+let localEvaluation: boolean;
 
 beforeEach(() => {
   // Another file's screens may have cached the signed-in person in the app's one query client.
@@ -65,6 +67,7 @@ beforeEach(() => {
   saved = 0;
   saves = [];
   completed = false;
+  localEvaluation = false;
   (globalThis as { Notification?: unknown }).Notification = {
     permission: "default",
     requestPermission: async () => "default",
@@ -106,7 +109,7 @@ beforeEach(() => {
         });
       }
       if (path === "/api/capabilities")
-        return Response.json({ localEvaluation: false });
+        return Response.json({ localEvaluation });
       if (path.startsWith("/api/agents"))
         return Response.json({ agents: [BOT] });
       if (path === "/api/plugins/for/openduet/apps/google-workspace")
@@ -185,6 +188,23 @@ test("arriving without a step writes the first one into the address, in place", 
   await waitFor(() => expect(searchOf(view).step).toBe("welcome"));
   // In place: nothing behind it to go Back to inside onboarding.
   expect(view.history.length).toBe(1);
+});
+
+test("the local install's step says where its data really lives", async () => {
+  localEvaluation = true;
+  const view = open("/onboarding?step=local");
+
+  await heading(view, "Where your data lives");
+  const page = document.body.textContent ?? "";
+  // Conversations live in Intelligence, which is CopilotKit's cloud unless self-hosted, and every
+  // message reaches the model: neither is "on this computer".
+  expect(page).toContain(
+    "Conversations and memory are kept in CopilotKit Intelligence",
+  );
+  expect(page).toContain("What you ask goes to your AI model.");
+  expect(page).toContain("Set DO_NOT_TRACK=1 to turn them off.");
+  expect(page).not.toContain("stored on this computer");
+  expect(page).not.toContain("Only what you send to your model leaves it");
 });
 
 test("Next adds a step to the address and to history, and saves it", async () => {

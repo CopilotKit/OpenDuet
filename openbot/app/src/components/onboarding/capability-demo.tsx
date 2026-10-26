@@ -8,12 +8,7 @@ import { TaskRow } from "@/components/duet/task-card";
 import type { ApprovalRequest } from "@/lib/approvals";
 import { IllustrationFrame } from "./illustration-frame";
 
-export type CapabilityDemoKind =
-  | "brief"
-  | "approval"
-  | "task"
-  | "search"
-  | "handoff";
+export type CapabilityDemoKind = "brief" | "approval" | "task" | "search";
 export const DEMO_BEAT_MS = 2400;
 
 const APPROVAL: ApprovalRequest = {
@@ -42,9 +37,22 @@ const LABELS: Record<CapabilityDemoKind, string> = {
   approval:
     "Example: the Bot asks before sending an email, with Refuse and Allow once",
   task: "Example: a task moves from Working to Ready for review",
-  handoff:
-    "Example: the Bot asks Allow once before sending, then the task becomes Ready for review",
 };
+
+/**
+ * The brief's date line: today, as the real brief writes its own (`morning-brief-tool.tsx`).
+ *
+ * It was a fixed "Friday, October 23", which was right on the day it was written and wrong, with
+ * a weekday that no longer matched, on every day after. The rows under it name a day ("Friday")
+ * and never a date, so today is the one date the card can always show truthfully.
+ */
+export function demoDate(now: Date = new Date()): string {
+  return now.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
 
 /** Real cards, isolated from input. A hidden/offscreen demo stops its clock and orb. */
 export function CapabilityDemo({ kind }: { kind: CapabilityDemoKind }) {
@@ -81,8 +89,8 @@ export function CapabilityDemo({ kind }: { kind: CapabilityDemoKind }) {
   }, [reduced, visible]);
   const phase = reduced ? 2 : beat;
   const done = phase === 2;
-  const approval = kind === "approval" || (kind === "handoff" && !done);
-  const task = kind === "task" || (kind === "handoff" && done);
+  const approval = kind === "approval";
+  const task = kind === "task";
   const caption = approval
     ? done
       ? "Only after your OK"
@@ -146,7 +154,7 @@ export function CapabilityDemo({ kind }: { kind: CapabilityDemoKind }) {
           ) : (
             <MorningBriefCard
               canWait={[]}
-              date="Friday, October 23"
+              date={demoDate()}
               greeting="Your day, at a glance."
               needsYou={[
                 {

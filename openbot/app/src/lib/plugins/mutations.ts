@@ -490,6 +490,45 @@ export function disconnectBrokeredMutationOptions(queryClient: QueryClient) {
   });
 }
 
+/** What ending an account this deployment holds said: whether it ended, and whether the vendor confirmed it. */
+export type HeldDisconnect = { disconnected: boolean; vendorRevoked: boolean };
+
+/**
+ * End the signed-in person's own account for an app this deployment holds the token for (Gmail and
+ * Google Calendar, Drive, Notion): the same route as a brokered disconnect, which the server sends
+ * down its own path for these.
+ *
+ * Answers with the body, unlike the brokered one, because the page has two different things to say.
+ * The server asks the vendor to withdraw the grant before ending it here, and `vendorRevoked: false`
+ * is a vendor that did not confirm it, after which the person still has a step to take there. A
+ * vendor that could not be reached is a refusal with the server's sentence, and nothing was changed.
+ *
+ * Refreshes the plugin screens either way, as every write here does: a refusal is not evidence that
+ * nothing changed (see `app/tests/plugin-mutation-refresh.test.ts`).
+ */
+export function disconnectHeldMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: async (serverId: string): Promise<HeldDisconnect> => {
+      const response = await client(
+        `/api/plugins/servers/${encodeURIComponent(serverId)}/connection`,
+        {
+          method: "DELETE",
+          fallback: "Couldn't disconnect that account. Try again.",
+        },
+      );
+      const body = (await response.json().catch(() => null)) as {
+        disconnected?: unknown;
+        vendorRevoked?: unknown;
+      } | null;
+      return {
+        disconnected: body?.disconnected === true,
+        vendorRevoked: body?.vendorRevoked === true,
+      };
+    },
+    onSettled: () => invalidatePlugins(queryClient),
+  });
+}
+
 export function removeSkillMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: async (slug: string) => {

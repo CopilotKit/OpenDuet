@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { createApp } from "../src/app";
 import { createAuditStore } from "../src/audit";
 import type { ActionPolicy } from "../src/computer/policy";
 import { encryptSecret } from "../src/credentials";
 import { createDatabase } from "../src/db/client";
 import {
   agents,
+  auditEvents,
   credentials,
   mcpServers,
   mcpTools,
@@ -14,8 +16,15 @@ import {
   pluginGrants,
   users,
 } from "../src/db/schema";
-import { createPluginStore, PluginRefusedError } from "../src/plugins/store";
+import {
+  createPluginStore,
+  PluginRefusedError,
+  type VendorRevocation,
+  VendorRevocationUnreachableError,
+} from "../src/plugins/store";
+import { loadConfig } from "../src/config";
 import { TEST_POOL, testDatabaseUrl } from "./support/database";
+import { testEnvironment } from "./support/environment";
 
 /**
  * Whose credential a call to a `user-oauth` server goes out with.
@@ -62,6 +71,14 @@ const decrypted: string[] = [];
 
 /** Every refresh token handed to the vendor's token endpoint, in order. */
 const exchanged: string[] = [];
+
+/** Every revocation the vendor was asked for, and what it answers the next one with. */
+const revocations: {
+  revokeUrl: string;
+  client: { clientId: string; clientSecret: string } | null;
+  refreshToken: string;
+}[] = [];
+let vendorAnswer: VendorRevocation = "revoked";
 
 /** The deployment's OAuth client, as the connect flow will eventually write it. */
 const CLIENT = { clientId: "client-id", clientSecret: "client-secret" };
@@ -116,6 +133,16 @@ const store = createPluginStore({
     updateSecret: async () => {
       throw new Error("this suite writes credentials directly");
     },
+    // Nor does anything here replace or look up a credential through the vault: loud, as above.
+    rotate: async () => {
+      throw new Error("this suite writes credentials directly");
+    },
+    isLive: async () => {
+      throw new Error("this suite reads credentials directly");
+    },
+    findLiveByKey: async () => {
+      throw new Error("this suite reads credentials directly");
+    },
     /*
      * A real revocation, against this suite's own rows.
      *
@@ -126,8 +153,13 @@ const store = createPluginStore({
      *
      * `create` still throws, because connections are still written directly.
      */
-    revoke: async (id) => {
-      const [row] = await database
+    revoke: async (id, executor = database) => {
+      /*
+       * On the caller's transaction when it passes one, as the real vault does. A disconnect holds
+       * this row `FOR UPDATE` while it revokes it, so a revoke on a second connection would wait for
+       * a lock only its own caller can release.
+       */
+      const [row] = await executor
         .update(credentials)
         .set({ revokedAt: new Date() })
         .where(eq(credentials.id, id))
@@ -154,6 +186,14 @@ const store = createPluginStore({
     expect(client).toEqual(CLIENT);
     exchanged.push(refreshToken);
     return { accessToken: accessTokenFrom(refreshToken) };
+  },
+  /*
+   * Stands in for Google's revocation endpoint: records what it was asked to withdraw, with which
+   * client and where, and answers what the test set in `vendorAnswer`.
+   */
+  revokeAtVendor: async (request) => {
+    revocations.push(request);
+    return vendorAnswer;
   },
 });
 
@@ -363,10 +403,10 @@ afterAll(async () => {
 });
 
 describe("a person who has not connected", () => {
-  test("is refused, and told to connect rather than told it broke", () => {
+  test("is refused, and told to connect rather than told it broke", async () => {
     // A refusal, not an error. Nothing is wrong: they simply have not granted access yet, and the
-    // sentence they get should be one they can act on.
-    expect(
+    // sentence they get should be one they can act on. Awaited, so the assertion is made at all.
+    await expect(
       store.callTool({ ref, args: {}, botId, actorId: askerId }),
     ).rejects.toThrow(PluginRefusedError);
   });
@@ -647,5 +687,243 @@ describe("retiring the credentials a person owns", () => {
     expect(
       (await store.retireConnectionsFor("", "admin@openbot.local")).retired,
     ).toBe(0);
+  });
+});
+
+describe("disconnecting your own account", () => {
+  const liveCredential = async (credentialId: string) => {
+    const [row] = await database
+      .select({ revokedAt: credentials.revokedAt })
+      .from(credentials)
+      .where(eq(credentials.id, credentialId));
+    return row !== undefined && row.revokedAt === null;
+  };
+  const disconnect = (userId: string) =>
+    store.disconnectHeld({ serverId, userId, by: userId });
+
+  test("asks the vendor to withdraw it, then ends it here, and a call after is refused", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    revocations.length = 0;
+    vendorAnswer = "revoked";
+
+    expect(await disconnect(askerId)).toEqual({
+      disconnected: true,
+      vendorRevoked: true,
+    });
+
+    // The vendor was asked about this person's token, at the catalogue's own address, as this
+    // deployment's client.
+    expect(revocations).toEqual([
+      {
+        revokeUrl: "https://oauth2.googleapis.com/revoke",
+        client: CLIENT,
+        refreshToken: askerRefreshToken,
+      },
+    ]);
+    expect(await liveCredential(credentialId)).toBe(false);
+    expect(
+      (await store.connectionsFor(askerId)).filter(
+        (row) => row.serverId === serverId,
+      ),
+    ).toEqual([]);
+    await expect(
+      store.callTool({ ref, args: {}, botId, actorId: askerId }),
+    ).rejects.toBeInstanceOf(PluginRefusedError);
+
+    // The trail says who, whose, why, and the vendor's answer as one word. Never the token.
+    const [row] = await database
+      .select({ payload: auditEvents.payload })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.eventType, "mcp.account_disconnected"),
+          eq(auditEvents.targetId, serverId),
+          sql`${auditEvents.payload}->>'owner' = ${askerId}`,
+        ),
+      )
+      .orderBy(desc(auditEvents.createdAt))
+      .limit(1);
+    expect(row?.payload).toMatchObject({
+      actor: askerId,
+      owner: askerId,
+      reason: "self",
+      vendorRevocationRequested: true,
+      vendorAnswer: "revoked",
+    });
+    expect(JSON.stringify(row?.payload)).not.toContain(askerRefreshToken);
+  });
+
+  test("a vendor that cannot be reached changes nothing, so pressing again is the recovery", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    vendorAnswer = "unreachable";
+
+    await expect(disconnect(askerId)).rejects.toBeInstanceOf(
+      VendorRevocationUnreachableError,
+    );
+    expect(await liveCredential(credentialId)).toBe(true);
+    expect(
+      (await store.connectionsFor(askerId)).some(
+        (row) => row.serverId === serverId && !row.revoked,
+      ),
+    ).toBe(true);
+
+    vendorAnswer = "revoked";
+    expect((await disconnect(askerId)).disconnected).toBe(true);
+    expect(await liveCredential(credentialId)).toBe(false);
+  });
+
+  test("a vendor that refuses still ends it here, and says the vendor did not confirm", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    vendorAnswer = "refused";
+
+    expect(await disconnect(askerId)).toEqual({
+      disconnected: true,
+      vendorRevoked: false,
+    });
+    expect(await liveCredential(credentialId)).toBe(false);
+  });
+
+  test("a token the vendor already calls invalid counts as withdrawn", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    vendorAnswer = "already_gone";
+
+    expect(await disconnect(askerId)).toEqual({
+      disconnected: true,
+      vendorRevoked: true,
+    });
+  });
+
+  test("ends only the asker's own account", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    const othersCredential = await connect(otherId, otherRefreshToken);
+    revocations.length = 0;
+    vendorAnswer = "revoked";
+
+    await disconnect(askerId);
+
+    expect(revocations.map((request) => request.refreshToken)).toEqual([
+      askerRefreshToken,
+    ]);
+    expect(await liveCredential(othersCredential)).toBe(true);
+    exchanged.length = 0;
+    await store.callTool({ ref, args: {}, botId, actorId: otherId });
+    expect(exchanged).toEqual([otherRefreshToken]);
+  });
+
+  test("somebody with nothing connected is told so, and the vendor is not asked", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    await disconnect(askerId);
+    revocations.length = 0;
+
+    expect(await disconnect(askerId)).toEqual({
+      disconnected: false,
+      vendorRevoked: false,
+    });
+    // The anonymous actor owns nothing either.
+    expect(await disconnect("")).toEqual({
+      disconnected: false,
+      vendorRevoked: false,
+    });
+    expect(revocations).toEqual([]);
+  });
+
+  test("a credential already revoked here is not sent to the vendor, and the row still goes", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    await database
+      .update(credentials)
+      .set({ revokedAt: new Date() })
+      .where(eq(credentials.id, credentialId));
+    revocations.length = 0;
+
+    expect(await disconnect(askerId)).toEqual({
+      disconnected: true,
+      vendorRevoked: false,
+    });
+    expect(revocations).toEqual([]);
+    expect(
+      (await store.connectionsFor(askerId)).filter(
+        (row) => row.serverId === serverId,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("DELETE /api/plugins/servers/:id/connection for an account held here", () => {
+  /** The real route through `createApp`, signed in as `who`, over this suite's store. */
+  function appAs(who: string) {
+    const args = new Array(createApp.length) as unknown as Parameters<
+      typeof createApp
+    >;
+    args[0] = loadConfig(
+      testEnvironment({ OPENBOT_APP_URL: "https://app.example" }),
+    );
+    args[1] = {
+      handler: () => new Response(null, { status: 204 }),
+      api: {
+        getSession: async () => ({
+          user: { id: who, email: `${who}@openbot.test`, name: "Person" },
+        }),
+      },
+    } as never;
+    args[2] = { rolesForUser: async () => ["user"] } as never;
+    args[12] = createAuditStore(database);
+    args[14] = store;
+    return createApp(...args);
+  }
+  const press = (who: string) =>
+    appAs(who).request(
+      `https://app.example/api/plugins/servers/${serverId}/connection`,
+      { method: "DELETE" },
+    );
+
+  test("ends the signed-in person's own account, and only theirs", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    const othersCredential = await connect(otherId, otherRefreshToken);
+    revocations.length = 0;
+    vendorAnswer = "revoked";
+
+    const response = await press(askerId);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      disconnected: true,
+      vendorRevoked: true,
+    });
+    expect(revocations.map((request) => request.refreshToken)).toEqual([
+      askerRefreshToken,
+    ]);
+    const [other] = await database
+      .select({ revokedAt: credentials.revokedAt })
+      .from(credentials)
+      .where(eq(credentials.id, othersCredential));
+    expect(other?.revokedAt).toBeNull();
+  });
+
+  test("an unreachable vendor is a 502 in the person's words, and nothing changes", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    vendorAnswer = "unreachable";
+
+    const response = await press(askerId);
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error:
+        "Couldn't reach Google, so nothing was disconnected. Try again in a moment.",
+    });
+    const [credential] = await database
+      .select({ revokedAt: credentials.revokedAt })
+      .from(credentials)
+      .where(eq(credentials.id, credentialId));
+    expect(credential?.revokedAt).toBeNull();
+    vendorAnswer = "revoked";
   });
 });

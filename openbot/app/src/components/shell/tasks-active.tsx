@@ -281,14 +281,18 @@ function Group({
 }) {
   const resolved = group.id === "resolved";
   const stamp = updated ? (
-    <span className="type-sub shrink-0 text-duet-ink-2">
+    <span className="type-sub ml-auto shrink-0 text-duet-ink-2">
       Updated {agoShort(group.updatedAt, now)}
     </span>
   ) : null;
   return (
     <section aria-label={group.label} className="flex flex-col gap-5">
-      <div className="flex min-h-11 items-center justify-between gap-3">
-        <h2 className="min-w-0 flex-1">
+      {/*
+       * Wraps at large text: the heading keeps its words on one line, and "Updated …" drops under
+       * it on the right, rather than squeezing "Needs input 1" into a column a word wide.
+       */}
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <h2 className="min-w-0 flex-[1_1_auto]">
           {resolved ? (
             <button
               aria-expanded={open}

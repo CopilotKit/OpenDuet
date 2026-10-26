@@ -336,13 +336,47 @@ export function forgetSeedClaims(): void {
 }
 
 /**
+ * The plain sentences for a model or a network that failed, checked in this order because one raw
+ * message can carry more than one signature: the AI SDK's retry wrapper ("Failed after 3 attempts.
+ * Last error: Overloaded") names the attempts and then the cause, and the cause is what to say.
+ */
+const MODEL_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
+  [
+    /rate.?limit|too many requests|\boverloaded\b|\b(429|529)\b/i,
+    "The AI model is busy right now. Try again in a minute.",
+  ],
+  [
+    /invalid x-api-key|incorrect api key|invalid_api_key|authentication_error|api key (is )?(invalid|not valid)/i,
+    "The AI model didn't accept this install's key. An admin needs to update it.",
+  ],
+  [
+    /\b(operation|request) (has )?timed out\b|\bETIMEDOUT\b|aborted due to timeout/i,
+    "That took too long, so it was stopped. Try again.",
+  ],
+  [
+    /Failed after \d+ attempts|Cannot connect to API/i,
+    "Couldn't reach the AI model. Check your internet connection, then try again.",
+  ],
+];
+
+/**
  * The sentence to show for a turn that ended badly, never a raw error.
  *
  * Most reasons are written for people: the stall guard's sentence, a Bot's refusal. Some are not: a
  * transport error with a status line and a JSON body, or the SDK naming a thread or a tool call by
  * id. Those say nothing a person can act on and leak ids, so they become one plain sentence.
+ *
+ * A MODEL THAT FAILED IS SAID AS ONE, IN THE PERSON'S TERMS. The AI SDK's own text reached the
+ * screen as it was: "Failed after 3 attempts. Last error: Unable to connect. Is the computer able to
+ * access the url?" ("the computer" is Bun's, and in this product it means a Bot's computer, which had
+ * nothing to do with it), and "The operation timed out." Each is now matched by its signature and
+ * becomes a line that says what happened and what to do (`MODEL_FAILURES`). A bare connection error
+ * with no model signature is the Bot's own endpoint, and says so.
  */
 export function sayableReason(reason: string): string {
+  for (const [signature, sentence] of MODEL_FAILURES) {
+    if (signature.test(reason)) return sentence;
+  }
   const raw =
     /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(
       reason,
@@ -352,6 +386,9 @@ export function sayableReason(reason: string): string {
     ) ||
     /pending interrupt|toolu_|\bThread\b.*\bis locked\b/i.test(reason) ||
     /^(TypeError: )?(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|network error)$/i.test(
+      reason,
+    ) ||
+    /Is the computer able to access the url|\b(ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN)\b|socket hang up|^fetch failed$/i.test(
       reason,
     );
   return raw ? "Couldn't reach the Bot. Try again." : reason;
