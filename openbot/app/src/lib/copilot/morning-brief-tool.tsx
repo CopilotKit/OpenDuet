@@ -99,7 +99,6 @@ export function briefCard(brief: Brief): {
     greeting: greetingFor(at, brief.name),
     needsYou: brief.needsYou.map((item) => ({
       id: item.id,
-      icon: "mail",
       title: item.subject ? `${item.from} · ${item.subject}` : item.from,
       why: item.reason,
     })),
@@ -107,7 +106,6 @@ export function briefCard(brief: Brief): {
       ? [
           {
             id: "can-wait",
-            icon: "mail",
             title: `${brief.canWait.length} ${brief.canWait.length === 1 ? "email" : "emails"} can wait`,
             why: rest > 0 ? `${named} and ${rest} more` : named,
           },
@@ -115,13 +113,11 @@ export function briefCard(brief: Brief): {
       : [],
     today: brief.calendar.map((event) => ({
       id: event.id,
-      icon: "clock",
       title: event.summary,
       why: [timeOf(event.start), event.location].filter(Boolean).join(" · "),
     })),
     notes: brief.couldNotCheck.map((gap, index) => ({
       id: `gap-${index}`,
-      icon: "question",
       title: gap.source,
       why: gap.why,
     })),

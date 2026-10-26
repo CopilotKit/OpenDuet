@@ -210,7 +210,8 @@ export function CardRow({
   trailing,
   below,
 }: {
-  icon: DuetIconName;
+  /** Left out where the section's label already says what every row is, as the brief's rows do. */
+  icon?: DuetIconName;
   tone?: TileTone;
   title: ReactNode;
   detail?: ReactNode;
@@ -228,7 +229,7 @@ export function CardRow({
         below ? "items-start" : "items-center",
       )}
     >
-      <Tile icon={icon} tone={tone} />
+      {icon ? <Tile icon={icon} tone={tone} /> : null}
       <div className="min-w-0 flex-1">
         <div className="type-body font-medium text-duet-ink [overflow-wrap:anywhere]">
           {title}

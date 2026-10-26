@@ -1,13 +1,17 @@
 import { Fragment } from "react";
 import { cn } from "@/lib/utils";
-import type { DuetIconName } from "./icons";
 import { DuetIcon } from "./icons";
 import { CardRow, DuetCard, Rule, SectionLabel } from "./kit";
 
-/** One line of the brief: what it is, and one line on why. */
+/**
+ * One line of the brief: what it is, and one line on why.
+ *
+ * NO ICON. Every row in a section is the same kind of thing (mail under "Needs you", events under
+ * "Today"), so a tile on each repeated the section's label down the left and took width the title
+ * and the why needed on a phone.
+ */
 export type BriefItem = {
   id: string;
-  icon: DuetIconName;
   title: string;
   why: string;
   /** Where the row leads. A row with nowhere to go draws no chevron. */
@@ -92,9 +96,7 @@ function BriefSection({
           const row = (
             <CardRow
               detail={item.why}
-              icon={item.icon}
               title={item.title}
-              tone={tone === "accent" ? "violet" : "neutral"}
               below={
                 item.action ? <RowAction action={item.action} /> : undefined
               }
@@ -109,7 +111,7 @@ function BriefSection({
           );
           return (
             <Fragment key={item.id}>
-              {index > 0 ? <Rule inset /> : null}
+              {index > 0 ? <Rule /> : null}
               <li>
                 {item.href ? (
                   <a
