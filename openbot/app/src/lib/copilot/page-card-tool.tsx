@@ -1,12 +1,23 @@
 import { useRenderTool } from "@copilotkit/react-core/v2";
 import { Link, useRouter } from "@tanstack/react-router";
+import { motion } from "motion/react";
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { z } from "zod";
 import { useConversationSend } from "@/components/channels/conversation-send";
+import { useReplyHold } from "@/components/channels/reply-hold";
 import { ToolLine } from "@/components/channels/tool-line";
 import { PageCard } from "@/components/duet/page-card";
 import { type PageSummary, pageSummarySchema } from "@/lib/pages/queries";
+import { EASE_OUT } from "@/lib/motion";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
+import { useReducedMotionPreference } from "@/lib/reduced-motion";
 
 /*
  * Draws the server's `make_page` tool (server/src/openduet/pages.ts) as the card under the Bot's
@@ -46,7 +57,7 @@ export function readPage(result: unknown): PageSummary | null {
 export function ConversationPageCard({ page }: { page: PageSummary }) {
   const conversation = useConversationSend();
   const router = useRouter({ warn: false });
-  return (
+  const card = (
     <PageCard
       link={({ className, children }) =>
         !router ? (
@@ -80,6 +91,81 @@ export function ConversationPageCard({ page }: { page: PageSummary }) {
       }
       page={page}
     />
+  );
+  return <HeldUntilReplied title={page.title}>{card}</HeldUntilReplied>;
+}
+
+/** How the card enters once the Bot has finished its line: quick, and settling rather than bouncing. */
+export const CARD_ENTRANCE = { seconds: 0.24, rise: 8, scale: 0.98 } as const;
+
+/**
+ * The card waits for the Bot's words. While the turn is still being written it keeps its row with
+ * the finished tool line, under the words as they stream; when the turn ends the line makes way and
+ * the card rises into its place, the row's height following it so nothing below jumps. A card
+ * already on screen, or one read back from history, is drawn as it is.
+ */
+function HeldUntilReplied({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  const held = useReplyHold();
+  const reduced = useReducedMotionPreference();
+  // Decided once: a card that was ever drawn stays drawn, and only a held one makes an entrance.
+  const [wasHeld] = useState(held);
+  const [shown, setShown] = useState(!held);
+  if (!held && !shown) setShown(true);
+  const line = useRef<HTMLDivElement>(null);
+  const lineHeight = useRef(0);
+  useLayoutEffect(() => {
+    if (!shown && line.current) lineHeight.current = line.current.offsetHeight;
+  });
+  /*
+   * The row clips while its height grows, so the card never spills over the footer under it, and
+   * stops clipping once grown, so the card's hairline and shadow show. A tab in the background may
+   * never report the end, so the clip also comes off on a timer.
+   */
+  const [settled, setSettled] = useState(reduced);
+  useEffect(() => {
+    if (!shown || settled) return;
+    const timer = setTimeout(
+      () => setSettled(true),
+      CARD_ENTRANCE.seconds * 1000 + 80,
+    );
+    return () => clearTimeout(timer);
+  }, [shown, settled]);
+
+  if (!shown)
+    return (
+      <div data-card-held="" ref={line}>
+        <ToolLine detail={title} label={readToolName(PAGE_TOOL).label} />
+      </div>
+    );
+  if (!wasHeld) return children;
+  return (
+    <motion.div
+      animate={{ height: "auto" }}
+      className={settled ? undefined : "overflow-hidden"}
+      initial={reduced ? false : { height: lineHeight.current }}
+      onAnimationComplete={() => setSettled(true)}
+      transition={{ duration: CARD_ENTRANCE.seconds, ease: EASE_OUT }}
+    >
+      <motion.div
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        data-card-entrance={reduced ? "fade" : "rise"}
+        initial={
+          reduced
+            ? { opacity: 0 }
+            : { opacity: 0, y: CARD_ENTRANCE.rise, scale: CARD_ENTRANCE.scale }
+        }
+        style={{ transformOrigin: "top center" }}
+        transition={{ duration: CARD_ENTRANCE.seconds, ease: EASE_OUT }}
+      >
+        {children}
+      </motion.div>
+    </motion.div>
   );
 }
 

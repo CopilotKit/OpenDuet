@@ -82,3 +82,11 @@ test.each(["WWWWWWWWWWW", "September total"])(
     ).toBe("Inter, ui-sans-serif, system-ui, sans-serif");
   },
 );
+
+test.each([...PAGE_THEMES])(
+  "a %s page sits on the app's neutral surface, with no tint of its own",
+  (theme) => {
+    expect(pageThemeStyle(theme).background).toBeUndefined();
+    expect(pageThemeStyle(theme).backgroundColor).toBeUndefined();
+  },
+);

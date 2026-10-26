@@ -97,6 +97,7 @@ import {
 import type { QueuedMessage } from "./composer";
 import { AppAccessCard } from "./app-access-card";
 import { TeamBotConsentCard } from "./team-bot-consent";
+import { ReplyHoldProvider } from "./reply-hold";
 import { ToolRenderBoundary } from "./tool-boundary";
 import { splitBubbles } from "./split-bubbles";
 import { ToolLine } from "./tool-line";
@@ -1973,6 +1974,13 @@ export function ChatTranscript({
         item.kind === "attachments",
     )?.id ?? null;
   useSmoothSendScroll(viewportRef, newestUserMessageId);
+  /*
+   * Where the turn being written starts: rows after it wait for the Bot's words while `busy`
+   * (reply-hold.tsx), so a card made before its line enters under the finished line, not above it.
+   */
+  const turnStart = newestUserMessageId
+    ? items.findIndex((item) => item.id === newestUserMessageId)
+    : -1;
 
   /* One rule for both kinds of row — see `anchorRowIds`, which is where it is written down. */
   const anchorRows = anchorRowIds(items);
@@ -2128,13 +2136,15 @@ export function ChatTranscript({
                 </MessageScrollerItem>
               ) : item.kind === "tool" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
-                  <TranscriptToolCall
-                    args={item.toolCall.function.arguments}
-                    delay={delays.delayFor(item.id, index, items.length)}
-                    name={item.toolCall.function.name}
-                    result={item.result}
-                    toolCallId={item.toolCall.id}
-                  />
+                  <ReplyHoldProvider value={busy && index > turnStart}>
+                    <TranscriptToolCall
+                      args={item.toolCall.function.arguments}
+                      delay={delays.delayFor(item.id, index, items.length)}
+                      name={item.toolCall.function.name}
+                      result={item.result}
+                      toolCallId={item.toolCall.id}
+                    />
+                  </ReplyHoldProvider>
                   {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "activity" ? (

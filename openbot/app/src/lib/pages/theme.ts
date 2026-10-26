@@ -8,11 +8,14 @@ const ACCENT: Record<PageTheme, string> = {
   ocean: "var(--duet-blue)",
   editorial: "var(--duet-amber)",
 };
+/**
+ * A saved page's theme: its accent, for what a page marks (a timeline's dots, a decision's pick),
+ * and the editorial face. Never a background: an opened page sits on the app's own neutral surface,
+ * the same as its card, so a theme cannot tint it green or lavender.
+ */
 export function pageThemeStyle(theme: PageTheme = "classic"): CSSProperties {
-  const accent = ACCENT[theme];
   return {
-    "--page-accent": accent,
-    background: `color-mix(in srgb, ${accent} 5%, var(--duet-surface))`,
+    "--page-accent": ACCENT[theme],
     fontFamily: theme === "editorial" ? "Georgia, serif" : undefined,
   } as CSSProperties;
 }

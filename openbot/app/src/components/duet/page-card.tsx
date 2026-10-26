@@ -1,8 +1,4 @@
-import {
-  PAGE_KIND_COLOURS,
-  PAGE_KIND_LABELS,
-  type PageKind,
-} from "@openbot/shared/page-look";
+import { PAGE_KIND_LABELS, type PageKind } from "@openbot/shared/page-look";
 import { sanitizeThumbnail } from "@openbot/shared/thumbnail";
 import { type ReactNode, useCallback } from "react";
 import { clockTime } from "@/lib/approval-view";
@@ -22,7 +18,9 @@ import { isDashboard } from "./page-view";
  * (page-morph.tsx), so the card says where it is and what it looks like.
  *
  * The preview is drawn from the page's own blocks in the shell's components, small: never a picture
- * of the page, and never the page itself in a frame.
+ * of the page, and never the page itself in a frame. It sits on the neutral tile, whatever the kind
+ * or theme: the card, the Make tile and the opened page share one surface, and the only colour in
+ * them is the accent on what it marks, such as a chart's highlighted bar.
  */
 
 /** "Updated 5:52 AM" today, "Updated Oct 20" before that. */
@@ -99,10 +97,7 @@ export function PageCardFace({
           aria-hidden
           className="relative overflow-hidden bg-duet-tile"
           data-preview={kind}
-          style={{
-            height: PREVIEW_HEIGHT.grid,
-            background: `color-mix(in srgb, ${PAGE_KIND_COLOURS[kind]} 12%, var(--duet-tile))`,
-          }}
+          style={{ height: PREVIEW_HEIGHT.grid }}
         >
           <PagePreview page={page} size="grid" />
         </div>
@@ -124,10 +119,7 @@ export function PageCardFace({
         aria-hidden
         className="relative overflow-hidden bg-duet-tile"
         data-preview={kind}
-        style={{
-          height: PREVIEW_HEIGHT.row,
-          background: `color-mix(in srgb, ${PAGE_KIND_COLOURS[kind]} 12%, var(--duet-tile))`,
-        }}
+        style={{ height: PREVIEW_HEIGHT.row }}
       >
         <PagePreview page={page} size="row" />
       </div>
