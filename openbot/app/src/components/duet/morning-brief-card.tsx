@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { cn } from "@/lib/utils";
 import type { DuetIconName } from "./icons";
 import { DuetIcon } from "./icons";
 import { CardRow, DuetCard, Rule, SectionLabel } from "./kit";
@@ -15,7 +16,7 @@ export type BriefItem = {
   action?: BriefAction;
 };
 
-/** A small pill at the end of a row. `done` replaces the label once it has been pressed. */
+/** A line of text under the row's why. `done` replaces the label once it has been pressed. */
 export type BriefAction = {
   label: string;
   /** What a screen reader hears, naming the row, since "Start" alone says nothing about which. */
@@ -94,10 +95,11 @@ function BriefSection({
               icon={item.icon}
               title={item.title}
               tone={tone === "accent" ? "violet" : "neutral"}
+              below={
+                item.action ? <RowAction action={item.action} /> : undefined
+              }
               trailing={
-                item.action ? (
-                  <RowAction action={item.action} />
-                ) : item.href ? (
+                item.href ? (
                   <span className="text-duet-ink-3">
                     <DuetIcon name="chevronRight" size={18} stroke={2.2} />
                   </span>
@@ -130,17 +132,30 @@ function BriefSection({
   );
 }
 
+/**
+ * The row's action as a line of text under its why. A pill in its own column left the title and
+ * the why a narrow strip on a phone; as text it reads as the row's next step.
+ */
 function RowAction({ action }: { action: BriefAction }) {
+  const done = action.done !== undefined;
   return (
     <button
       aria-label={action.done ?? action.name}
-      // 44px to tap (parity-spec 2.11); weight 500, as buttons are (2.3).
-      className="type-sub h-11 shrink-0 rounded-full bg-duet-black px-4 font-medium text-duet-on-black transition-[filter,transform,opacity] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 active:scale-[0.97] disabled:bg-duet-tile disabled:text-duet-ink-2 disabled:hover:brightness-100"
-      disabled={action.disabled || action.done !== undefined}
+      // 44px to tap (parity-spec 2.11) with the box pulled back by the margins, so the text sits
+      // as close under the why as a line would; weight 500, as buttons are (2.3).
+      className={cn(
+        "type-sub -mx-2 -my-2.5 inline-flex h-11 items-center gap-1 rounded-full px-2 font-medium transition-opacity focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
+        done
+          ? "text-duet-status-done"
+          : "text-duet-accent hover:opacity-80 active:opacity-60 disabled:text-duet-ink-3 disabled:hover:opacity-100",
+      )}
+      disabled={action.disabled || done}
       onClick={action.onPress}
       type="button"
     >
+      {done ? <DuetIcon name="check" size={15} stroke={2.4} /> : null}
       {action.done ?? action.label}
+      {done ? null : <DuetIcon name="arrowRight" size={15} stroke={2.4} />}
     </button>
   );
 }

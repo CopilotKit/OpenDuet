@@ -208,15 +208,26 @@ export function CardRow({
   title,
   detail,
   trailing,
+  below,
 }: {
   icon: DuetIconName;
   tone?: TileTone;
   title: ReactNode;
   detail?: ReactNode;
   trailing?: ReactNode;
+  /**
+   * Something to do about the row, set under its text rather than in a column of its own: on a
+   * phone a third column squeezes the text into a narrow strip. The row then aligns to its top.
+   */
+  below?: ReactNode;
 }) {
   return (
-    <div className="flex min-h-[66px] items-center gap-[13px] px-4 py-3">
+    <div
+      className={cn(
+        "flex min-h-[66px] gap-[13px] px-4 py-3",
+        below ? "items-start" : "items-center",
+      )}
+    >
       <Tile icon={icon} tone={tone} />
       <div className="min-w-0 flex-1">
         <div className="type-body font-medium text-duet-ink [overflow-wrap:anywhere]">
@@ -227,6 +238,7 @@ export function CardRow({
             {detail}
           </div>
         ) : null}
+        {below ? <div className="mt-1">{below}</div> : null}
       </div>
       {trailing}
     </div>
