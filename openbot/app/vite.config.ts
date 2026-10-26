@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { LISTEN_HOST_VARIABLE, listenHosts } from "@openbot/shared/listen-host";
 import { listenPort } from "@openbot/shared/listen-port";
 
 /*
@@ -74,14 +75,24 @@ const apiPort = listenPort(process.env.SERVER_PORT, 3001);
 if (!apiPort.ok) {
   throw new Error(apiPort.reason.replace(/^PORT /, "SERVER_PORT "));
 }
+/*
+ * Loopback unless OPENBOT_HOST says otherwise (shared/listen-host.ts), whatever the server's own
+ * mode: this proxies `/api` to the server from this machine, so a dev server open to the network
+ * hands the server to the network too, and with OPENBOT_SINGLE_USER that is its administrator.
+ *
+ * One address, because Vite listens on one. 127.0.0.1 for loopback, and a browser told `localhost`
+ * tries it after ::1; every interface is `::`, the dual-stack socket this listened on before.
+ */
+const appHosts = listenHosts(process.env[LISTEN_HOST_VARIABLE], "loopback");
+if (!appHosts.ok) throw new Error(appHosts.reason);
+const appHost = appHosts.hosts[0]?.host ?? "::";
 
 const serving = {
-  // Both loopbacks, which is what `::` gets you: Node opens a dual-stack socket, so 127.0.0.1 and
-  // ::1 both answer. Left to itself Vite binds whichever one this runtime resolves `localhost`
-  // to, which is ::1 under Node and 127.0.0.1 under bun, and the other address is then refused.
-  // Whoever is told the URL has no way to know which they were given.
+  // An address, never `localhost`: left to itself Vite binds whichever address this runtime
+  // resolves that name to, ::1 under Node and 127.0.0.1 under bun, and whoever is told the URL has
+  // no way to know which they were given. See `appHost` above for which one and why.
   // Empty APP_PORT=/SERVER_PORT= is unset (compose / leftover .env), not NaN — same trap as Bot PORT.
-  host: "::",
+  host: appHost,
   port: appPort.port,
   strictPort: true,
   proxy: {

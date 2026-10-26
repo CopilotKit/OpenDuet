@@ -54,6 +54,12 @@ Use `bun run dev` only when you want the app and API server without starting the
 | `supervisor`      | 4500 host / 4300 container |
 | PostgreSQL        | 5432                       |
 
+The app and the API server listen on this machine only (127.0.0.1 and ::1) while there is no
+sign-in, because whoever reaches them is the administrator; to open them to your network, set
+`OPENBOT_HOST` in `.env` (see [Where it listens](configuration.md#where-it-listens)). Opened at a
+host name other than `localhost`, rather than at an IP address, the app loads but every change it
+asks for is refused until that origin is in `TRUSTED_ORIGINS`.
+
 `start.sh` hands every selected Docker service to `docker compose up -d` on every run, so one whose configuration changed is recreated and an unchanged one is left as it is. It leaves an API server or app that already answers as OpenBot alone, restarts the API server when it refuses the worker's secret or has no routines route, and reports when a port is held by another process.
 
 **Nothing here sweeps staged attachments.** A file dropped into the composer is stored before the

@@ -44,6 +44,7 @@ import {
 } from "./auth/guards";
 import type { IdentityProviderStore } from "./auth/identity-provider-store";
 import { desktopAuthPage } from "./auth/native-browser";
+import { createSameOriginGuard } from "./auth/same-origin";
 import {
   createAttachmentRoutes,
   createChannelAttachmentRoutes,
@@ -478,6 +479,14 @@ export function createApp(
   identityGithubCallback?: Hono<{ Variables: AppVariables }>,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
+  /*
+   * First, in front of every route: a state-changing `/api` request, or a WebSocket upgrade, from a
+   * page that is not this deployment's is refused here, and so is a body that is not JSON or an
+   * upload. One rule for every route rather than a check each route has to remember; see
+   * auth/same-origin.ts for what it admits and why. Registered before anything else, because a
+   * route registered ahead of a middleware in Hono never passes through it.
+   */
+  app.use("*", createSameOriginGuard(config));
   mountDesktopConnectionFailure(app, desktopHostToken);
   mountProviderOAuthProxy(app, modelProviderProxy);
 

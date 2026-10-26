@@ -46,6 +46,7 @@ at `agent-langgraph` on a laptop.
 | Variable             | Default                            | Meaning                                                             |
 | -------------------- | ---------------------------------- | ------------------------------------------------------------------- |
 | `PORT`               | `3001`                             | API server port. `SERVER_PORT` names the same port; set either, or both to the same value, or the server refuses to start. |
+| `OPENBOT_HOST`       | this machine with no sign-in; every interface with sign-in | Where the API server and the app's dev, preview and installed servers listen. A comma-separated list of addresses; `0.0.0.0`, `::` or `*` is every interface. See [Where it listens](#where-it-listens). |
 | `NODE_ENV`           | unset                              | `production` refuses the example `KEY_ENCRYPTION_KEY` and ignores `OPENDUET_FAKE_GOOGLE_URL`. It does not decide whether sign-in is required; see `OPENBOT_SINGLE_USER`. |
 | `TENANT_PACKAGE_DIR` | `../examples/fintech`              | Tenant package directory, resolved from `server/`.                  |
 | `DEPLOYMENT_ID`      | the tenant package's id            | Names this deployment inside a shared Intelligence project, and prefixes the identity a Shared app's account is held under at the vendor. That identity is fixed when the app is made Shared, so changing this later does not move it. |
@@ -423,6 +424,30 @@ where `<provider>` is `google`, `microsoft` or `okta`.
 `OPENBOT_APP_URL` is where the callback sends the person afterwards. It is a separate setting because the app and the API are separate addresses: locally the app is Vite on `3010` and the API is `3001`, so a relative redirect would land on the API, which serves no pages. A deployment serving both from one origin can leave it unset.
 
 A [Composio](plugins/composio.md) app needs `OPENBOT_APP_URL` and nothing else of the two: the consent lives at the broker, so no redirect URI of ours is registered anywhere, but the address Composio returns somebody to has to be absolute and this is where it comes from. Connecting a brokered account refuses where it resolves to nothing, rather than sending somebody to a consent screen with no way back.
+
+### Where it listens
+
+**With no sign-in, only this machine can reach it.** `OPENBOT_SINGLE_USER` makes whoever reaches
+the port the administrator, so the API server listens on 127.0.0.1 and ::1, and the app's dev,
+preview and installed servers, which pass `/api` on to it, do the same. On Linux the server also
+listens on Docker's bridge address (`docker0`), which is where the Bots' containers reach this
+machine at `host.docker.internal`; Docker Desktop carries that to loopback itself. With a sign-in
+provider the server listens on every interface, as it always has, because every route asks who is
+calling.
+
+`OPENBOT_HOST` changes that for both. Set it to `0.0.0.0` to listen on every interface, or to a
+comma-separated list of addresses. With no sign-in, everybody who can reach those addresses is the
+administrator, and the server says so at every boot. The container image sets `0.0.0.0`, because a
+container's loopback is its own and a published port reaches only what listens beyond it; who can
+reach the container is then what `docker run -p` publishes it on. `scripts/start.sh` hands the
+setting from `.env` to the app, which reads only its own environment.
+
+**Only this deployment's own pages may change anything.** Every state-changing `/api` request and
+every WebSocket must come from one of this deployment's origins (`OPENBOT_PUBLIC_URL` or
+`BETTER_AUTH_URL`, `OPENBOT_APP_URL`, each `TRUSTED_ORIGINS` entry, the loopback addresses of
+`APP_PORT` and the server's own port, or the IP address the request came to), or from something that
+is not a browser page and so sends no `Origin`. A body must be JSON or an upload. A page opened at a
+name none of those lists is refused with 403; add its origin to `TRUSTED_ORIGINS`.
 
 ### SCIM provisioning
 

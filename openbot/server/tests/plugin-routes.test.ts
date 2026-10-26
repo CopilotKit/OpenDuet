@@ -2208,22 +2208,32 @@ describe("connecting a brokered app", () => {
      * any one of them fails here rather than passing on the two it ignored.
      */
     const { authorized, connect } = brokeredApp();
+    const body = {
+      returnUrl: "https://evil.test/harvest",
+      returnTo: "https://evil.test",
+    };
+    const query =
+      "?returnUrl=https%3A%2F%2Fevil.test%2Fharvest&callbackUrl=https%3A%2F%2Fevil.test";
+    const headers = {
+      returnUrl: "https://evil.test/harvest",
+      referer: "https://evil.test",
+      "x-forwarded-host": "evil.test",
+    };
 
-    const response = await connect(
-      { returnUrl: "https://evil.test/harvest", returnTo: "https://evil.test" },
-      "?returnUrl=https%3A%2F%2Fevil.test%2Fharvest&callbackUrl=https%3A%2F%2Fevil.test",
-      {
-        returnUrl: "https://evil.test/harvest",
-        referer: "https://evil.test",
-        origin: "https://evil.test",
-        "x-forwarded-host": "evil.test",
-      },
-    );
+    const response = await connect(body, query, headers);
 
     expect(response.status).toBe(200);
     expect(authorized).toEqual([
       { account: ADMIN_ACCOUNT, toolkit: "linear", returnUrl: RETURN_URL },
     ]);
+
+    // Sent from that site's own page, it never reaches the route at all (auth/same-origin.ts).
+    const forged = await connect(body, query, {
+      ...headers,
+      origin: "https://evil.test",
+    });
+    expect(forged.status).toBe(403);
+    expect(authorized).toHaveLength(1);
   });
 
   test("an administrator who started on the app's own page is sent back to it", async () => {

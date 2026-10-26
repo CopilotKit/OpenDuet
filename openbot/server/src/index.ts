@@ -6,6 +6,7 @@ import {
   IntelligenceAgentRunner,
 } from "@copilotkit/runtime/v2";
 import { COMPUTER_GUIDANCE } from "@openbot/shared/bot-prompt";
+import { LISTEN_HOST_VARIABLE } from "@openbot/shared/listen-host";
 import { workOwner } from "@openbot/shared/work-owner";
 import { createTurnRunner } from "@openbot/toolkit/run-turn";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
@@ -2790,7 +2791,7 @@ const app = createApp(
   identityGithubCallback,
 );
 
-startHttpServer({
+const { addresses: listening } = startHttpServer({
   port,
   config,
   resolveRequestActor,
@@ -2801,6 +2802,9 @@ startHttpServer({
   app,
 });
 
+/** Whether only this machine, and the containers it runs, can reach the server. */
+const listensLocally = config.listen.every(({ local }) => local);
+
 if (config.singleUser) {
   // Loud, every boot. A server that is not checking who is asking should never be a quiet default.
   console.warn(
@@ -2808,6 +2812,11 @@ if (config.singleUser) {
       `${DEV_ACTOR.email} (administrator). Configure GOOGLE_OAUTH_*, ` +
       "MICROSOFT_OAUTH_* or OKTA_OAUTH_* before anybody else can reach this.",
   );
+  // And louder when somebody opened it beyond this machine, which only OPENBOT_HOST does.
+  if (!listensLocally)
+    console.warn(
+      `${LISTEN_HOST_VARIABLE} has this server listening beyond this machine (${listening.join(", ")}) with no sign-in, so anybody who can reach port ${port} is that administrator.`,
+    );
 }
 
 // Each listener holds a connection of its own for the life of the process. Released on the way out,
@@ -2834,8 +2843,16 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
-// The product's own name, from the tenant package, because this is the line a person reads when
-// the server comes up. Nothing parses it.
+/*
+ * The product's own name, from the tenant package, because this is the line a person reads when the
+ * server comes up. Nothing parses it. And what it actually bound, not a constant: this said
+ * 127.0.0.1 for as long as the server listened on every interface, which is how a single-user
+ * install could be the administrator to the whole network while its own log said otherwise.
+ */
 console.info(
-  `${tenantPackage.productName} server listening on http://127.0.0.1:${port}`,
+  `${tenantPackage.productName} server listening on ${listening.join(" and ")}${
+    listensLocally
+      ? ` (this machine only; set ${LISTEN_HOST_VARIABLE} to listen beyond it)`
+      : ""
+  }`,
 );
