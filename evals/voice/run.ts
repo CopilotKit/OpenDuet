@@ -23,7 +23,7 @@ import { markdownTableRow } from "../../openbot/scripts/evals/markdown-table";
 import { evaluateVoiceBudget } from "../../openbot/scripts/evals/voice-budget";
 
 const APP = process.env.OPENDUET_APP ?? "http://localhost:3066";
-if (/:(3030|3130)\b/.test(APP)) throw new Error("Refusing Jerel's real stack.");
+if (/:(3030|3130)\b/.test(APP)) throw new Error("Refusing a live stack.");
 
 /**
  * The prompt's own example questions, asked verbatim. Their people and facts are in nobody's

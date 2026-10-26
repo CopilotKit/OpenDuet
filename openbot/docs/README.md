@@ -1,6 +1,6 @@
 # OpenBot docs
 
-Start with the root [README](../README.md), then use these references:
+Start with the [OpenDuet README](../../README.md) at the repository root, then use these references:
 
 - [Architecture](architecture.md): services, ports, browser governance, computers, components, plugins, knowledge, and security boundaries.
 - [Configuration](configuration.md): environment variables and tenant package YAML.
@@ -14,8 +14,8 @@ Start with the root [README](../README.md), then use these references:
   - [Google Drive](plugins/google-drive.md)
   - [Gmail and Google Calendar](plugins/google-workspace.md): including the fake Google for trying it without an account.
   - [Notion](plugins/notion.md)
-- [Deployment](deployment.md): the container, what is in the image, minimum sizes, and the platform notes.
-- [Kubernetes](../charts/openbot/README.md): the Helm chart, what a cluster needs before it, and the values that differ per cloud.
+- [Deployment](deployment.md): the container, what is in the image, minimum sizes, and the platform notes. It deploys OpenBot's published image, `ghcr.io/copilotkit/openbot`, which is plain OpenBot. OpenDuet has no published image or deploy guide yet.
+- [Kubernetes](../charts/openbot/README.md): the Helm chart, what a cluster needs before it, and the values that differ per cloud. Its default image is also plain OpenBot.
 - [Releasing](releasing.md): how a release is proposed, reviewed and published.
 - [Windows desktop signing](windows-signing.md): protected Azure Key Vault signing and verification of the app and NSIS installer.
 - [Desktop provider OAuth](../desktop/PROVIDER_OAUTH.md): what a distributor configures to offer Google and xAI sign-in in a desktop build.

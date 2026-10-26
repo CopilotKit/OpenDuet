@@ -177,5 +177,5 @@ without `OPENBOT_LIVE_SCREEN=1` the files skip before importing anything, which 
 - Keep changes focused.
 - Keep credentials, service-account JSON, customer data, and transcripts out of source control.
 - Put sensitive behavior on the server, not only in the browser.
-- Update [configuration](configuration.md), [architecture](architecture.md), or the root [README](../README.md) when behavior changes.
+- Update [configuration](configuration.md), [architecture](architecture.md), or the root [README](../../README.md) when behavior changes.
 - Run the quality checks above and include the results in the pull request.
