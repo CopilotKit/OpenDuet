@@ -10,6 +10,7 @@ import {
 import type { Message } from "@ag-ui/core";
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { MORNING_BRIEF_FRAME } from "@openbot/shared/morning-brief";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -46,7 +47,6 @@ import { morningBriefClaimKey } from "@/lib/channels/morning-brief-claim";
 import { type ChannelSummary, channelKeys } from "@/lib/channels/queries";
 import { MorningBriefTool } from "@/lib/copilot/morning-brief-tool";
 import { queryClient as appQueryClient } from "@/query-client";
-import { MORNING_BRIEF_FRAME } from "@openbot/shared/morning-brief";
 import { settleReactWork } from "./settle-react-work";
 
 /**
@@ -431,6 +431,35 @@ describe("the transcript on a later day", () => {
     // The brief is not the person speaking, so nothing reads "Seen" under it.
     await settleReactWork();
     expect(view.queryByText("Seen")).toBeNull();
+  });
+
+  test("its first row is held at the top, so a tall brief arrives top first rather than bottom first", async () => {
+    const queries = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    globalThis.fetch = Object.assign(
+      async () => Response.json({ error: "Not found" }, { status: 404 }),
+      { preconnect: originalFetch.preconnect },
+    ) as typeof fetch;
+    const view = render(
+      <QueryClientProvider client={queries}>
+        <CopilotKitProvider>
+          <MorningBriefTool />
+          <ConversationView messages={briefed} onSubmit={() => {}} />
+        </CopilotKitProvider>
+      </QueryClientProvider>,
+    );
+    const card = await view.findByText(
+      "Ana needs the Friday date confirmed today.",
+    );
+    const anchors = view.container.querySelectorAll(
+      '[data-scroll-anchor="true"]',
+    );
+    // One anchor, the brief's own row: the card is inside it, the Bot's sentence under it is not.
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]?.contains(card)).toBe(true);
+    expect(anchors[0]?.textContent).not.toContain(REPLY);
+    await settleReactWork();
   });
 
   test("a brief after an unanswered first day ends that day's answer: its replies are not offered under the brief", async () => {
