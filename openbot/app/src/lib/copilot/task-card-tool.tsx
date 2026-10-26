@@ -2,6 +2,11 @@ import { useRenderTool } from "@copilotkit/react-core/v2";
 import { Link, useRouter } from "@tanstack/react-router";
 import { z } from "zod";
 import { ToolLine } from "@/components/channels/tool-line";
+import {
+  BuildIn,
+  BuildInProvider,
+  useArrivedLive,
+} from "@/components/duet/build-in";
 import { TaskLink } from "@/components/duet/task-card";
 import { START_TASK_TOOL } from "@/lib/channels/task-brief";
 import { readToolName } from "@/lib/plugins/tool-name";
@@ -82,15 +87,37 @@ export function TaskCardTool() {
   useRenderTool({
     name: START_TASK_TOOL,
     parameters,
-    render: ({ result, status }) => {
-      if (status !== "complete" && result === undefined)
-        return (
-          <ToolLine label={readToolName(START_TASK_TOOL, true).label} running />
-        );
-      const started = readStartedTask(result);
-      // Nothing for a refusal: the Bot is told what to fix and tries again.
-      return started ? <ChatTaskCard started={started} /> : null;
-    },
+    render: ({ result, status }) => (
+      <TaskToolView
+        result={result}
+        running={status !== "complete" && result === undefined}
+      />
+    ),
   });
   return null;
+}
+
+/** The tool's line while it starts the task, then the task's line, rising in if it arrived live. */
+function TaskToolView({
+  result,
+  running,
+}: {
+  result: unknown;
+  running: boolean;
+}) {
+  const live = useArrivedLive(running);
+  if (running)
+    return (
+      <ToolLine label={readToolName(START_TASK_TOOL, true).label} running />
+    );
+  const started = readStartedTask(result);
+  // Nothing for a refusal: the Bot is told what to fix and tries again.
+  if (!started) return null;
+  return (
+    <BuildInProvider value={live}>
+      <BuildIn order={0}>
+        <ChatTaskCard started={started} />
+      </BuildIn>
+    </BuildInProvider>
+  );
 }
