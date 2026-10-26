@@ -4,7 +4,7 @@
 
 ### An open-source proactive agent that gets your work done and keeps you in the loop
 
-Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https://docs.copilotkit.ai) · [Quick start](#quick-start) · [Overview](#overview) · [Status](#status) · [How it works](#how-it-works) · [Contributing](#contributing)
+Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https://docs.copilotkit.ai) · [Quick start](#quick-start) · [Overview](#overview) · [Features and Capabilities](#features-and-capabilities) · [How it works](#how-it-works) · [Contributing](#contributing)
 
 [![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/openbot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/d8503c81-32d8-4c65-a2b9-2cb15071ff14
 
 OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
 
-**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief; watching your mail as it arrives is being built now. The [status table](#status) says which parts work and which do not yet. Expect things to move. Issues and ideas are welcome.
+**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief; watching your mail as it arrives is being built now. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
@@ -46,35 +46,33 @@ OpenDuet does not wait to be asked. It starts your day with a short brief, keeps
 - **Checks what leaves.** Every outgoing message is checked for sensitive information, so a card number or a health detail does not go out by accident.
 - **Yours to run.** Self-host it, choose your own model, and keep your data in your own database.
 
-Some of this works today, and some of it is being built now. See [Status](#status).
+See [Features and Capabilities](#features-and-capabilities) for what works today.
 
-## Status
+## Features and Capabilities
 
-**Available today** means it works when you run this repository. **In progress** means it does not work yet. The two rows marked **In progress** are what is being built now: watching mail, calendar and Slack as they arrive, and the sensitive-information check on every outgoing message. A phone inbox, shown under [How it works](#how-it-works), is in progress too.
+Everything below works today when you run this repository.
 
-| Capability                   | What it means for you                                                                 | Status          |
-| ---------------------------- | ------------------------------------------------------------------------------------- | --------------- |
-| A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away.         | Available today |
-| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Anything you type while it carries an action out waits its turn and is answered after. Every action is checked against policy and recorded. | Available today |
-| Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. | Available today |
-| Memory                       | Threads and memory carry over through CopilotKit Intelligence.                        | Available today |
-| Skills                       | Reusable instructions you write once and call with `/`.                               | Available today |
-| Gmail and Google Calendar    | Each person connects their own account. OpenDuet reads mail and today's calendar, and sends a reply only after you answer. | Available today |
-| Connected apps               | Governed MCP connectors, including Google Drive and Notion.                           | Available today |
-| Scheduled work               | Routines: ask it to do something on a schedule and it runs as you.                    | Available today |
-| Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). | Available today |
-| Watching mail, calendar, Slack | Notices new mail, calendar changes, and Slack messages as they arrive. Today it reads your mail when the brief is made. | In progress     |
-| What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). Slack comes later. | Available today |
-| Morning brief                | The first time you open Chat each day after your first, it is already there: what needs you and why, what can wait, today's calendar, and anything it could not check, posted once a day however many tabs or devices you open. You can also ask for it any time. **Start** on a row that needs you hands that email to OpenDuet. Getting the brief on a schedule, through routines, is not yet verified. | Available today |
-| Tasks                        | One tab for what needs you, answered right there, what OpenDuet suggests from its background research, and what it is working on. Its newest suggestion also waits above Chat's composer, with **Start** and **Hide**. A suggestion you start stays in view: under **Working** while OpenDuet works, then **Ready for review** or **Needs input** with OpenDuet's next step, opening at its own message. Answer it in Chat, on its card or by deciding its approval, and it goes back to **Working** until OpenDuet replies. A run that fails says why, with **Try again** where running it again can help. Check one off and it folds into **Resolved**. | Available today |
-| Setup checklist              | Onboarding asks you to connect Gmail and Calendar and to turn on notifications, each with **Not now**, then ends on a list of what OpenDuet depends on: Intelligence, the model key, Google, your Gmail and Calendar, notifications, and the optional extras. Each is **Ready**, **Not checked** or **Needs setup**, from the real answer, with how to fix it. **Check again** asks Intelligence and the model provider again. **Settings → Setup** opens it again. | Available today |
-| Gets to know you             | On your first day it speaks first: it greets you, reads your recent mail and this week's calendar, then answers in three short bubbles (who you are, three ways it can help, and an invitation to correct it), with **Sounds right** and **Something's off** to tap. With Gmail and Calendar not connected, it promises no mail: it says what it can do now and shows the card to connect them. | Available today |
-| Make                         | Ask for a design system, a design, a dashboard, slides, a doc or a web page, or pick one from the **+** on the Make tab, and OpenDuet makes it. A card in Chat opens it, and Make keeps everything it made as thumbnails you can filter by kind. | Available today |
-| Channels                     | Make a channel for a piece of work: a name, an icon in a colour, and what it is for. OpenDuet says hello there and offers three things it could start on, keeps the work there about that purpose, and the tasks it starts there wear the channel's colour. Everything stays your one thread, and the menu lists your channels with Archived folded under them. | Available today |
-| Answers in a tap             | When it asks you to choose, the likely answers appear as replies you can tap.         | Available today |
-| Light or dark                | Follows your phone's setting, changing with it, or pick Light or Dark in Settings.    | Available today |
-| Say it instead               | Tap the voice button in Chat and say everything you need to do. It is written down and sent as your message. Needs a speech-to-text provider on the server (`TRANSCRIPTION_*`). | Available today |
-| Sensitive-info check         | A check on every outgoing message. OpenBot today classifies each tool as a read or a write and redacts secrets from its audit trail. | In progress |
+| Capability                   | What it means for you                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| A computer of its own        | Keeps working in its own browser, `/workspace`, and shell while you are away. |
+| Asks before it acts          | A reviewer checks every action that changes something, and the ones that matter pause for **Refuse**, **Allow once**, or **Always allow**. A message to other people always asks, once, showing who it goes to and what it says. Anything you type while it carries an action out waits its turn and is answered after. Every action is checked against policy and recorded. |
+| Never sees your passwords    | Logins go through a masked secret box. Saved credentials are encrypted and write-only. |
+| Memory                       | Threads and memory carry over through CopilotKit Intelligence. |
+| Skills                       | Reusable instructions you write once and call with `/`. |
+| Gmail and Google Calendar    | Each person connects their own account. OpenDuet reads mail and today's calendar, and sends a reply only after you answer. |
+| Connected apps               | Governed MCP connectors, including Google Drive and Notion. |
+| Scheduled work               | Routines: ask it to do something on a schedule and it runs as you. |
+| Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). |
+| What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). Slack comes later. |
+| Morning brief                | The first time you open Chat each day after your first, it is already there: what needs you and why, what can wait, today's calendar, and anything it could not check, posted once a day however many tabs or devices you open. You can also ask for it any time. **Start** on a row that needs you hands that email to OpenDuet. Getting the brief on a schedule, through routines, is not yet verified. |
+| Tasks                        | One tab for what needs you, answered right there, what OpenDuet suggests from its background research, and what it is working on. Its newest suggestion also waits above Chat's composer, with **Start** and **Hide**. A suggestion you start stays in view: under **Working** while OpenDuet works, then **Ready for review** or **Needs input** with OpenDuet's next step, opening at its own message. Answer it in Chat, on its card or by deciding its approval, and it goes back to **Working** until OpenDuet replies. A run that fails says why, with **Try again** where running it again can help. Check one off and it folds into **Resolved**. |
+| Setup checklist              | Onboarding asks you to connect Gmail and Calendar and to turn on notifications, each with **Not now**, then ends on a list of what OpenDuet depends on: Intelligence, the model key, Google, your Gmail and Calendar, notifications, and the optional extras. Each is **Ready**, **Not checked** or **Needs setup**, from the real answer, with how to fix it. **Check again** asks Intelligence and the model provider again. **Settings → Setup** opens it again. |
+| Gets to know you             | On your first day it speaks first: it greets you, reads your recent mail and this week's calendar, then answers in three short bubbles (who you are, three ways it can help, and an invitation to correct it), with **Sounds right** and **Something's off** to tap. With Gmail and Calendar not connected, it promises no mail: it says what it can do now and shows the card to connect them. |
+| Make                         | Ask for a design system, a design, a dashboard, slides, a doc or a web page, or pick one from the **+** on the Make tab, and OpenDuet makes it. A card in Chat opens it, and Make keeps everything it made as thumbnails you can filter by kind. |
+| Channels                     | Make a channel for a piece of work: a name, an icon in a colour, and what it is for. OpenDuet says hello there and offers three things it could start on, keeps the work there about that purpose, and the tasks it starts there wear the channel's colour. Everything stays your one thread, and the menu lists your channels with Archived folded under them. |
+| Answers in a tap             | When it asks you to choose, the likely answers appear as replies you can tap. |
+| Light or dark                | Follows your phone's setting, changing with it, or pick Light or Dark in Settings. |
+| Say it instead               | Tap the voice button in Chat and say everything you need to do. It is written down and sent as your message. Needs a speech-to-text provider on the server (`TRANSCRIPTION_*`). |
 
 ## Quick start
 
