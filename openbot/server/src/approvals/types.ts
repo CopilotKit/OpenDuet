@@ -348,26 +348,45 @@ export function approvalAction(candidate: ApprovalCandidate): ApprovalAction {
   };
 }
 
-export function approvalPreview(args: unknown, depth = 0): unknown {
-  if (depth > 4) return "…";
+/**
+ * What an approval shows the person: its arguments with secrets masked.
+ *
+ * `whole` is the person's own approvals inbox, where they decide. There nothing is cut: not a long
+ * string, not the twenty-first recipient, not a nested argument. An approval drawn from a cut copy
+ * is an approval of something nobody saw, and the cuts were silent: a 2,000-character email body
+ * lost its end with one ellipsis and no way to read the rest, and a list of 25 recipients showed 20.
+ * The app folds a long body behind "Show all" instead (components/approvals/approval-card.tsx).
+ *
+ * Without it, the bounded copy a chat card can carry (delivery/opentag-agent.ts), which clips each
+ * field again for its own limits.
+ */
+export function approvalPreview(
+  args: unknown,
+  depth = 0,
+  options: { whole?: boolean } = {},
+): unknown {
+  const whole = options.whole === true;
+  if (!whole && depth > 4) return "…";
   if (Array.isArray(args))
-    return args.slice(0, 20).map((value) => approvalPreview(value, depth + 1));
-  if (args && typeof args === "object")
-    return Object.fromEntries(
-      Object.entries(args)
-        .slice(0, 20)
-        .map(([key, value]) => [
-          key,
-          // Secrets by name. Not `text` or `content`: what is typed, written or sent is exactly
-          // what the person is approving, and hiding it let a Bot get "Allow once" on a payload
-          // nobody could see. Secret-looking values inside it are still masked below.
-          /pass|secret|token|authorization|cookie|credential/i.test(key)
-            ? "[private value]"
-            : approvalPreview(value, depth + 1),
-        ]),
+    return (whole ? args : args.slice(0, 20)).map((value) =>
+      approvalPreview(value, depth + 1, options),
     );
+  if (args && typeof args === "object") {
+    const entries = Object.entries(args);
+    return Object.fromEntries(
+      (whole ? entries : entries.slice(0, 20)).map(([key, value]) => [
+        key,
+        // Secrets by name. Not `text` or `content`: what is typed, written or sent is exactly
+        // what the person is approving, and hiding it let a Bot get "Allow once" on a payload
+        // nobody could see. Secret-looking values inside it are still masked below.
+        /pass|secret|token|authorization|cookie|credential/i.test(key)
+          ? "[private value]"
+          : approvalPreview(value, depth + 1, options),
+      ]),
+    );
+  }
   if (typeof args === "string")
-    return (args.length > 2000 ? `${args.slice(0, 1999)}…` : args)
+    return (!whole && args.length > 2000 ? `${args.slice(0, 1999)}…` : args)
       .replace(
         /((?:password|token|secret|api[_-]?key)\s*[=:]\s*)[^\s;]+/gi,
         "$1[private value]",

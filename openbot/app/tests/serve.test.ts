@@ -113,6 +113,78 @@ describe("serving port configuration", () => {
   }
 });
 
+/** Which addresses the installed app listens on, read off every `Bun.serve` it makes. */
+async function probeServingHosts(env: { OPENBOT_HOST?: string }) {
+  const directory = await mkdtemp(join(tmpdir(), "openbot-serve-hosts-"));
+  const preload = join(directory, "probe.mjs");
+  try {
+    await writeFile(
+      preload,
+      `const hosts = [];
+Bun.serve = (options) => {
+  hosts.push(options.hostname ?? "*");
+  return { stop() {} };
+};
+setTimeout(() => {
+  console.log("HOST_PROBE:" + JSON.stringify(hosts));
+  process.exit(0);
+}, 50);
+`,
+    );
+    const child = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "--no-env-file",
+        "--preload",
+        preload,
+        "serve.ts",
+      ],
+      cwd: join(import.meta.dir, ".."),
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const timeout = setTimeout(() => child.kill(), 2_000);
+    try {
+      const [exitCode, stdout] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+      ]);
+      return { exitCode, stdout };
+    } finally {
+      clearTimeout(timeout);
+      child.kill();
+      await child.exited;
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/*
+ * The installed app proxies `/api` to the server from this machine, so whatever it listens on, the
+ * server answers too, and with no sign-in that is its administrator. It listened on `::`, which is
+ * every interface, under a comment that called it both loopbacks.
+ */
+describe("serving addresses", () => {
+  test("both loopbacks and nothing else, unless OPENBOT_HOST says otherwise", async () => {
+    const result = await probeServingHosts({});
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('HOST_PROBE:["127.0.0.1","::1"]');
+    expect(result.stdout).toContain(
+      "OpenBot app on http://127.0.0.1:3010 and http://[::1]:3010",
+    );
+  });
+
+  test("OPENBOT_HOST=0.0.0.0 is every interface, as it listened before", async () => {
+    const result = await probeServingHosts({ OPENBOT_HOST: "0.0.0.0" });
+    expect(result.stdout).toContain('HOST_PROBE:["*"]');
+    expect(result.stdout).toContain(
+      "OpenBot app on every interface on port 3010",
+    );
+  });
+});
+
 /**
  * Serving the built app, which replaced `vite preview`.
  *

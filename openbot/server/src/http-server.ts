@@ -1,8 +1,10 @@
 import { DICTATION_HTTP_IDLE_SECONDS } from "@openbot/shared/dictation";
+import { listenAddress } from "@openbot/shared/listen-host";
 import { serve } from "bun";
 import { computerAccessCheck } from "./agents/computer-access";
 import type { AgentProfileStore } from "./agents/profile-store";
 import type { OpenBotRole } from "./auth/roles";
+import { appOrigins, crossSiteRefusal } from "./auth/same-origin";
 import { websocket as channelSocket } from "./channels/socket";
 import type { ComputerGateway } from "./computer/gateway";
 import { streamPathBotId } from "./computer/stream-path";
@@ -35,6 +37,16 @@ type StreamData = {
 type ChannelSocket = Parameters<typeof channelSocket.open>[0];
 type SocketData = StreamData | ChannelSocket["data"];
 
+/**
+ * Starts the server on each address in `config.listen`, and returns the addresses it is listening
+ * on, so the boot log names them rather than assuming one, and a way to stop every listener.
+ *
+ * One listener per address, because loopback is two of them (127.0.0.1 and ::1) and Bun binds one
+ * address per server. Only ::1 in the loopback default may be missing: a machine or container with
+ * IPv6 switched off has none, and refusing to start over it would take 127.0.0.1 down with it. An
+ * address somebody named in `OPENBOT_HOST` that cannot be bound stops the boot, as an unbindable
+ * port always has.
+ */
 export function startHttpServer(deps: {
   port: number;
   config: DeploymentConfig;
@@ -51,7 +63,7 @@ export function startHttpServer(deps: {
       env: { server: unknown },
     ) => Response | Promise<Response>;
   };
-}): void {
+}): { addresses: string[]; stop: () => void } {
   const {
     port,
     config,
@@ -88,7 +100,10 @@ export function startHttpServer(deps: {
   const asChannelSocket = (ws: { data: SocketData }) =>
     ws as unknown as ChannelSocket;
 
-  serve<SocketData>({
+  // The origins the app's own guard admits (app.ts), for the one upgrade that never reaches it.
+  const own = appOrigins(config);
+
+  const options: Parameters<typeof serve<SocketData>>[0] = {
     port,
     async fetch(request, server) {
       const url = new URL(request.url);
@@ -102,6 +117,15 @@ export function startHttpServer(deps: {
         streamBotId !== null &&
         request.headers.get("upgrade")?.toLowerCase() === "websocket"
       ) {
+        /*
+         * A page on another site may not open somebody's live screen, which shows what the Bot's
+         * browser shows and takes input into it. A WebSocket has no CORS, so this is the only thing
+         * that asks where the page is. Before sign-in, because the cookie rides along regardless.
+         */
+        const refusal = crossSiteRefusal(request, own);
+        if (refusal) {
+          return new Response(refusal.error, { status: refusal.status });
+        }
         if (!config.computer) {
           return new Response("No computer is configured.", { status: 503 });
         }
@@ -269,5 +293,30 @@ export function startHttpServer(deps: {
         ws.data.inward?.close();
       },
     },
-  });
+  };
+
+  const listening: string[] = [];
+  const servers: ReturnType<typeof serve>[] = [];
+  for (const { host, required } of config.listen) {
+    try {
+      servers.push(
+        serve<SocketData>({
+          ...options,
+          ...(host === undefined ? {} : { hostname: host }),
+        }),
+      );
+      listening.push(listenAddress(host, port));
+    } catch (error) {
+      if (required) throw error;
+      console.warn(
+        `Not listening on ${listenAddress(host, port)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return {
+    addresses: listening,
+    stop: () => {
+      for (const server of servers) server.stop(true);
+    },
+  };
 }

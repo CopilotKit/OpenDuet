@@ -325,7 +325,7 @@ async function stepThatAsksTwice() {
   );
   const card = (which: "boxes" | "friday") => {
     const found = asked.find((request) =>
-      String((request.action.args as { preview?: unknown }).preview).includes(
+      String((request.action.args as { body?: unknown }).body).includes(
         which === "boxes" ? "double-wall" : "Friday off",
       ),
     );

@@ -51,6 +51,7 @@ import {
   type PluginKind,
   PluginRefusedError,
   type PluginStoreOptions,
+  revokeRefreshTokenOverHttp,
   type StoredClient,
   TokenRefusedError,
   type Transaction,
@@ -71,6 +72,7 @@ export function createStoreContext(options: PluginStoreOptions) {
   const injectedVendor = options.callVendor;
   const exchangeRefreshToken =
     options.exchangeRefreshToken ?? exchangeRefreshTokenOverHttp;
+  const revokeAtVendor = options.revokeAtVendor ?? revokeRefreshTokenOverHttp;
   const registerClient = options.registerClient ?? registerDynamicClient;
   // No default, unlike the seams above: there is no real implementation in this tree to fall back
   // to, and a deployment with no Composio key is supposed to have no broker. See `./broker`.
@@ -2046,6 +2048,7 @@ export function createStoreContext(options: PluginStoreOptions) {
     encryptionKey,
     injectedVendor,
     exchangeRefreshToken,
+    revokeAtVendor,
     registerClient,
     broker,
     exchangeChains,

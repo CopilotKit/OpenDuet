@@ -58,6 +58,13 @@ SUPERVISOR_PORT="$(setting SUPERVISOR_PORT 4500)"
 # was ignored: the supervisor was still started and the server still told to use it.
 ONE_COMPUTER_EACH="$(setting OPENBOT_ONE_COMPUTER_EACH true)"
 export APP_PORT SERVER_PORT
+# Where the server and the app listen (shared/listen-host.ts): unset is this machine only when there
+# is no sign-in. The server reads it from `.env` itself; the app is handed it here, because Vite
+# reads only its own environment, and an app left on every interface proxies `/api` to the network.
+OPENBOT_HOST="$(setting OPENBOT_HOST "")"
+if [ -n "$OPENBOT_HOST" ]; then
+  export OPENBOT_HOST
+fi
 
 # Whether this run changed a secret that something already running may not have.
 #

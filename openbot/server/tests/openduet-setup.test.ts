@@ -5,6 +5,7 @@ import type { CredentialStatus } from "../src/credentials";
 import type { ModelCheckOutcome } from "../src/model-availability-check";
 import { createComputerCheck } from "../src/openduet/computer-check";
 import {
+  type ComputerVerdict,
   createSetupSources,
   intelligenceFact,
   modelKeyOf,
@@ -590,7 +591,7 @@ function appWith(input: {
   modelCheck?: () => ModelCheckOutcome;
   entitlements?: () => Promise<RuntimeEntitlementResponse>;
   computer?: boolean;
-  computerCheck?: () => Promise<"ready" | "needs_setup" | "not_checked">;
+  computerCheck?: () => Promise<ComputerVerdict>;
   apps?: boolean;
   chat?: boolean;
   signedIn?: boolean;
@@ -1146,4 +1147,95 @@ test("a configured computer without a reachability verdict is not yet checked", 
       "computer",
     ).status,
   ).toBe("not_checked");
+});
+
+describe("the Bot computer row", () => {
+  const computerOf = (computerStatus: ComputerVerdict | undefined) => {
+    const { computerStatus: _, ...facts } = READY;
+    return row(
+      setupRows(
+        computerStatus === undefined ? facts : { ...facts, computerStatus },
+        { productName: PRODUCT, audience: "admin" },
+      ),
+      "computer",
+    );
+  };
+
+  test("configured with no Bot's computer running yet reads Ready, and says when one starts", () => {
+    const computer = computerOf("idle");
+    expect(computer.status).toBe("ready");
+    expect(computer.detail).toBe(
+      "Bots can browse the web and work with files. Each Bot's computer starts the first time it's needed.",
+    );
+    expect(computer.fix).toBeNull();
+  });
+
+  test("configured and not checked never tells somebody to set what they already set", () => {
+    const computer = computerOf(undefined);
+    expect(computer.status).toBe("not_checked");
+    expect(computer.fix).toBeNull();
+    expect(computer.detail).not.toContain("Without it");
+  });
+
+  test("configured and failing names the address and token to check", () => {
+    const computer = computerOf("needs_setup");
+    expect(computer.status).toBe("needs_setup");
+    expect(computer.detail).toBe(
+      "Set up, but the computer service didn't answer. Check its address and token.",
+    );
+    expect(computer.fix).toMatchObject({
+      kind: "env",
+      names: ["AGENT_COMPUTER_URL", "COMPUTER_TOKEN"],
+    });
+  });
+
+  test("not configured still names the variables", () => {
+    const computer = row(
+      setupRows(UNSET, { productName: PRODUCT, audience: "admin" }),
+      "computer",
+    );
+    expect(computer.status).toBe("needs_setup");
+    expect(computer.detail).toBe(
+      "Without it, Bots can't browse the web or work with files.",
+    );
+  });
+
+  test("a computer service that answers with nothing running is idle, and wakes nothing", async () => {
+    let pushes = 0;
+    const check = createComputerCheck({
+      provider: {
+        list: async () => [
+          { botId: "asleep", status: "stopped", url: "http://asleep.local" },
+        ],
+      },
+      controls: () => ({
+        policyForBot: async () => ({ mode: "allow_all", rules: [] }),
+      }),
+      fetchImpl: Object.assign(
+        async () => {
+          pushes += 1;
+          return new Response(null, { status: 204 });
+        },
+        { preconnect() {} },
+      ),
+    });
+    expect(await check()).toBe("idle");
+    expect(pushes).toBe(0);
+  });
+
+  test("a fresh install's checklist reads the idle computer as Ready", async () => {
+    const app = appWith({
+      environment: {},
+      who: "admin",
+      computer: true,
+      computerCheck: createComputerCheck({
+        provider: { list: async () => [] },
+        controls: () => undefined,
+      }),
+    });
+    const computer = row((await checklistFrom(app)).checklist.rows, "computer");
+    expect(computer.status).toBe("ready");
+    expect(computer.fix).toBeNull();
+    expect(computer.detail).toContain("starts the first time it's needed");
+  });
 });

@@ -8,7 +8,11 @@ import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
 import { ThreadLockBusyError } from "@openbot/toolkit/lease";
 import type { TurnRunner } from "@openbot/toolkit/run-turn";
 import { plainFailure, taskStatus } from "../src/openduet/task-store";
-import { createTaskTurn } from "../src/openduet/task-threads";
+import {
+  createTaskTurn,
+  DEV_FAIL_TASKS_WHILE,
+  devFailTasksWhile,
+} from "../src/openduet/task-threads";
 
 const SCOPE = {
   ownerUserId: "owner",
@@ -388,5 +392,20 @@ describe("taskStatus", () => {
     expect(at(false, true, true)).toBe("working");
     expect(at(true, true, false)).toBe("needs_input");
     expect(at(true, false, true)).toBe("needs_input");
+  });
+});
+
+describe(DEV_FAIL_TASKS_WHILE, () => {
+  test("does nothing in production, whatever it names", () => {
+    expect(
+      devFailTasksWhile({
+        [DEV_FAIL_TASKS_WHILE]: "/tmp/fail",
+        NODE_ENV: "production",
+      }),
+    ).toBeUndefined();
+    expect(devFailTasksWhile({ [DEV_FAIL_TASKS_WHILE]: "/tmp/fail" })).toBe(
+      "/tmp/fail",
+    );
+    expect(devFailTasksWhile({ [DEV_FAIL_TASKS_WHILE]: " " })).toBeUndefined();
   });
 });

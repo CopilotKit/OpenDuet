@@ -21,7 +21,10 @@ import {
   createVerifier,
   redeemAuthorizationCode,
 } from "../src/plugins/oauth";
-import { exchangeRefreshTokenOverHttp } from "../src/plugins/plugin-store/model";
+import {
+  exchangeRefreshTokenOverHttp,
+  revokeRefreshTokenOverHttp,
+} from "../src/plugins/plugin-store/model";
 
 /**
  * The Gmail and Calendar adapter against the fake Google, over a real socket.
@@ -185,6 +188,28 @@ describe("the fake's own OAuth", () => {
     );
     expect(after.isError).toBe(true);
     expect(after.text).toContain("(401)");
+  });
+
+  test("Disconnect's revocation, sent as the store sends it, ends the grant", async () => {
+    const { refresh_token } = await signIn(fake.url);
+
+    expect(
+      await revokeRefreshTokenOverHttp({
+        revokeUrl: `${fake.url}/revoke`,
+        client: { clientId: "test-client", clientSecret: "test-secret" },
+        refreshToken: refresh_token,
+      }),
+    ).toBe("revoked");
+
+    const renewed = await fetch(`${fake.url}/token`, {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token,
+        client_id: "test-client",
+      }),
+    });
+    expect(renewed.status).toBe(400);
   });
 
   test("an API call without a valid token is a 401, which the adapter says how to fix", async () => {

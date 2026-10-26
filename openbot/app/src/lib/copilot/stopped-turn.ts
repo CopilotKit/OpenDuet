@@ -1,5 +1,6 @@
 import { useAgent } from "@copilotkit/react-core/v2";
 import { useEffect, useState } from "react";
+import { sayableReason } from "@/lib/channels/run-lifecycle";
 
 /**
  * Why the last turn ended without an answer, for a surface that has to say so itself.
@@ -50,8 +51,11 @@ export function useStoppedTurn(agentId: string): string | null {
   useEffect(() => {
     const subscription = agent.subscribe?.({
       onRunInitialized: () => setStopped(null),
-      onRunErrorEvent: ({ event }) => setStopped(stoppedReason(event?.message)),
-      onRunFailed: ({ error }) => setStopped(stoppedReason(error)),
+      // Through `sayableReason`, as the channel does, so a raw SDK or network error is never shown.
+      onRunErrorEvent: ({ event }) =>
+        setStopped(sayableReason(stoppedReason(event?.message))),
+      onRunFailed: ({ error }) =>
+        setStopped(sayableReason(stoppedReason(error))),
     });
     return () => subscription?.unsubscribe();
   }, [agent]);

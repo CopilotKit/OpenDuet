@@ -6,15 +6,11 @@ import {
 import { claimMorningBrief } from "@/lib/channels/morning-brief-claim";
 
 /**
- * What Chat asks for the first time it opens on a day that is not the first. It goes out wrapped in
- * the morning-brief frame (`shared/morning-brief.ts`), which tells the model nobody typed it, to call
- * `morning_brief`, and to say exactly one sentence after it; the transcript draws nothing where it
- * sits, so the Bot's reply and the brief's card are what the person finds.
- *
- * Plain, because the frame says everything about how to answer. The brief itself is the tool's,
- * sorted on the server the way evals/triage measures, and the card is the app's.
+ * What Chat asks for the first time it opens on a day that is not the first, declared in
+ * `shared/morning-brief.ts` because the server builds the message from it and takes none from the
+ * browser.
  */
-export const MORNING_BRIEF_REQUEST = "Give me my morning brief.";
+export { MORNING_BRIEF_REQUEST } from "@openbot/shared/morning-brief";
 
 /**
  * On a day that is not the first, the Bot speaks first: Chat opened on the person's ongoing

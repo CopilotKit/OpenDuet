@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { createAuditStore, recordAuditEvent } from "../../audit";
+import { decryptSecret } from "../../credentials";
 import type { Database } from "../../db/client";
 import {
   brokeredConnections,
@@ -35,6 +36,8 @@ import {
   type PendingAuthorization,
   PluginRefusedError,
   pendingAuthorizationFromRow,
+  type VendorRevocation,
+  VendorRevocationUnreachableError,
 } from "./model";
 
 /** OAuth clients and a person's connections, including every brokered (Composio) connection flow. */
@@ -44,6 +47,8 @@ export function connectionMethods(context: StoreContext) {
     database,
     auditStore,
     credentials,
+    encryptionKey,
+    revokeAtVendor,
     registerClient,
     broker,
     accountRow,
@@ -3134,6 +3139,133 @@ export function connectionMethods(context: StoreContext) {
     },
 
     /**
+     * End one person's own account for a `user-oauth` app this deployment holds the refresh token
+     * for (Gmail and Google Calendar, Drive, Notion): at the vendor first, then here.
+     *
+     * WHAT IT DOES, IN ORDER, UNDER ONE ROW LOCK.
+     * 1. Lock the person's connection row and the vault row it points at, so a tool call spending
+     *    the same token waits, and one queued behind this finds the connection gone
+     *    (`connectionTokenFor` reads both after taking the same lock).
+     * 2. Ask the vendor to withdraw the refresh token at the catalogue's own `revokeUrl` (RFC 7009),
+     *    with the deployment's OAuth client.
+     * 3. Revoke the vault row and delete the connection row, in the same transaction.
+     * 4. Write `mcp.account_disconnected`, reason `self`, saying what the vendor answered.
+     *
+     * VENDOR BEFORE LOCAL, AND AN UNREACHABLE VENDOR CHANGES NOTHING. The refresh token is the only
+     * thing that can withdraw the grant at Google, and it is in this row. Revoking our copy first
+     * would leave a live grant on somebody's mailbox that nothing here can reach any more, the
+     * failure `disconnectBrokered` is ordered against too. So a vendor that does not answer (a
+     * timeout, a 5xx, a 429) throws {@link VendorRevocationUnreachableError}, the transaction rolls
+     * back, and pressing Disconnect again is the recovery.
+     *
+     * A VENDOR THAT ANSWERS NO STILL GETS A DISCONNECT HERE. A refusal is an answer, and asking
+     * again would get the same one, so holding the person's access open until the vendor changes its
+     * mind would make Disconnect impossible. Our copy is revoked and the row goes, and the answer
+     * comes back as `vendorRevoked: false` so the page can tell the person to finish at the vendor.
+     * A token the vendor already calls invalid is `already_gone`: nothing is left to withdraw.
+     *
+     * THE ACCESS TOKEN NEEDS NOTHING. Nothing caches one (see `connectionTokenFor`): every call
+     * trades the refresh token for a fresh access token and throws it away, so once the row is gone
+     * no call can mint another.
+     *
+     * ONLY THE ASKER'S OWN ROW, by `(serverId, userId)` from the session: the route passes the
+     * signed-in person and nothing from the request names whose account this is. A person with no
+     * row, including on a Shared app whose account is the deployment's, gets `disconnected: false`
+     * and nothing is touched.
+     */
+    async disconnectHeld(input: {
+      serverId: string;
+      userId: string;
+      by: string;
+    }): Promise<{ disconnected: boolean; vendorRevoked: boolean }> {
+      if (!input.userId) return { disconnected: false, vendorRevoked: false };
+      const { entry } = await requireServer(input.serverId);
+      if (entry?.auth.kind !== "user-oauth") {
+        throw new PluginRefusedError(
+          "That app doesn't connect this way.",
+          null,
+        );
+      }
+      const { revokeUrl } = entry.auth;
+      const vendor = entry.vendor;
+      /*
+       * The client, read before the transaction rather than inside it, as `connectionTokenFor`
+       * reads it: it is per server, not what the lock protects, and reading it inside would open a
+       * second pooled connection while this one holds row locks. None held is still an ask.
+       */
+      const client = await storedOAuthClient(input.serverId);
+      const owned = and(
+        eq(mcpUserCredentials.serverId, input.serverId),
+        eq(mcpUserCredentials.userId, input.userId),
+      );
+
+      const answer = await database.transaction(async (transaction) => {
+        const [row] = await transaction
+          .select({ credentialId: mcpUserCredentials.credentialId })
+          .from(mcpUserCredentials)
+          .where(owned)
+          .for("update");
+        if (!row) return null;
+        const [credential] = await transaction
+          .select({
+            encryptedValue: credentialRows.encryptedValue,
+            revokedAt: credentialRows.revokedAt,
+          })
+          .from(credentialRows)
+          .where(eq(credentialRows.id, row.credentialId))
+          .for("update");
+
+        /*
+         * A credential already revoked here (the vendor answered `invalid_grant` on a call, which
+         * revokes it) has nothing live to withdraw, so the vendor is not asked; the row still goes.
+         */
+        let said: VendorRevocation | "not_asked" = "not_asked";
+        if (credential && credential.revokedAt === null) {
+          said = await revokeAtVendor({
+            revokeUrl,
+            client,
+            refreshToken: await decryptSecret(
+              encryptionKey,
+              credential.encryptedValue,
+            ),
+          });
+          if (said === "unreachable") {
+            throw new VendorRevocationUnreachableError(vendor);
+          }
+          await credentials.revoke(row.credentialId, transaction);
+        }
+        await transaction.delete(mcpUserCredentials).where(owned);
+        return said;
+      });
+      if (answer === null) return { disconnected: false, vendorRevoked: false };
+
+      const vendorRevoked = answer === "revoked" || answer === "already_gone";
+      await recordAuditEvent(auditStore, {
+        eventType: "mcp.account_disconnected",
+        targetType: "mcp_server",
+        targetId: input.serverId,
+        payload: {
+          actor: input.by,
+          server: input.serverId,
+          owner: input.userId,
+          reason: "self",
+          /*
+           * True only when the vendor confirmed it, or said the token was already dead; see the
+           * event's own note in `audit.ts`. Spelled as a literal per branch, never the answer
+           * passed through: what the trail may claim is decided once, by `vendorRevocationClaim`,
+           * for every brokered writer (`sole-definition.test.ts`), and a held account has no
+           * broker to ask it of. `vendorAnswer` is the one word for what the vendor said.
+           */
+          ...(vendorRevoked
+            ? { vendorRevocationRequested: true }
+            : { vendorRevocationRequested: false }),
+          vendorAnswer: answer,
+        },
+      });
+      return { disconnected: true, vendorRevoked };
+    },
+
+    /**
      * Retire every connector credential belonging to one person.
      *
      * WHAT THIS IS FOR. "We removed their access" has to be true of the thing that matters, which is
@@ -3160,7 +3292,8 @@ export function connectionMethods(context: StoreContext) {
      * Sweeping the vault alone therefore left that gate passing for somebody who had been removed.
      *
      * NOT VENDOR-SIDE REVOCATION FOR THE VAULT HALF. That needs the OAuth client and the vendor's
-     * revoke endpoint, and it belongs with disconnect. Those rows are the half that stops us
+     * revoke endpoint, and it belongs with disconnect, which asks for it ({@link disconnectHeld}).
+     * Offboarding does not, yet. Those rows are the half that stops us
      * holding the secret; the grant at Google outlives it until somebody revokes it there. Said
      * plainly rather than implied, because the difference matters to whoever has to answer for it.
      *

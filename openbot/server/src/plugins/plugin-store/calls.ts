@@ -359,6 +359,7 @@ export function callMethods(context: StoreContext) {
           botId: input.botId,
           audience: share.audience,
           content: share.content,
+          message: share.message,
           origin: { kind: "unknown" },
         });
         if (shareVerdict.status !== "allowed") {

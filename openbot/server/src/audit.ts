@@ -225,9 +225,14 @@ export const auditEventTypes = [
    * administrator removing them, because those are the same effect and very different events.
    *
    * `vendorRevocationRequested` says whether the grant at the vendor was asked to be withdrawn as
-   * well. It is false for every credential this deployment holds in its own vault: removing
-   * somebody stops us holding a usable secret, and the grant at Google outlives it until it is
-   * revoked there, which nothing on that path asks for. It is true for a brokered account whose
+   * well. It is false when an administrator removes somebody who held a credential in this
+   * deployment's own vault: that stops us holding a usable secret, and the grant at Google outlives
+   * it until it is revoked there, which nothing on that path asks for. When a person disconnects
+   * their own vault-held account (`disconnectHeld`), the vendor's revocation endpoint is asked
+   * first, and the field is true only when the vendor confirmed it or said the token was already
+   * dead; `vendorAnswer` beside it is the one word for what the vendor said (`revoked`,
+   * `already_gone`, `refused`, or `not_asked` for a credential already revoked here), never its
+   * text. It is true for a brokered account whose
    * withdrawal Composio accepted — accepted rather than completed, because the upstream revocation
    * runs as a background job with no supported way to poll it, which is why the field is named for
    * the ask. Recorded rather than glossed, because a row that implied otherwise would be worse

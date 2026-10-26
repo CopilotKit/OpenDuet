@@ -59,9 +59,15 @@ export function TasksScreen() {
     <ScreenScroll
       overlay={
         bot ? (
+          /*
+           * IN PIXELS, NOT REM, LIKE THE SPACER AT THE FOOT OF THE LIST. It is an icon, and an icon
+           * does not get bigger when the person's text does. In rem it was 112px across at 200% text,
+           * and it sat over the first row's title and status. The spacer below is sized from it, so
+           * the last row can always scroll clear of it.
+           */
           <button
             aria-label="Add a task"
-            className="absolute right-4 bottom-[calc(var(--duet-tab-space,0px)+14px)] z-20 grid size-14 place-items-center rounded-full bg-duet-black text-duet-on-black shadow-duet-raised transition-[filter,transform] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
+            className="absolute right-[16px] bottom-[calc(var(--duet-tab-space,0px)+14px)] z-20 grid size-[56px] place-items-center rounded-full bg-duet-black text-duet-on-black shadow-duet-raised transition-[filter,transform] hover:brightness-125 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
             onClick={() => setAdding(true)}
             type="button"
           >
@@ -112,8 +118,11 @@ export function TasksScreen() {
           />
         )}
       </div>
-      {/* Room for the last row to scroll clear of the +. */}
-      {bot ? <div aria-hidden className="h-16" /> : null}
+      {/*
+       * Room for the last row to scroll clear of the +: its 56px and its 14px lift, less the 32px the
+       * list already ends with, and a little air. Pixels, as the button is.
+       */}
+      {bot ? <div aria-hidden className="h-[64px]" /> : null}
       {adding && bot ? (
         <NewTaskSheet
           bot={bot}
@@ -134,6 +143,11 @@ export function TasksScreen() {
  * screen, just under the discs, which is -20px here, since a sticky box is held inside the list's
  * 100px top padding.
  * Search opens a field under it that narrows both lists by title.
+ *
+ * IT WRAPS RATHER THAN RUNS OFF THE SCREEN. The two words are display size and follow the person's
+ * text size; at 200% they are wider than a phone, and the row used to keep them on one line and push
+ * sort and search past the right edge, where search could not be reached at all. Now the words wrap
+ * onto a second line when they must, and sort and search drop under them, kept at the right.
  */
 function TasksSwitch({
   view,
@@ -168,10 +182,10 @@ function TasksSwitch({
         "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-4 after:bg-[linear-gradient(var(--duet-surface),transparent)] after:content-['']",
       )}
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div
           aria-label="Tasks"
-          className="flex items-baseline gap-4"
+          className="flex min-w-0 flex-wrap items-baseline gap-x-4"
           role="tablist"
         >
           <SwitchTab id="active" onView={onView} view={view}>
@@ -181,7 +195,7 @@ function TasksSwitch({
             Up next
           </SwitchTab>
         </div>
-        <div className="flex shrink-0 gap-1">
+        <div className="ml-auto flex shrink-0 gap-1">
           <IconButton icon="sort" label={sortLabel} onClick={onOrder} />
           <IconButton
             expanded={searching}
@@ -273,7 +287,8 @@ function IconButton({
     <button
       aria-expanded={expanded}
       aria-label={label}
-      className="duet-glass grid size-10 place-items-center rounded-full text-duet-ink shadow-duet-glass transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
+      // 44px, the smallest tap target (parity-spec 2.11), and in pixels: an icon, like the +.
+      className="duet-glass grid size-[44px] place-items-center rounded-full text-duet-ink shadow-duet-glass transition-transform focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-95"
       onClick={onClick}
       title={label}
       type="button"

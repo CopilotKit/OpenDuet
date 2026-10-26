@@ -82,6 +82,14 @@ export type SetupFix =
  */
 export type SetupStatus = "ready" | "needs_setup" | "not_checked";
 
+/**
+ * What the Bot computer check found, which has one answer more than a row's status: `idle`, the
+ * computer service answered and no Bot's computer is running yet. That is how every correctly set
+ * up install starts, because a computer starts the first time a Bot needs one, so the row reads
+ * Ready and says so. See `createComputerCheck`.
+ */
+export type ComputerVerdict = SetupStatus | "idle";
+
 export type SetupRow = {
   id: SetupRowId;
   /** A deployment row is the admin's to set up; a person row is the reader's own. */
@@ -156,7 +164,8 @@ export type SetupFacts = {
   primaryBot: string;
   /** A Bot computer is configured. Absent, its routes are not mounted at all. */
   computer: boolean;
-  computerStatus?: SetupStatus;
+  /** What the computer check last found, when one is configured. Absent, nobody has asked. */
+  computerStatus?: ComputerVerdict;
   /** A broker for apps beyond the ones an admin adds, and which one this deployment would use. */
   apps: { configured: boolean; provider: BrokerProvider };
   /** The OpenTag pairing that carries Slack and Microsoft Teams. */
@@ -256,16 +265,7 @@ export function setupRows(
       id: "computer",
       title: "Bot computer",
       required: false,
-      status: facts.computer
-        ? (facts.computerStatus ?? "not_checked")
-        : "needs_setup",
-      readyDetail: "Bots can browse the web and work with files.",
-      gapDetail: "Without it, Bots can't browse the web or work with files.",
-      fix: {
-        kind: "env",
-        names: ["AGENT_COMPUTER_URL", "COMPUTER_TOKEN"],
-        docsUrl: `${DOCS}/configuration.md#computer-and-supervisor`,
-      },
+      ...computerRow(facts),
     }),
     deployment({
       id: "apps",
@@ -290,6 +290,64 @@ export function setupRows(
       },
     }),
   ];
+}
+
+/**
+ * The Bot computer row, from whether one is configured and what the check last found.
+ *
+ * EACH STATE SAYS ITS OWN THING, because they ask different people for different acts. Not
+ * configured is the admin's to set, and names the variables. Configured and answering, with no Bot's
+ * computer running yet, is how a correct install starts, so it reads Ready and says when one starts.
+ * Configured but not checked has nothing to fix yet. Configured and failing is the address or the
+ * token, so it names those. It used to name the variables in every state but Ready, which told
+ * somebody who had already set both to set them.
+ */
+function computerRow(facts: SetupFacts): {
+  status: SetupStatus;
+  readyDetail: string;
+  gapDetail: string;
+  fix: SetupFix | null;
+} {
+  const variables: SetupFix = {
+    kind: "env",
+    names: ["AGENT_COMPUTER_URL", "COMPUTER_TOKEN"],
+    docsUrl: `${DOCS}/configuration.md#computer-and-supervisor`,
+  };
+  const ready = "Bots can browse the web and work with files.";
+  if (!facts.computer)
+    return {
+      status: "needs_setup",
+      readyDetail: ready,
+      gapDetail: "Without it, Bots can't browse the web or work with files.",
+      fix: variables,
+    };
+  switch (facts.computerStatus ?? "not_checked") {
+    case "ready":
+      return { status: "ready", readyDetail: ready, gapDetail: "", fix: null };
+    case "idle":
+      return {
+        status: "ready",
+        readyDetail: `${ready} Each Bot's computer starts the first time it's needed.`,
+        gapDetail: "",
+        fix: null,
+      };
+    case "not_checked":
+      return {
+        status: "not_checked",
+        readyDetail: ready,
+        gapDetail:
+          "Set up, not checked yet. Each Bot's computer starts the first time it's needed.",
+        fix: null,
+      };
+    case "needs_setup":
+      return {
+        status: "needs_setup",
+        readyDetail: ready,
+        gapDetail:
+          "Set up, but the computer service didn't answer. Check its address and token.",
+        fix: variables,
+      };
+  }
 }
 
 const INTELLIGENCE_VARIABLES = [
@@ -613,7 +671,7 @@ export function createSetupSources(input: {
   primaryBot: string;
   computer: boolean;
   /** Authenticated reachability and policy delivery, with per-operation deadlines and no wake. */
-  computerCheck?: () => Promise<SetupStatus>;
+  computerCheck?: () => Promise<ComputerVerdict>;
   apps: { configured: boolean; provider: BrokerProvider };
   chat: boolean;
 }): SetupSources {
@@ -629,7 +687,7 @@ export function createSetupSources(input: {
       intelligenceFact,
     );
 
-  const askComputer = async (): Promise<SetupStatus> => {
+  const askComputer = async (): Promise<ComputerVerdict> => {
     if (!input.computer) return "needs_setup";
     if (!input.computerCheck) return "not_checked";
     try {

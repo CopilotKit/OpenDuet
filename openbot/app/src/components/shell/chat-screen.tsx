@@ -8,19 +8,10 @@ import {
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelChat } from "@/components/channels/channel-chat";
 import { ConversationView } from "@/components/channels/conversation-view";
-import { FIRST_DAY_REQUEST_WITHOUT_MAIL } from "@/components/channels/first-day-greeting";
 import { useCheckInNotifications } from "@/components/shell/check-in-notifier";
 import { ChatSuggestionProvider } from "@/components/shell/chat-suggestion";
-import {
-  DraftWatch,
-  FIRST_DAY_REQUEST,
-  useFirstDayGreeting,
-} from "@/components/shell/first-day";
-import {
-  MORNING_BRIEF_REQUEST,
-  PersonWatch,
-  useMorningBrief,
-} from "@/components/shell/morning-brief";
+import { DraftWatch, useFirstDayGreeting } from "@/components/shell/first-day";
+import { PersonWatch, useMorningBrief } from "@/components/shell/morning-brief";
 import {
   seedMessage,
   stashFirstMessage,
@@ -31,9 +22,12 @@ import { botAppQueryOptions } from "@/lib/app-access/queries";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { botAttentionQueryOptions } from "@/lib/bot-lifecycle/queries";
 import { CheckInArrivalContext } from "@/lib/channels/check-in";
-import { frameFirstDay } from "@/lib/channels/first-day";
+import {
+  type FirstDayGreeting,
+  firstDayGreeting,
+} from "@/lib/channels/first-day";
 import { useMarkOpenChannelRead } from "@/lib/channels/mark-read";
-import { frameMorningBrief, localDateOf } from "@/lib/channels/morning-brief";
+import { localDateOf } from "@/lib/channels/morning-brief";
 import { client } from "@/lib/client";
 import { ONGOING_SEARCH_LIMIT, ongoingChannel } from "@/lib/channels/ongoing";
 import {
@@ -158,11 +152,8 @@ function OngoingChat({
         "brief",
         {
           method: "POST",
-          body: {
-            agentId: bot.id,
-            date: today,
-            brief: frameMorningBrief(MORNING_BRIEF_REQUEST),
-          },
+          // No text: the server writes the brief's message itself (`morningBriefMessage`).
+          body: { agentId: bot.id, date: today },
           fallback: "Couldn't ask for the morning brief.",
         },
       );
@@ -209,7 +200,11 @@ function FirstMessage({
 }) {
   const queryClient = useQueryClient();
   const createChannel = useMutation({
-    mutationFn: (input: { agentId: string; greeting?: string; date: string }) =>
+    mutationFn: (input: {
+      agentId: string;
+      greeting?: FirstDayGreeting;
+      date: string;
+    }) =>
       client<{ channel: AgentChannel; claimed: boolean }>(
         "/api/channels/first-day",
         "start",
@@ -231,8 +226,12 @@ function FirstMessage({
   /** The person has typed into the composer. */
   const typed = useRef(false);
 
-  /** Sends the first message, from the composer or as the greeting. Throws when it fails. */
-  const start = async (text: string, greeting = false) => {
+  /**
+   * Sends the first message, from the composer or as the greeting, which names which first day it
+   * is. The server writes the greeting's message from that alone (`firstDayGreeting`); `text` is
+   * the same message, drawn here until the conversation takes over. Throws when it fails.
+   */
+  const start = async (text: string, greeting?: FirstDayGreeting) => {
     if (startingRef.current)
       throw new Error(
         "The conversation is still starting. Try again in a moment.",
@@ -250,7 +249,7 @@ function FirstMessage({
         start: async (agentId, first) => {
           const result = await createChannel.mutateAsync({
             agentId,
-            ...(greeting ? { greeting: first } : {}),
+            ...(greeting ? { greeting } : {}),
             // The first day takes its own date's morning brief, so none is posted under the
             // greeting when Chat is opened again later today (`morningBrief` on the server).
             date: localDateOf(new Date()),
@@ -291,13 +290,10 @@ function FirstMessage({
         ? null
         : `${me.data?.id ?? "unknown"}:${bot.id}`,
     clear: () => !begun.current && !typed.current,
-    greet: () =>
-      start(
-        canReadMail
-          ? frameFirstDay(FIRST_DAY_REQUEST)
-          : frameFirstDay(FIRST_DAY_REQUEST_WITHOUT_MAIL, { mail: false }),
-        true,
-      ),
+    greet: () => {
+      const which = canReadMail ? "with_mail" : "without_mail";
+      return start(firstDayGreeting(which), which);
+    },
   });
 
   return (

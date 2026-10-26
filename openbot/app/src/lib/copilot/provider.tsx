@@ -21,6 +21,24 @@ import { SandboxedTools } from "./sandboxed-tools";
 import { SkillTools } from "./skill-tools";
 
 /**
+ * Whether CopilotKit's developer inspector is drawn over the app. Off unless a developer asks for it
+ * with `VITE_COPILOTKIT_INSPECTOR=true` when starting the app.
+ *
+ * OFF BY DEFAULT BECAUSE THE SDK'S DEFAULT IS WRONG FOR THIS PRODUCT. The SDK turns the inspector on
+ * for every development build served from localhost, and the README's own path (`start.sh`) serves
+ * the app through Vite in development mode. So everybody who followed the README got a floating
+ * button over the tab bar, plus the SDK's own promotional popover over the header and the page
+ * titles. The button also sat on the New channel sheet's Create and on a page's "…". That is a
+ * developer's tool drawn over a person's product. `enableInspector={false}` is the SDK's documented
+ * switch (`CopilotKitProviderProps.enableInspector`, react-core 1.77), and it removes both.
+ */
+export function inspectorEnabled(
+  environment: Record<string, string | boolean | undefined> = import.meta.env,
+): boolean {
+  return environment.VITE_COPILOTKIT_INSPECTOR === "true";
+}
+
+/**
  * The CopilotKit client, wrapped once for the whole authenticated app.
  *
  * `credentials: "include"` is the load-bearing part. OpenBot authenticates with a Better Auth
@@ -41,6 +59,7 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
     <CopilotKitProvider
       runtimeUrl="/api/copilotkit"
       credentials="include"
+      enableInspector={inspectorEnabled()}
       {...a2uiProviderOptions(capabilities?.generativeUi)}
       /*
        * Passed only when this deployment actually has the capability, and this is the load-bearing

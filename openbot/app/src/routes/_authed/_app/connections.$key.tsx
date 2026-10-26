@@ -1,5 +1,5 @@
 import { IconArrowUpRight, IconChevronDown } from "@tabler/icons-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { IdentityConnectionPage } from "@/components/connections/identity-connection-page";
@@ -30,7 +30,11 @@ import {
 } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
-import { connectAccountMutationOptions } from "@/lib/plugins/mutations";
+import { appConfig } from "@/lib/generated/application-config";
+import {
+  connectAccountMutationOptions,
+  disconnectHeldMutationOptions,
+} from "@/lib/plugins/mutations";
 import {
   brokeredProvenance,
   disconnectSiblingsNotice,
@@ -44,6 +48,9 @@ import {
   pluginsProvider,
 } from "@/lib/plugins/queries";
 import { searchTextEntry } from "@/lib/search-text";
+
+/** The product's own name, for the sentences a person reads here. */
+const PRODUCT = appConfig.brand.productName;
 
 /**
  * Whether this server is reached through Composio AS THIS PERSON.
@@ -174,6 +181,10 @@ function AppConnectionPage() {
   const plugins = useQuery(pluginsPageQueryOptions());
   const connections = useQuery(connectionsQueryOptions());
   const [notice, setNotice] = useState<string | null>(null);
+  /** What a disconnect from this page ended, said once it has. Not an error, so not `notice`. */
+  const [done, setDone] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const disconnect = useMutation(disconnectHeldMutationOptions(queryClient));
 
   const connect = useMutation({
     ...connectAccountMutationOptions(),
@@ -517,7 +528,7 @@ function AppConnectionPage() {
         <PageEmpty>
           {entry
             ? "Bots use one shared account for this app, the same for everybody."
-            : "OpenBot has no app by that name."}
+            : `${PRODUCT} has no app by that name.`}
         </PageEmpty>
       </PageShell>
     );
@@ -532,6 +543,11 @@ function AppConnectionPage() {
       {notice ? (
         <p className="text-destructive text-sm" role="alert">
           {notice}
+        </p>
+      ) : null}
+      {done ? (
+        <p className="text-sm" role="status">
+          {done}
         </p>
       ) : null}
 
@@ -585,23 +601,32 @@ function AppConnectionPage() {
                    */}
                   <DropdownMenuContent align="end" className="w-auto">
                     <DropdownMenuItem
-                      onClick={() =>
+                      disabled={disconnect.isPending}
+                      onClick={() => {
                         /*
-                         * NOT BUILT YET, and it says so rather than appearing to work.
+                         * ENDS IT, AT THE VENDOR FIRST. The server asks the vendor to withdraw the
+                         * grant, then revokes this deployment's copy and deletes the connection
+                         * (`disconnectHeld`). It used to say it could not disconnect here, because
+                         * none of those three acts existed for an account held in the vault.
                          *
-                         * Withdrawing is three acts — revoke at the vendor, revoke the vault
-                         * credential, delete the row — and none exist. An item that closed the menu
-                         * and changed nothing would report that access had been withdrawn when it
-                         * had not, which is the one outcome worse than not offering it.
+                         * What it says after depends on the vendor's answer, because the person's
+                         * next step does: nothing, or remove the app at the vendor as well.
                          */
-                        setNotice(
-                          `You can't disconnect here yet. To stop access now, remove OpenBot in your ${entry.vendor} account's third-party access settings.`,
-                        )
-                      }
-                      className="whitespace-nowrap"
+                        setNotice(null);
+                        setDone(null);
+                        disconnect.mutate(key, {
+                          onSuccess: (answer) =>
+                            setDone(
+                              answer.vendorRevoked || !answer.disconnected
+                                ? `Disconnected. ${PRODUCT} can't use your ${entry.vendor} account any more.`
+                                : `Disconnected here. ${entry.vendor} didn't confirm it, so also remove ${PRODUCT} in your ${entry.vendor} account's third-party access settings.`,
+                            ),
+                          onError: (thrown: Error) => setNotice(thrown.message),
+                        });
+                      }}
                       variant="destructive"
                     >
-                      Disconnect your {entry.title} account
+                      {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -631,7 +656,7 @@ function AppConnectionPage() {
 
       {connection ? (
         <PageSection
-          description={`What you allowed, as ${entry.vendor} recorded it. This can be less than OpenBot asked for.`}
+          description={`What you allowed, as ${entry.vendor} recorded it. This can be less than ${PRODUCT} asked for.`}
           title="Access"
         >
           <PageRows>

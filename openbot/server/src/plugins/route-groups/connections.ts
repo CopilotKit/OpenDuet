@@ -28,6 +28,7 @@ import {
   CatalogueEntryUnknownError,
   type OAuthClient,
   PluginRefusedError,
+  VendorRevocationUnreachableError,
 } from "../store";
 import {
   type AuthorizationRefusal,
@@ -1214,7 +1215,53 @@ export function mountConnectionRoutes({
    * refused to anybody but an administrator.
    */
   routes.delete("/servers/:id/connection", requireUser, async (context) => {
-    const resolved = await brokeredAccountFor(context, context.req.param("id"));
+    const serverId = context.req.param("id");
+    /*
+     * AN ACCOUNT THIS DEPLOYMENT HOLDS ITSELF, BEFORE THE BROKERED PATH BELOW EVER SEES IT.
+     *
+     * A `user-oauth` app (Gmail and Google Calendar, Drive, Notion) is reached with a refresh token
+     * in this deployment's own vault, not through a broker, so `brokeredAccountFor` answers it with
+     * "That app doesn't connect this way." That is why its page used to offer Disconnect and then
+     * say it couldn't: there was no route that could end it. `disconnectHeld` is that route's work,
+     * and its docblock says the order and why.
+     *
+     * WHOSE ACCOUNT IS THE SESSION'S, as on the brokered path: the store is handed the signed-in
+     * person and nothing from the request, so this DELETE can only ever end its caller's own grant.
+     * Not admin-gated, for the same reason connecting is not: it is the person's own account.
+     */
+    const address = await store.serverAddress(serverId);
+    const entry = catalogueEntry(serverId);
+    if (
+      address !== undefined &&
+      appOfUrl(address.url) === null &&
+      entry?.auth.kind === "user-oauth"
+    ) {
+      try {
+        return context.json(
+          await store.disconnectHeld({
+            serverId,
+            userId: context.var.actor.id,
+            by: context.var.actor.id,
+          }),
+        );
+      } catch (error) {
+        /*
+         * The vendor could not be asked, so nothing was changed and pressing again is the recovery.
+         * 502 because it is the vendor, not this deployment or the person, that did not answer.
+         */
+        if (error instanceof VendorRevocationUnreachableError) {
+          return context.json(
+            {
+              error: `Couldn't reach ${error.vendor}, so nothing was disconnected. Try again in a moment.`,
+            },
+            502,
+          );
+        }
+        throw error;
+      }
+    }
+
+    const resolved = await brokeredAccountFor(context, serverId);
     if (resolved.refusal) {
       return context.json(
         { error: resolved.refusal.error },

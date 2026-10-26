@@ -7,6 +7,13 @@ import {
   isLearningContainerId,
   type LearningTarget,
 } from "@openbot/shared/learning";
+import {
+  LISTEN_HOST_VARIABLE,
+  type ListenHost,
+  listenHosts,
+} from "@openbot/shared/listen-host";
+import { listenPort } from "@openbot/shared/listen-port";
+import { networkInterfaces } from "node:os";
 import { singleUserEnabled } from "./auth/dev-actor";
 import { normalizeDomain } from "./auth/email-domain";
 import { organizationAuthority } from "./auth/organization";
@@ -202,6 +209,19 @@ export type DeploymentConfig = {
   voice?: VoiceConfig;
   /** The port the API listens on. Named `PORT` or `SERVER_PORT`; see `serverPort`. */
   port: number;
+  /**
+   * Where the API listens: `OPENBOT_HOST`, or loopback in single-user mode and every interface
+   * otherwise. See `shared/listen-host.ts` for why single-user mode keeps to this machine.
+   */
+  listen: ListenHost[];
+  /**
+   * Where this deployment's own pages are served from, beyond what `publicUrl`, `appUrl` and
+   * `auth` already name: every `TRUSTED_ORIGINS` entry (which `auth` only keeps when sign-in is
+   * configured, and a desktop install has none), and the loopback addresses of the app's port,
+   * `APP_PORT`. A state-changing `/api` request from any other page is refused
+   * (auth/same-origin.ts). Optional so a hand-built config in a test still describes a deployment.
+   */
+  appOrigins?: string[];
   databaseUrl: string;
   keyEncryptionKey: string;
   /**
@@ -1335,6 +1355,8 @@ function serverPort(environment: Environment): number {
 
 export function loadConfig(
   environment: Environment = process.env,
+  /** This machine's network interfaces, for {@link listenAddresses}. A test passes its own. */
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
 ): DeploymentConfig {
   const google = oauthClient(environment, "GOOGLE");
   const auth = authConfig(environment, google);
@@ -1364,7 +1386,7 @@ export function loadConfig(
     keyEncryptionKey: deploymentKey,
   });
 
-  return {
+  const loaded = {
     port: serverPort(environment),
     transcription: transcriptionConfig(environment),
     voice: voiceConfig(environment),
@@ -1421,6 +1443,58 @@ export function loadConfig(
       : {}),
     ...(workerSharedSecret ? { workerSharedSecret } : {}),
   };
+  // After everything above, so its refusals keep the order they were always raised in.
+  return {
+    ...loaded,
+    listen: listenAddresses(environment, loaded.singleUser, interfaces),
+    appOrigins: appOriginsFrom(environment),
+  };
+}
+
+/**
+ * Where the API listens. `OPENBOT_HOST` when set; otherwise this machine alone in single-user mode,
+ * where whoever reaches the port is the administrator, and every interface for a deployment whose
+ * routes all ask who is calling, which is how every such deployment has always listened.
+ *
+ * THIS MACHINE INCLUDES ITS CONTAINERS. The Bots run in Docker and call back into this server at
+ * `host.docker.internal` (docker-compose.yml, and the desktop's env.rs). Docker Desktop carries that
+ * to the host's loopback, but Docker Engine on Linux maps it to the default bridge's own address on
+ * the host, `docker0`, which a loopback listener never answers: every tool call a Bot made would
+ * fail. So where `docker0` exists, its address is listened on too. It is an address on this machine
+ * that only this machine and its containers route to, the same reach loopback already has for a
+ * server whose Bots are its containers. Not required, because a missing bridge is not a failure.
+ */
+export function listenAddresses(
+  environment: Environment,
+  singleUser: boolean,
+  interfaces: ReturnType<typeof networkInterfaces>,
+): ListenHost[] {
+  const listen = listenHosts(
+    optional(environment, LISTEN_HOST_VARIABLE),
+    singleUser ? "loopback" : "every",
+  );
+  if (!listen.ok) throw new Error(listen.reason);
+  if (optional(environment, LISTEN_HOST_VARIABLE) || !singleUser)
+    return listen.hosts;
+  const bridge = interfaces.docker0?.find(
+    (entry) => entry.family === "IPv4" && !entry.internal,
+  );
+  return bridge
+    ? [...listen.hosts, { host: bridge.address, required: false, local: true }]
+    : listen.hosts;
+}
+
+/** See `DeploymentConfig.appOrigins`. */
+function appOriginsFrom(environment: Environment): string[] {
+  const appPort = listenPort(optional(environment, "APP_PORT"), 3010);
+  if (!appPort.ok)
+    throw new Error(appPort.reason.replace(/^PORT /, "APP_PORT "));
+  return [
+    ...commaSeparated(environment, "TRUSTED_ORIGINS"),
+    ...["localhost", "127.0.0.1", "[::1]"].map(
+      (host) => `http://${host}:${appPort.port}`,
+    ),
+  ];
 }
 
 /**

@@ -105,6 +105,28 @@ export const DEV_FAIL_TASKS_WHILE = "OPENDUET_DEV_FAIL_TASKS_WHILE";
 const DEV_FAIL_AFTER_MS = 8_000;
 
 /**
+ * The file {@link DEV_FAIL_TASKS_WHILE} names, or undefined where it must do nothing.
+ *
+ * NOTHING UNDER `NODE_ENV=production`, which every container image and chart install sets. A line
+ * left in a `.env` that went on to a deployment would otherwise fail every task its people started
+ * whenever a file of that name existed, and say the model provider was down. Said once at boot
+ * there, so the line is not mistaken for working.
+ */
+export function devFailTasksWhile(
+  environment: Record<string, string | undefined>,
+): string | undefined {
+  const named = environment[DEV_FAIL_TASKS_WHILE]?.trim() || undefined;
+  if (named === undefined) return undefined;
+  if (environment.NODE_ENV?.trim() === "production") {
+    console.warn(
+      `${DEV_FAIL_TASKS_WHILE} is set and ignored, because NODE_ENV=production. It is for a developer's own stack.`,
+    );
+    return undefined;
+  }
+  return named;
+}
+
+/**
  * A task's turn: the person's ask as their message in the task's conversation, a person-started turn
  * through the runner every started task uses, and the Bot's reply recorded, which is what tells an
  * open conversation to read the thread again.
@@ -129,9 +151,7 @@ export function createTaskTurn(deps: {
   failWhile?: string | undefined;
 }): ProactiveEngineDeps["startTask"] {
   const failWhile =
-    "failWhile" in deps
-      ? deps.failWhile
-      : process.env[DEV_FAIL_TASKS_WHILE]?.trim() || undefined;
+    "failWhile" in deps ? deps.failWhile : devFailTasksWhile(process.env);
   return async (scope, input) => {
     const actor = await deps.actorFor(scope.ownerUserId);
     const record = (

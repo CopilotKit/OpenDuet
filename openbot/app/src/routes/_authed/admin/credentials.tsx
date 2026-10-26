@@ -55,6 +55,7 @@ import {
   type CredentialStatus,
   credentialListQueryOptions,
 } from "@/lib/credentials/queries";
+import { appConfig } from "@/lib/generated/application-config";
 
 export const Route = createFileRoute("/_authed/admin/credentials")({
   component: CredentialsPage,
@@ -95,7 +96,7 @@ function CredentialsPage() {
           Add credential
         </Button>
       }
-      description="Keys and tokens for this deployment. OpenBot never shows a secret after it is saved."
+      description={`Keys and tokens for this deployment. ${appConfig.brand.productName} never shows a secret after it is saved.`}
       title="Credentials"
     >
       {/*

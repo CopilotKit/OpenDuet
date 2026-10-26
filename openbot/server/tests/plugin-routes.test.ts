@@ -1631,6 +1631,12 @@ function brokeredApp(
     by: string;
     reason: string;
   }> = [];
+  /** Every account this deployment holds itself that the route asked the store to end. */
+  const heldDisconnected: Array<{
+    serverId: string;
+    userId: string;
+    by: string;
+  }> = [];
   /** Every time the route went and asked Composio what an app wants typed in. */
   const asked: Array<{ toolkit: string; authScheme: string }> = [];
   /**
@@ -1884,6 +1890,14 @@ function brokeredApp(
       if (deployment.storeThrows) throw deployment.storeThrows;
       return { vendorRevocationRequested: true };
     },
+    disconnectHeld: async (input: {
+      serverId: string;
+      userId: string;
+      by: string;
+    }) => {
+      heldDisconnected.push(input);
+      return { disconnected: true, vendorRevoked: true };
+    },
   });
 
   const app = createApp(
@@ -1933,6 +1947,7 @@ function brokeredApp(
     confirmed,
     rechecked,
     disconnected,
+    heldDisconnected,
     asked,
     submitted,
     /**
@@ -2193,22 +2208,32 @@ describe("connecting a brokered app", () => {
      * any one of them fails here rather than passing on the two it ignored.
      */
     const { authorized, connect } = brokeredApp();
+    const body = {
+      returnUrl: "https://evil.test/harvest",
+      returnTo: "https://evil.test",
+    };
+    const query =
+      "?returnUrl=https%3A%2F%2Fevil.test%2Fharvest&callbackUrl=https%3A%2F%2Fevil.test";
+    const headers = {
+      returnUrl: "https://evil.test/harvest",
+      referer: "https://evil.test",
+      "x-forwarded-host": "evil.test",
+    };
 
-    const response = await connect(
-      { returnUrl: "https://evil.test/harvest", returnTo: "https://evil.test" },
-      "?returnUrl=https%3A%2F%2Fevil.test%2Fharvest&callbackUrl=https%3A%2F%2Fevil.test",
-      {
-        returnUrl: "https://evil.test/harvest",
-        referer: "https://evil.test",
-        origin: "https://evil.test",
-        "x-forwarded-host": "evil.test",
-      },
-    );
+    const response = await connect(body, query, headers);
 
     expect(response.status).toBe(200);
     expect(authorized).toEqual([
       { account: ADMIN_ACCOUNT, toolkit: "linear", returnUrl: RETURN_URL },
     ]);
+
+    // Sent from that site's own page, it never reaches the route at all (auth/same-origin.ts).
+    const forged = await connect(body, query, {
+      ...headers,
+      origin: "https://evil.test",
+    });
+    expect(forged.status).toBe(403);
+    expect(authorized).toHaveLength(1);
   });
 
   test("an administrator who started on the app's own page is sent back to it", async () => {
@@ -3031,23 +3056,36 @@ describe("confirming and ending a brokered connection", () => {
     // `notion` is a row this deployment really has. What is wrong is not that it is missing but
     // that its connection does not live at Composio, and the sentence says so rather than talking
     // about a broker setting or an app nobody has heard of.
-    const { confirmed, disconnected, confirm, disconnect } = brokeredApp();
+    const { confirmed, disconnected, confirm } = brokeredApp();
 
     const confirmResponse = await confirm({ serverId: "notion" });
-    const disconnectResponse = await disconnect({ serverId: "notion" });
 
     expect(confirmResponse.status).toBe(400);
-    expect(disconnectResponse.status).toBe(400);
     expect((await confirmResponse.json()).error).toBe(
       "That app doesn't connect this way.",
     );
-    expect((await disconnectResponse.json()).error).toBe(
-      "That app doesn't connect this way.",
-    );
     // And the store was left alone: a confirm here would write a row for an app whose connection
-    // is not Composio's to answer about, and a disconnect would ask the broker to revoke a grant
-    // it never issued.
+    // is not Composio's to answer about.
     expect(confirmed).toEqual([]);
+    expect(disconnected).toEqual([]);
+  });
+
+  test("disconnecting an app this deployment holds the token for ends the asker's own account, never through the broker", async () => {
+    // `notion` is `user-oauth`: its refresh token is in this deployment's vault, so Disconnect is
+    // `disconnectHeld`'s, for the signed-in person and nobody the request names.
+    const { disconnected, heldDisconnected, disconnect } = brokeredApp();
+
+    const response = await disconnect({ serverId: "notion" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      disconnected: true,
+      vendorRevoked: true,
+    });
+    expect(heldDisconnected).toEqual([
+      { serverId: "notion", userId: ADMIN.id, by: ADMIN.id },
+    ]);
+    // A broker that never issued this grant is not asked to revoke it.
     expect(disconnected).toEqual([]);
   });
 

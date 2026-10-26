@@ -24,6 +24,7 @@ export type {
   SkillActor,
   SkillRecord,
   ToolRecord,
+  VendorRevocation,
   WithdrawnGrant,
 } from "./plugin-store/model";
 export {
@@ -38,9 +39,11 @@ export {
   PluginInvariantError,
   PluginRefusedError,
   refFromToolName,
+  revokeRefreshTokenOverHttp,
   TokenRefusedError,
   toolNameFor,
   unlistedAdvertisedTools,
+  VendorRevocationUnreachableError,
 } from "./plugin-store/model";
 
 export function createPluginStore(options: PluginStoreOptions) {
