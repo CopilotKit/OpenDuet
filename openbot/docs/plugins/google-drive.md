@@ -92,10 +92,14 @@ expires.
 
 ### Disconnecting
 
-**Not built yet.** Until it is, revoke it in Google's own third-party access settings
-([myaccount.google.com/connections](https://myaccount.google.com/connections)), which stops this
-deployment reading anything immediately. The page says the same thing rather than offering a control
-that would report access withdrawn when it had not been.
+On the connector's page under **Connections**, open **Connected** and choose **Disconnect**. It
+disconnects only the signed-in person's own account, the same way Gmail and Google Calendar do (see
+[Disconnecting](google-workspace.md#disconnecting)). It asks Google to revoke the refresh token, then
+revokes the stored credential and removes the connection.
+
+- If Google cannot be reached, nothing changes and the page asks you to try again.
+- If Google refuses, access still ends in this deployment, and the page tells you to finish at
+  [myaccount.google.com/connections](https://myaccount.google.com/connections).
 
 ## Troubleshooting
 
