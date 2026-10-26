@@ -140,9 +140,15 @@ so revoking access at Google takes effect on the next call.
 
 ### Disconnecting
 
-**Not built yet.** Until it is, revoke access in Google's own third-party access settings
-([myaccount.google.com/connections](https://myaccount.google.com/connections)), which stops this
-deployment reading mail or the calendar immediately.
+On `/connections/google-workspace`, open **Connected** and choose **Disconnect**. It disconnects only the
+signed-in person's own account. It asks Google to revoke the refresh token, then revokes the stored
+credential and removes the connection in one transaction, and writes an audit event.
+
+- If Google cannot be reached, nothing changes and the page asks you to try again, so access is never
+  reported withdrawn when it was not.
+- If Google refuses the revocation, access still ends in this deployment, and the page tells you to
+  finish at Google's own third-party access settings
+  ([myaccount.google.com/connections](https://myaccount.google.com/connections)).
 
 ## Trying it without a Google account
 
