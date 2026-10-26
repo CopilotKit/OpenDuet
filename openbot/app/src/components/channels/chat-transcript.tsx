@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DuetIcon } from "@/components/duet/icons";
-import { Seen, ThreadFooter, TypingDots } from "@/components/duet/kit";
+import { Seen, TypingDots } from "@/components/duet/kit";
 import { attachmentUrl } from "@/lib/channels/attachments";
 import { readResponsibilityTurn } from "@/lib/channels/responsibility-turn";
 import { readFiring } from "@/lib/channels/routine-firing";
@@ -55,7 +55,6 @@ import {
   readCheckIn,
 } from "@/lib/channels/check-in";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
-import { appConfig } from "@/lib/generated/application-config";
 import { queryClient } from "@/query-client";
 import { splitChatOrigin } from "./chat-origin";
 import {
@@ -2009,17 +2008,6 @@ export function ChatTranscript({
   /* One rule for both kinds of row — see `anchorRowIds`, which is where it is written down. */
   const anchorRows = anchorRowIds(items);
   const seenId = useSettled(seenMessageId(items), SEEN_SETTLE_MS);
-  /*
-   * The footer goes under the last thing in the thread. That is the last row unless something is
-   * drawn after the rows (the Bot thinking, a stop, a queued message), and it is drawn inside that
-   * last row rather than as a row of its own: the scroller counts rows by position (see below), so
-   * an extra one after them would break how a new turn is found.
-   */
-  const furnitureLast = !stopped && !waitingOnFirstToken && queued.length === 0;
-  const footer = (index: number) =>
-    furnitureLast && index === items.length - 1 ? (
-      <ThreadFooter product={appConfig.brand.productName} />
-    ) : null;
 
   /*
    * One decider per mounted transcript, so opening a different channel starts the cascade over and
@@ -2123,14 +2111,6 @@ export function ChatTranscript({
                   text={message.text}
                 />
               ))}
-              {/*
-               * Once, under the last thing in the thread, scrolling with it (parity-spec 2.13). In
-               * this block for the reason the block exists: it is drawn last without being a row the
-               * scroller counts.
-               */}
-              {items.length > 0 && !furnitureLast ? (
-                <ThreadFooter after product={appConfig.brand.productName} />
-              ) : null}
             </div>
             {/*
              * Always in the DOM, empty or not, and before the rows: the scroller counts rows by
@@ -2156,7 +2136,6 @@ export function ChatTranscript({
                       active={busy && index === items.length - 1}
                     />
                   </Arriving>
-                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "tool" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
@@ -2169,7 +2148,6 @@ export function ChatTranscript({
                       toolCallId={item.toolCall.id}
                     />
                   </ReplyHoldProvider>
-                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "activity" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
@@ -2177,7 +2155,6 @@ export function ChatTranscript({
                     delay={delays.delayFor(item.id, index, items.length)}
                     message={item.message}
                   />
-                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "text" ? (
                 <MessageScrollerItem
@@ -2194,7 +2171,6 @@ export function ChatTranscript({
                     seen={item.id === seenId}
                     text={item.text}
                   />
-                  {footer(index)}
                 </MessageScrollerItem>
               ) : item.kind === "attachments" ? (
                 <MessageScrollerItem
@@ -2206,7 +2182,6 @@ export function ChatTranscript({
                     attachments={item.attachments}
                     delay={delays.delayFor(item.id, index, items.length)}
                   />
-                  {footer(index)}
                 </MessageScrollerItem>
               ) : (
                 // Every member of the union is handled above. `assertNever` types `item` as

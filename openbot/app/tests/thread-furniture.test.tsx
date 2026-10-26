@@ -17,13 +17,12 @@ import {
   seenMessageId,
 } from "@/components/channels/chat-transcript";
 import { toVisibleChatItems } from "@/components/channels/chat-messages";
-import { appConfig } from "@/lib/generated/application-config";
 import { settleReactWork } from "./settle-react-work";
 
 /**
- * The thread's furniture (parity-spec 2.13): "OpenDuet is AI and can make mistakes." once under the
- * last thing in every thread, and "Seen" under the person's newest message once the Bot has it,
- * until the Bot answers in words.
+ * The thread's furniture: "Seen" under the person's newest message once the Bot has it, until the
+ * Bot answers in words. No "is AI and can make mistakes" line under the thread: OpenDuet leaves it
+ * out on purpose.
  */
 
 let realFetch: typeof fetch;
@@ -81,18 +80,11 @@ const answer: Message = {
   content: "Yes. She needs your VAT sign-off by Thursday.",
 };
 
-const FOOTER = `${appConfig.brand.productName} is AI and can make mistakes.`;
-
-describe("the footer", () => {
-  test("sits once under the last thing in the thread", async () => {
+describe("under the thread", () => {
+  test("no line says the Bot is AI and can make mistakes", async () => {
     const view = draw([asked, answer]);
-    await view.findByText(FOOTER);
-    expect(view.getAllByText(FOOTER)).toHaveLength(1);
-  });
-
-  test("is not drawn over an empty thread", () => {
-    const view = draw([]);
-    expect(view.queryByText(FOOTER)).toBeNull();
+    await view.findByText(/She needs your VAT sign-off/);
+    expect(view.queryByText(/can make mistakes/)).toBeNull();
   });
 });
 
@@ -168,7 +160,7 @@ describe("Seen", () => {
     expect(await view.findByText("Seen")).toBeTruthy();
     cleanup();
     const answered = draw([asked, answer]);
-    await answered.findByText(FOOTER);
+    await answered.findByText(/She needs your VAT sign-off/);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(answered.queryByText("Seen")).toBeNull();
   });
@@ -223,14 +215,5 @@ describe("the Bot's words", () => {
     expect(bubbles).toHaveLength(3);
     const column = bubbles[1]?.closest(".gap-2");
     expect(column?.contains(bubbles[2] as Node)).toBe(true);
-  });
-
-  test("the footer comes after the rows, for a screen reader too", async () => {
-    const view = draw([asked, answer]);
-    const footer = await view.findByText(FOOTER);
-    const reply = view.getByText(/She needs your VAT sign-off/);
-    expect(
-      reply.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
   });
 });

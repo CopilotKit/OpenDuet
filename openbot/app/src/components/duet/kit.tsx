@@ -468,33 +468,6 @@ export function Segmented<T extends string>({
   );
 }
 
-/** The line under every thread (parity-spec 2.13). */
-export const AI_FOOTER = "is AI and can make mistakes.";
-
-/**
- * "OpenDuet is AI and can make mistakes.", once, under the last thing in a thread. It scrolls with
- * the thread rather than sitting pinned, and it is in every thread.
- */
-export function ThreadFooter({
-  product,
-  after = false,
-}: {
-  product: string;
-  /** Drawn as an item of the thread's own column, whose 14px gap already sits above it. */
-  after?: boolean;
-}) {
-  return (
-    <p
-      className={cn(
-        "duet-face type-caption px-1 text-duet-ink-3",
-        after ? "pt-0.5" : "pt-4",
-      )}
-    >
-      {product} {AI_FOOTER}
-    </p>
-  );
-}
-
 /** Under the person's newest message once the Bot has it, until its reply lands. */
 export function Seen() {
   return (
