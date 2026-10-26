@@ -3,6 +3,11 @@ import { useState } from "react";
 import { z } from "zod";
 import { repliesShown } from "@/components/channels/chat-messages";
 import { useConversationSend } from "@/components/channels/conversation-send";
+import {
+  BuildIn,
+  BuildInProvider,
+  useArrivedLive,
+} from "@/components/duet/build-in";
 import { DuetIcon } from "@/components/duet/icons";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +61,8 @@ export function ReplyChips({
 }) {
   const conversation = useConversationSend();
   const [tapped, setTapped] = useState<string | null>(null);
+  // Chips offered while the turn is still being written arrive one after another (build-in.tsx).
+  const arrived = useArrivedLive(false);
   // Nowhere to send to, such as CopilotKit's own chat: the Bot's question still reads on its own.
   if (!conversation) return null;
   const live =
@@ -63,43 +70,46 @@ export function ReplyChips({
     (toolCallId === undefined || conversation.isLatestTurn(toolCallId));
   return (
     // A fieldset is a group to a screen reader, named by its label, so the chips are heard as one set.
-    <fieldset
-      aria-label="Suggested replies"
-      className="duet-face flex min-w-0 flex-wrap gap-2"
-    >
-      {replies.map((reply) => {
-        const chosen = reply === tapped;
-        return (
-          <button
-            className={cn(
-              // parity-spec 2.14: a reply glyph, the sub size at regular weight, a hairline, 44px tall.
-              "type-sub inline-flex h-11 max-w-full items-center gap-1.5 rounded-full pr-[18px] pl-3.5 font-normal outline-none transition-[transform,background-color] duration-[var(--duet-dur-tap)] focus-visible:ring-2 focus-visible:ring-duet-accent focus-visible:ring-offset-2 focus-visible:ring-offset-duet-surface",
-              chosen
-                ? "bg-duet-violet-soft text-duet-violet shadow-[0_0_0_1px_color-mix(in_oklab,var(--duet-violet)_28%,transparent)]"
-                : "bg-duet-card shadow-[0_0_0_1px_var(--duet-hair)]",
-              !chosen && (live ? "text-duet-ink" : "text-duet-ink-3"),
-              live &&
-                "cursor-pointer active:bg-duet-tile motion-safe:active:scale-[0.96]",
-            )}
-            data-chosen={chosen || undefined}
-            disabled={!live}
-            key={reply}
-            onClick={() => {
-              // Marked only once it went: a reply the conversation could not take stays pressable.
-              if (conversation.send(reply)) setTapped(reply);
-            }}
-            type="button"
-          >
-            <DuetIcon
-              className="shrink-0 text-duet-ink-3"
-              name="reply"
-              size={16}
-            />
-            <span className="truncate">{reply}</span>
-          </button>
-        );
-      })}
-    </fieldset>
+    <BuildInProvider value={arrived}>
+      <fieldset
+        aria-label="Suggested replies"
+        className="duet-face flex min-w-0 flex-wrap gap-2"
+      >
+        {replies.map((reply, index) => {
+          const chosen = reply === tapped;
+          return (
+            <BuildIn className="max-w-full" key={reply} order={index}>
+              <button
+                className={cn(
+                  // parity-spec 2.14: a reply glyph, the sub size at regular weight, a hairline, 44px tall.
+                  "type-sub inline-flex h-11 max-w-full items-center gap-1.5 rounded-full pr-[18px] pl-3.5 font-normal outline-none transition-[transform,background-color] duration-[var(--duet-dur-tap)] focus-visible:ring-2 focus-visible:ring-duet-accent focus-visible:ring-offset-2 focus-visible:ring-offset-duet-surface",
+                  chosen
+                    ? "bg-duet-violet-soft text-duet-violet shadow-[0_0_0_1px_color-mix(in_oklab,var(--duet-violet)_28%,transparent)]"
+                    : "bg-duet-card shadow-[0_0_0_1px_var(--duet-hair)]",
+                  !chosen && (live ? "text-duet-ink" : "text-duet-ink-3"),
+                  live &&
+                    "cursor-pointer active:bg-duet-tile motion-safe:active:scale-[0.96]",
+                )}
+                data-chosen={chosen || undefined}
+                disabled={!live}
+                onClick={() => {
+                  // Marked only once it went: a reply the conversation could not take stays pressable.
+                  if (conversation.send(reply)) setTapped(reply);
+                }}
+                type="button"
+              >
+                <DuetIcon
+                  className="shrink-0 text-duet-ink-3"
+                  name="reply"
+                  size={16}
+                />
+                <span className="truncate">{reply}</span>
+              </button>
+            </BuildIn>
+          );
+        })}
+      </fieldset>
+    </BuildInProvider>
   );
 }
 

@@ -1,5 +1,6 @@
-import { Fragment, useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import { cn } from "@/lib/utils";
+import { BuildIn } from "./build-in";
 import { DuetIcon } from "./icons";
 import { CardRow, DuetCard, Rule, SectionLabel } from "./kit";
 
@@ -58,23 +59,46 @@ export function MorningBriefCard({
 }) {
   const nothing =
     needsYou.length === 0 && canWait.length === 0 && today.length === 0;
+  /*
+   * Where each section starts in the order the card builds in when it arrives live (build-in.tsx):
+   * the date and greeting first, then each section's label and the rows it shows, top to bottom.
+   */
+  const sections = [
+    { items: needsYou, label: "Needs you", tone: "accent" },
+    { items: canWait, label: "Can wait", tone: "muted" },
+    { items: today, label: "Today", tone: "muted" },
+    { items: notes, label: "Couldn't check", tone: "muted" },
+  ] as const;
+  let next = 1;
+  const starts = sections.map((section) => {
+    const start = next;
+    next += piecesOf(section.items);
+    return start;
+  });
   return (
-    <DuetCard aria-label="Morning brief" role="region">
-      <div className="px-4 pt-[18px]">
-        <p className="type-sub font-medium text-duet-ink-2">{date}</p>
-        <p className="type-display mt-0.5 font-semibold">{greeting}</p>
-        {nothing && notes.length === 0 ? (
-          <p className="type-sub mt-2 text-duet-ink-2">
-            Nothing new needs you, and nothing is on your calendar today.
-          </p>
-        ) : null}
-      </div>
-      <BriefSection items={needsYou} label="Needs you" tone="accent" />
-      <BriefSection items={canWait} label="Can wait" tone="muted" />
-      <BriefSection items={today} label="Today" tone="muted" />
-      <BriefSection items={notes} label="Couldn't check" tone="muted" />
-      <div className="h-2" />
-    </DuetCard>
+    <BuildIn order={0}>
+      <DuetCard aria-label="Morning brief" role="region">
+        <BuildIn className="px-4 pt-[18px]" order={0}>
+          <p className="type-sub font-medium text-duet-ink-2">{date}</p>
+          <p className="type-display mt-0.5 font-semibold">{greeting}</p>
+          {nothing && notes.length === 0 ? (
+            <p className="type-sub mt-2 text-duet-ink-2">
+              Nothing new needs you, and nothing is on your calendar today.
+            </p>
+          ) : null}
+        </BuildIn>
+        {sections.map((section, index) => (
+          <BriefSection
+            items={section.items}
+            key={section.label}
+            label={section.label}
+            start={starts[index] ?? 0}
+            tone={section.tone}
+          />
+        ))}
+        <div className="h-2" />
+      </DuetCard>
+    </BuildIn>
   );
 }
 
@@ -85,23 +109,48 @@ export function MorningBriefCard({
  */
 export const SECTION_ROWS = 5;
 
+/** The rows a section shows before anything is pressed. */
+function firstShown(items: BriefItem[]): number {
+  return items.length > SECTION_ROWS + 1 ? SECTION_ROWS : items.length;
+}
+
+/** How many pieces a section builds in with: its label, the rows it shows, and "Show N more". */
+function piecesOf(items: BriefItem[]): number {
+  if (items.length === 0) return 0;
+  const shown = firstShown(items);
+  return 1 + shown + (shown < items.length ? 1 : 0);
+}
+
 function BriefSection({
   label,
   items,
   tone,
+  start,
 }: {
   label: string;
   items: BriefItem[];
   tone: "accent" | "muted";
+  /** Where this section's label falls in the card's build-in order. */
+  start: number;
 }) {
   const [open, setOpen] = useState(false);
   if (items.length === 0) return null;
   const folded = !open && items.length > SECTION_ROWS + 1;
   const shown = folded ? items.slice(0, SECTION_ROWS) : items;
   const hidden = items.length - shown.length;
+  // Rows "Show N more" reveals were not part of the card's arrival, so they are drawn as they are.
+  const arrived = firstShown(items);
+  const piece = (index: number, node: ReactNode) =>
+    index < arrived ? (
+      <BuildIn order={start + 1 + index}>{node}</BuildIn>
+    ) : (
+      node
+    );
   return (
     <section className="mt-4">
-      <SectionLabel tone={tone}>{label}</SectionLabel>
+      <BuildIn order={start}>
+        <SectionLabel tone={tone}>{label}</SectionLabel>
+      </BuildIn>
       <ul className="mt-1.5">
         {shown.map((item, index) => {
           const row = (
@@ -122,19 +171,22 @@ function BriefSection({
           );
           return (
             <Fragment key={item.id}>
-              {index > 0 ? <Rule /> : null}
+              {index > 0 ? piece(index, <Rule />) : null}
               <li>
-                {item.href ? (
-                  <a
-                    className="block"
-                    href={item.href}
-                    rel="noopener noreferrer"
-                    target="_blank"
-                  >
-                    {row}
-                  </a>
-                ) : (
-                  row
+                {piece(
+                  index,
+                  item.href ? (
+                    <a
+                      className="block"
+                      href={item.href}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      {row}
+                    </a>
+                  ) : (
+                    row
+                  ),
                 )}
               </li>
             </Fragment>
@@ -142,7 +194,7 @@ function BriefSection({
         })}
       </ul>
       {folded ? (
-        <div className="px-4 pt-0.5 pb-1">
+        <BuildIn className="px-4 pt-0.5 pb-1" order={start + 1 + arrived}>
           <button
             aria-label={`Show ${hidden} more in ${label}`}
             // The Start line's look and 44px target, so the card has one kind of text action.
@@ -152,7 +204,7 @@ function BriefSection({
           >
             Show {hidden} more
           </button>
-        </div>
+        </BuildIn>
       ) : null}
     </section>
   );

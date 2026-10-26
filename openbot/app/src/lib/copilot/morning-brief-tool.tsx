@@ -3,6 +3,7 @@ import { useState } from "react";
 import { z } from "zod";
 import { useConversationSend } from "@/components/channels/conversation-send";
 import { ToolLine } from "@/components/channels/tool-line";
+import { BuildInProvider, useArrivedLive } from "@/components/duet/build-in";
 import {
   type BriefItem,
   MorningBriefCard,
@@ -143,23 +144,45 @@ export function MorningBriefTool() {
   useRenderTool({
     name: TOOL,
     parameters,
-    render: ({ result, status }) => {
-      const running = status !== "complete" && result === undefined;
-      if (running)
-        return <ToolLine label={readToolName(TOOL, true).label} running />;
-      const brief = readBrief(result);
-      if (!brief)
-        return (
-          <ToolLine
-            label="Couldn't make the brief"
-            detail={typeof result === "string" ? result : undefined}
-            refused
-          />
-        );
-      return <StartableBrief brief={brief} />;
-    },
+    render: ({ result, status }) => (
+      <BriefToolView
+        result={result}
+        running={status !== "complete" && result === undefined}
+      />
+    ),
   });
   return null;
+}
+
+/**
+ * The tool's line while it reads, then the card. One component for both, so it can tell a brief
+ * that arrived while the person watched, which builds in row by row, from one read back from
+ * history, which is drawn whole (components/duet/build-in.tsx).
+ */
+function BriefToolView({
+  result,
+  running,
+}: {
+  result: unknown;
+  running: boolean;
+}) {
+  const live = useArrivedLive(running);
+  if (running)
+    return <ToolLine label={readToolName(TOOL, true).label} running />;
+  const brief = readBrief(result);
+  if (!brief)
+    return (
+      <ToolLine
+        label="Couldn't make the brief"
+        detail={typeof result === "string" ? result : undefined}
+        refused
+      />
+    );
+  return (
+    <BuildInProvider value={live}>
+      <StartableBrief brief={brief} />
+    </BuildInProvider>
+  );
 }
 
 /**
