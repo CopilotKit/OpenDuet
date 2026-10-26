@@ -5,10 +5,19 @@ import { isTenantBot } from "@/lib/agents/primary-bot";
 /** The orb's colours another Bot can wear: every one but Ocean, which is the tenant's own Bot's. */
 const OTHER_COLOURS: readonly OrbColour[] = ["ember", "lime", "graphite"];
 
-/** The same colour for the same Bot, every time and everywhere it is drawn. */
+/**
+ * The same colour for the same Bot, every time and everywhere it is drawn.
+ *
+ * FNV-1a rather than a running `* 31`: short ids that differ only near their end, `your-agent` and
+ * `support-desk`, all landed on one colour with the simpler hash, and a roster of Bots in one colour
+ * says nothing about which is which.
+ */
 export function orbColourFor(id: string): OrbColour {
-  let hash = 0;
-  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  let hash = 0x811c9dc5;
+  for (const char of id) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
   return OTHER_COLOURS[hash % OTHER_COLOURS.length] ?? "ember";
 }
 
