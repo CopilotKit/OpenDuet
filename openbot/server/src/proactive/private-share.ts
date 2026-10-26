@@ -28,7 +28,6 @@ import {
   type ApprovalContinuation,
   type ApprovalStore,
   approvalAction,
-  approvalPreview,
   currentApprovalContext,
 } from "../approvals/types";
 import { HeadlessToolSuspension } from "@openbot/toolkit/headless-tools";
@@ -48,12 +47,31 @@ export type ShareAudience = {
   label?: string;
 };
 
+/**
+ * The parts of a message other than its body, as its recipient will see them. A connector send
+ * carries these (see plugins/share-target.ts); a group reply or a handoff is a body alone.
+ */
+export type SharedMessage = {
+  to?: readonly string[];
+  cc?: readonly string[];
+  bcc?: readonly string[];
+  subject?: string;
+  /** Every other argument of the call, exactly as it goes out: a thread, an attachment, a flag. */
+  alsoSent?: Record<string, unknown>;
+};
+
 export type PrivateShareInput = {
   ownerUserId: string;
   botId: string;
   audience: ShareAudience;
-  /** The text about to be sent. Only a digest and a redacted preview reach the approval. */
+  /**
+   * The text about to be sent, which the approval carries whole: what the person allows is what
+   * they were shown, so nothing about it is cut. Secret-looking values in it are still masked
+   * where the approval is drawn (approvals/types.ts `approvalPreview`).
+   */
   content: string;
+  /** Who else it goes to, its subject, and the rest of the call. See {@link SharedMessage}. */
+  message?: SharedMessage;
   /**
    * Where the content came from. `shared_conversation` with `sharedWithUserIds` naming the same
    * audience is the only origin that skips the check.
@@ -166,6 +184,21 @@ export function createPrivateShareCheck(deps: {
     const contentDigest = createHash("sha256")
       .update(input.content)
       .digest("hex");
+    /*
+     * WHAT THE PERSON IS ASKED, WHOLE: who it goes to, the subject, the body and anything else the
+     * call carries, each as the recipient will see it.
+     *
+     * It was `preview: content.slice(0, 280)`, with the subject appended to the body as its last
+     * line and `recipients` counting user ids, which an email has none of. So the card stopped
+     * mid-word with no sign there was more, Details said "recipients": 0 for an email to one person,
+     * and Allow once sent 414 characters of which the person had seen 280.
+     *
+     * These are the approval's `args`, so they are also what its digest is taken over
+     * (`approvalAction`): the send after the answer passes only if it is this same message to these
+     * same people, and a send that differs in any part is a new question.
+     */
+    const { to, cc, bcc, subject, alsoSent } = input.message ?? {};
+    const addressed = [...(to ?? []), ...(cc ?? []), ...(bcc ?? [])];
     const candidate = {
       actorId: input.ownerUserId,
       botId: input.botId,
@@ -174,9 +207,17 @@ export function createPrivateShareCheck(deps: {
       scope,
       args: {
         audience: label,
-        recipients: input.audience.recipientUserIds.length,
+        recipients:
+          input.audience.kind === "external"
+            ? new Set(addressed).size || 1
+            : input.audience.recipientUserIds.length,
+        ...(to?.length ? { to: [...to] } : {}),
+        ...(cc?.length ? { cc: [...cc] } : {}),
+        ...(bcc?.length ? { bcc: [...bcc] } : {}),
+        ...(subject ? { subject } : {}),
+        body: input.content,
+        ...(alsoSent && Object.keys(alsoSent).length ? { alsoSent } : {}),
         contentDigest,
-        preview: approvalPreview(input.content.slice(0, 280)),
       },
       target: { kind: input.audience.kind, id: input.audience.id },
       continuation,

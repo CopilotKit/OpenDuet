@@ -63,22 +63,42 @@ const SENDING_APPS: Record<
  * A send to other people, as the private-share check asks about it.
  *
  * The check asks before the send itself, so its request carries the audience as `<server id>:
- * <recipients>` and a preview of what goes out, not the tool's own arguments. Read as the message
- * it is: the app, who it goes to, and what it says. The content digest is how the server matches a
- * later send to this answer; it means nothing to the person and is left out.
+ * <recipients>` and the message in the parts its recipient sees: `to`, `cc`, `bcc`, `subject` and
+ * the whole `body` (server/src/proactive/private-share.ts). Read as the message it is: the app, who
+ * it goes to, the subject on its own line and the body under it. The content digest is how the
+ * server matches a later send to this answer; it means nothing to the person and is left out.
+ *
+ * A request asked before the parts existed has only the audience and a `preview`, which was the
+ * body's first 280 characters with the subject glued on; it is read the old way rather than not at
+ * all, since it is already decided.
  */
 function describeShare(args: Record<string, unknown>): ApprovalView {
   const audience = display(args.audience) ?? "";
   const split = audience.indexOf(": ");
   const server = split > 0 ? audience.slice(0, split) : "";
-  const to = split > 0 ? audience.slice(split + 2) : audience;
   const known = SENDING_APPS[server];
+  const to =
+    display(args.to) ?? (split > 0 ? audience.slice(split + 2) : audience);
+  const fields: ApprovalView["fields"] = [];
+  if (to) fields.push({ label: "To", value: to });
+  for (const [key, label] of [
+    ["cc", "Cc"],
+    ["bcc", "Bcc"],
+    ["subject", "Subject"],
+  ] as const) {
+    const value = display(args[key]);
+    if (value) fields.push({ label, value });
+  }
   return {
     title: known?.kind === "mail" ? "Send email" : "Send a message",
     app: known?.app ?? (server ? sentence(words(server)) : null),
     kind: known?.kind ?? "other",
-    fields: to ? [{ label: "To", value: to }] : [],
-    body: display(args.preview),
+    fields,
+    // Untrimmed: what is shown is what goes, to the last line break.
+    body:
+      typeof args.body === "string" && args.body.trim()
+        ? args.body
+        : display(args.preview),
   };
 }
 

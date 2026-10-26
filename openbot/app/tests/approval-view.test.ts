@@ -150,3 +150,35 @@ test("a send put to the person by the share check counts as asked, and reads its
     } as never),
   ).toBe(false);
 });
+
+/*
+ * The release review's email: the card showed 280 characters cut mid-word, the subject glued on as
+ * the body's last line, and Details said "recipients": 0. The check now sends the message in its
+ * parts, whole, and the card reads each one where it goes.
+ */
+test("a send the share check asks about shows its recipients, subject and whole body apart", () => {
+  const body = `Hi Sam,\n\n${"The glaze is delayed, and we can substitute Oat Satin. ".repeat(12)}\n\nThanks,\nMaya`;
+  const view = describeApproval({
+    action: {
+      toolRef: "openbot/share_private_information",
+      args: {
+        audience: "google-workspace: Sam <sam@example.test> ops@example.test",
+        recipients: 2,
+        to: ["Sam <sam@example.test>"],
+        cc: ["ops@example.test"],
+        subject: "Re: Glaze delay: substitute?",
+        body,
+        alsoSent: { threadId: "t-1" },
+        contentDigest: "9f2c",
+      },
+    },
+  } as never);
+  expect(view.title).toBe("Send email");
+  expect(view.fields).toEqual([
+    { label: "To", value: "Sam <sam@example.test>" },
+    { label: "Cc", value: "ops@example.test" },
+    { label: "Subject", value: "Re: Glaze delay: substitute?" },
+  ]);
+  expect(view.body).toBe(body);
+  expect(view.body).not.toContain("Glaze delay: substitute?");
+});
