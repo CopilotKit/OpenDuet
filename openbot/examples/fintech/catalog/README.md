@@ -15,6 +15,3 @@ reliability, procurement and product feedback. The part worth
 copying is the shape of `role_description`: it says what the job is, what the coworker must not do,
 and what to say when it cannot find something. A one-line description gets you a coworker that
 answers vaguely.
-
-More of them, outside this repository and not inherited by your clone:
-[awesome-openbot-agents](https://github.com/jerelvelarde/awesome-openbot-agents).

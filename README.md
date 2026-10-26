@@ -50,7 +50,7 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 
 ## Status
 
-**Available today** means it works when you run this repository. **In progress** means it does not work yet.
+**Available today** means it works when you run this repository. **In progress** means it does not work yet. The two rows marked **In progress** are what is being built now: watching mail, calendar and Slack as they arrive, and the sensitive-information check on every outgoing message. A phone inbox, shown under [How it works](#how-it-works), is in progress too.
 
 | Capability                   | What it means for you                                                                 | Status          |
 | ---------------------------- | ------------------------------------------------------------------------------------- | --------------- |
@@ -69,7 +69,7 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 | Tasks                        | One tab for what needs you, answered right there, what OpenDuet suggests from its background research, and what it is working on. Its newest suggestion also waits above Chat's composer, with **Start** and **Hide**. A suggestion you start stays in view: under **Working** while OpenDuet works, then **Ready for review** or **Needs input** with OpenDuet's next step, opening at its own message. Answer it in Chat, on its card or by deciding its approval, and it goes back to **Working** until OpenDuet replies. A run that fails says why, with **Try again** where running it again can help. Check one off and it folds into **Resolved**. | Available today |
 | Setup checklist              | Onboarding asks you to connect Gmail and Calendar and to turn on notifications, each with **Not now**, then ends on a list of what OpenDuet depends on: Intelligence, the model key, Google, your Gmail and Calendar, notifications, and the optional extras. Each is **Ready**, **Not checked** or **Needs setup**, from the real answer, with how to fix it. **Check again** asks Intelligence and the model provider again. **Settings → Setup** opens it again. | Available today |
 | Gets to know you             | On your first day it speaks first: it greets you, reads your recent mail and this week's calendar, then answers in three short bubbles (who you are, three ways it can help, and an invitation to correct it), with **Sounds right** and **Something's off** to tap. With Gmail and Calendar not connected, it promises no mail: it says what it can do now and shows the card to connect them. | Available today |
-| Make                         | Ask for prep notes, a plan, a deck or a dashboard, or pick one from the **+** on the Make tab, and OpenDuet makes it. A card in Chat opens it, and Make keeps everything it made as thumbnails you can filter by kind. | Available today |
+| Make                         | Ask for a design system, a design, a dashboard, slides, a doc or a web page, or pick one from the **+** on the Make tab, and OpenDuet makes it. A card in Chat opens it, and Make keeps everything it made as thumbnails you can filter by kind. | Available today |
 | Channels                     | Make a channel for a piece of work: a name, an icon in a colour, and what it is for. OpenDuet says hello there and offers three things it could start on, keeps the work there about that purpose, and the tasks it starts there wear the channel's colour. Everything stays your one thread, and the menu lists your channels with Archived folded under them. | Available today |
 | Answers in a tap             | When it asks you to choose, the likely answers appear as replies you can tap.         | Available today |
 | Light or dark                | Follows your phone's setting, changing with it, or pick Light or Dark in Settings.    | Available today |
@@ -78,7 +78,9 @@ Some of this works today, and some of it is being built now. See [Status](#statu
 
 ## Quick start
 
-You will need Docker, [Bun](https://bun.sh) 1.3 or newer, a model key, and a CopilotKit Intelligence project. **Intelligence is required**: it keeps OpenDuet's threads and memory, and the server will not start without its key. The free Developer plan is enough.
+You will need Docker, [Bun](https://bun.sh) 1.3 or newer, Node (for `npx`, which runs the CopilotKit CLI), a model key, and a CopilotKit Intelligence project. **Intelligence is required**: it keeps OpenDuet's threads and memory, and the server will not start without its key. The free Developer plan is enough.
+
+Run every command in this section from the repository root.
 
 ```sh
 git clone https://github.com/CopilotKit/OpenDuet.git
@@ -87,19 +89,28 @@ cp .env.example .env
 bun install
 ```
 
-Sign in and pick an Intelligence project. These write the project's key and its telemetry ID to `.env`:
+Sign in and pick an Intelligence project:
 
 ```sh
 npx --yes copilotkit@latest login
 npx --yes copilotkit@latest project select
-bun scripts/setup-learning.ts
+bun openbot/scripts/setup-learning.ts
 ```
 
-Put your model key in `.env`:
+`project select` writes the project's key to `.env` as `CPK_INTELLIGENCE_API_KEY`, its telemetry ID as `CPK_TELEMETRY_ID`, and your choice to `.copilotkit/project.json`. The server reads `INTELLIGENCE_API_KEY`, not `CPK_INTELLIGENCE_API_KEY`, so the last command finishes the job. It makes sure the project has an `openbot` Learning container, creating one if it does not (see [Automatic Learning](openbot/docs/automatic-learning.md)), then copies the key to `INTELLIGENCE_API_KEY` and sets `CPK_INTELLIGENCE_LEARNING_CONTAINER_ID=openbot`. It reads `.env` and `.copilotkit/` from the directory it runs in, which is why it runs here and not from `openbot/`. If `.env` already has an `INTELLIGENCE_API_KEY`, it keeps it and only checks that the container exists.
+
+Put your model key in `.env`. The OpenDuet Bot runs OpenAI's `gpt-5.6-terra`, set in `openbot/examples/openduet/model.yaml`, so by default that is:
 
 ```sh
 OPENAI_API_KEY=sk-...
 ```
+
+To use another provider or model:
+
+- **Another OpenAI model.** Change `default_model` in `openbot/examples/openduet/model.yaml`, or in your copy of it (see [Make it your own](#make-it-your-own)). `BOT_MODEL` does not change an OpenAI model on its own. It is used only when `OPENAI_BASE_URL` is also set to an OpenAI-compatible endpoint, and then it names the model that endpoint serves.
+- **Anthropic.** Set `BOT_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...`. The model is `BOT_MODEL` if you set one, such as `BOT_MODEL=claude-sonnet-5-5`, and `claude-sonnet-4-5` if you do not.
+
+Set these before you start it. **Settings → Setup** in the app says whether the model key works.
 
 Then start it:
 
@@ -107,13 +118,15 @@ Then start it:
 bash scripts/start.sh
 ```
 
-and open <http://localhost:3010>. The script starts Postgres and each Bot's computer in Docker, applies the database migrations, and starts the API server, the routine worker, and the app. It checks that each one answers before it prints the next steps. `bash scripts/stop.sh` stops all of it and deletes nothing.
+and open <http://localhost:3010>. The script starts Postgres and each Bot's computer in Docker, applies the database migrations, and starts the API server, the routine worker, and the app. It checks that each one answers before it prints the next steps. `bash scripts/stop.sh` stops the app, the worker, the API server and the Docker services, and removes the Bot computers that belong to this install, the ones with its `COMPUTER_NAMESPACE`. It does not touch another install's. The database, each Bot's files and its browser profile are Docker volumes, so they stay. Add `--keep-computers` to leave the Bot computers running.
 
 If port 5432 is already taken on your machine, set `POSTGRES_PORT` in `.env` to a free port and change the port in `DATABASE_URL` to match.
 
 For a shared Bot computer, set `OPENBOT_ONE_COMPUTER_EACH=false`, leave `COMPUTER_SUPERVISOR_URL` empty, and point `AGENT_COMPUTER_URL` at `http://localhost:<COMPUTER_PORT>` (4100 by default). The API and the `agent-computer` Compose service must use the same nonempty `COMPUTER_TOKEN`. Start through `bash scripts/start.sh` to keep them in agreement; it writes the resolved token into `.env` so a later direct Bun restart keeps it. If you change the token, rerun the start script and restart any API processes launched manually. For a computer per Bot, keep `OPENBOT_ONE_COMPUTER_EACH=true`: the supervisor owns those containers and their assigned ports; do not point `AGENT_COMPUTER_URL` at a remembered random port.
 
-When running multiple local stacks, give each Compose project its own ports and matching environment file, or deliberately share one computer with the same token. To diagnose a 401, inspect container names and port mappings with `docker ps`, then compare `COMPUTER_TOKEN` by equality without printing either value. The setup checklist authenticates against the provider and checks network-policy delivery; a configured URL alone no longer means Ready. A sleeping computer reads Not checked until it is running and **Check again** succeeds.
+To run a second install beside another on one machine, give it its own `COMPOSE_PROJECT_NAME`, `COMPUTER_NAMESPACE`, image tags (`COMPUTER_IMAGE` and the other `*_IMAGE` settings), and a value for every `*_PORT`. Change the addresses built from those ports to match: `DATABASE_URL`, `AGENT_COMPUTER_URL`, `MANAGED_AGENT_AG_UI_URL`, `OPENBOT_PUBLIC_URL` and `TRUSTED_ORIGINS`. If both use the same Intelligence project, give it its own `DEPLOYMENT_ID` too. [openbot/docs/configuration.md](openbot/docs/configuration.md#ports) lists them. Two installs can instead share one computer, if they use the same token.
+
+To diagnose a 401, inspect container names and port mappings with `docker ps`, then compare `COMPUTER_TOKEN` by equality without printing either value. The setup checklist authenticates against the provider and checks network-policy delivery; a configured URL alone no longer means Ready. A sleeping computer reads Not checked until it is running and **Check again** succeeds.
 
 The CopilotKit runtime sends usage telemetry to CopilotKit, tagged OpenDuet. Set `COPILOTKIT_TELEMETRY_DISABLED=true` or `DO_NOT_TRACK=1` to turn it off. [What is sent](docs/telemetry.md).
 
@@ -123,19 +136,28 @@ Once it is running, try the parts that work today:
 - Choose what it must ask you about first in `/settings/approvals`.
 - Ask it to do something on a schedule. You will find it in `/routines`.
 
-The rest of the setup, including sign-in for a team, Slack and Teams, and deploying with Docker or Helm, is OpenBot's. See [openbot/docs](openbot/docs/README.md).
+Sign-in for a team, and Slack and Teams, are OpenBot's: see [openbot/docs](openbot/docs/README.md). A hosted or deploy guide for OpenDuet is not published yet, and neither is an OpenDuet image, so the Quick start above is the supported way to run it today. The Docker and Helm guides in `openbot/docs` deploy plain OpenBot from OpenBot's own image, not OpenDuet.
 
 ### Connect Gmail and Google Calendar
 
-An administrator turns the connector on once: register an OAuth client in Google Cloud and paste it in at `/admin/plugins/google-workspace`, then grant its tools to the OpenDuet Bot. Each person then connects their own account under **Connections**. Connecting needs `OPENBOT_PUBLIC_URL`, the API's address that Google sends people back to; `.env.example` sets it to `http://localhost:3001` for running locally, and it must be the public address once deployed. [openbot/docs/plugins/google-workspace.md](openbot/docs/plugins/google-workspace.md) has the steps.
+Gmail and Calendar need a Google OAuth client, which an administrator registers once. Each person then connects their own account under **Connections**. With the default `.env` you are the administrator. **Settings → Setup** in the app shows which of these steps is still open and links to each page. [openbot/docs/plugins/google-workspace.md](openbot/docs/plugins/google-workspace.md) has the Google Cloud steps: the two APIs to enable, the consent screen, and the OAuth client.
 
-To try it without a Google account, run the fake Google that ships for tests and demos, and point OpenDuet at it:
+Connecting needs `OPENBOT_PUBLIC_URL`, the API's address that Google sends people back to. `.env.example` sets it to `http://localhost:3001`, so it has to change if you move `SERVER_PORT`, and it must be the public address once deployed.
 
-```sh
-bun openbot/scripts/fake-google/server.ts --port 4900
-```
+To try it without a Google account, use the fake Google that ships for tests and demos. Setting its URL is not enough on its own. The steps are:
 
-and in `.env`, `OPENDUET_FAKE_GOOGLE_URL=http://127.0.0.1:4900`. It serves an invented inbox and calendar, and `curl http://127.0.0.1:4900/__fake/sent` shows anything OpenDuet sent. It is refused when `NODE_ENV=production`.
+1. Start the fake Google. It serves an invented inbox and calendar.
+
+   ```sh
+   bun openbot/scripts/fake-google/server.ts --port 4900
+   ```
+
+2. In `.env`, set `OPENDUET_FAKE_GOOGLE_URL=http://127.0.0.1:4900`, then start OpenDuet. If it is already running, run `bash scripts/stop.sh` and `bash scripts/start.sh`, because the API reads `.env` only when it starts.
+3. Open `/admin/plugins/google-workspace`. Turn on **Enable for this deployment**, open **OAuth client** and paste any client ID and secret (the fake accepts anything), then press **Refresh tools**.
+4. Grant the connector's tools to the OpenDuet Bot at `/admin/plugins/google-workspace/bots/openduet`.
+5. Open `/connections/google-workspace` and press **Connect**. The fake consents at once, as `maya@marlowceramics.com`, and sends you straight back.
+
+`OPENBOT_PUBLIC_URL` has to match the API's port, because the fake sends you back through it. `curl http://127.0.0.1:4900/__fake/sent` shows anything OpenDuet sent. The variable is ignored when `NODE_ENV=production`. To switch to real Google, remove it, restart, and connect again: the stored sign-in belongs to the fake.
 
 ## Make it your own
 
@@ -149,7 +171,7 @@ OpenDuet is meant to be copied. Everything that makes it OpenDuet rather than Op
 | `model.yaml`    | The model provider and default model.                                 |
 | `skills.yaml`   | Instructions anyone can call with `/`, and the tools each one needs.  |
 
-Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your copy (relative to `openbot/server`). OpenBot's code underneath stays as it is, so OpenBot's fixes can still be brought in. [docs/plan.md](docs/plan.md) describes how this repository tracks OpenBot.
+Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your copy (relative to `openbot/server`). OpenBot's code underneath stays as it is in `openbot/`, so OpenBot's fixes can still be brought in.
 
 ## What is in this repository
 
@@ -158,12 +180,12 @@ Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your cop
 | `openbot/`            | The platform OpenDuet runs on: [OpenBot](https://github.com/CopilotKit/openbot)'s server, app, worker, each Bot's computer, Docker and Helm files. |
 | `openbot/examples/openduet` | OpenDuet's tenant package: its name, Bots, channels, model and skills.                       |
 | `scripts/`            | `start.sh` and `stop.sh`, which run OpenBot's scripts with this repository's `.env`.               |
-| `docs/`               | OpenDuet's plan and its telemetry. OpenBot's own documentation is in `openbot/docs`.               |
-| `assets/`             | The banner and the launch film.                                                                    |
+| `docs/`               | What OpenDuet sends as telemetry, and how to turn it off. OpenBot's own documentation is in `openbot/docs`. |
+| `assets/`             | The banner.                                                                                        |
 
 ## How it works
 
-This is the planned design. Everything not marked _in progress_ already exists in OpenBot.
+This is the planned design. Everything not marked _in progress_ works in this repository today.
 
 ```text
 You: web · Slack / Microsoft Teams · phone inbox (in progress)
@@ -172,7 +194,7 @@ You: web · Slack / Microsoft Teams · phone inbox (in progress)
         ▼                             │
 OpenDuet server   (OpenBot: Hono + CopilotKit runtime)
   ├── watchers        mail · calendar · Slack              (in progress)
-  ├── triage          what needs you / what can wait       (in progress)
+  ├── triage          what needs you / what can wait
   ├── outgoing check  sensitive-info classifier            (in progress)
   ├── approvals       Allow once · Always allow · Refuse
   └── gateway         policy → audit record → act
@@ -190,7 +212,7 @@ MCP connectors            Google Drive, Notion, and more through Composio
 
 **Channels.** You reach OpenDuet where you already are: the web app, Slack, or Microsoft Teams, all of which OpenBot supports today. A phone inbox that collects everything waiting on you is in progress; its notifications will say that something needs you, not what it says.
 
-**Server.** OpenBot's server hosts the CopilotKit runtime and sends each turn to the agent over [AG-UI](https://github.com/ag-ui-protocol/ag-ui). OpenDuet adds three pieces in front of it: watchers that notice new mail, calendar changes, and Slack messages; a triage step that decides what needs you and what can wait; and a morning brief built from both. They build on OpenBot's routines, which already give an agent scheduled turns that run as you.
+**Server.** OpenBot's server hosts the CopilotKit runtime and sends each turn to the agent over [AG-UI](https://github.com/ag-ui-protocol/ag-ui). OpenDuet adds three pieces in front of it: a triage step that decides what needs you and what can wait, a morning brief built from it, and watchers that notice new mail, calendar changes, and Slack messages as they arrive. Triage and the brief work today, when the brief is made. The watchers are in progress. All three build on OpenBot's routines, which already give an agent scheduled turns that run as you.
 
 **Agent.** Any endpoint that speaks AG-UI can be the agent, whether it is built with LangGraph, Mastra, CrewAI, Pydantic AI, Google ADK, or written by hand. OpenDuet is not tied to one framework or one model.
 

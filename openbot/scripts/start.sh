@@ -13,6 +13,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd -P)"
+# The repository this directory sits in, where OpenDuet's README is. Only used to say where to read.
+REPO_ROOT="$(dirname "$ROOT")"
 LOGS="$ROOT/.logs"
 mkdir -p "$LOGS"
 
@@ -492,8 +494,8 @@ const status = info.licenseStatus;
 const agents = Object.keys(info.agents ?? {});
 if (status !== "valid") {
   console.log(`\x1b[31m  licence is '${status}', not 'valid'.\x1b[0m`);
-  console.log("\x1b[31m  Check INTELLIGENCE_API_KEY: npx copilotkit@latest login && npx copilotkit@latest project select\x1b[0m");
-  console.log("\x1b[31m  See README.md for Intelligence setup.\x1b[0m");
+  console.log("\x1b[31m  Check INTELLIGENCE_API_KEY. From the repository root: npx copilotkit@latest login && npx copilotkit@latest project select && bun openbot/scripts/setup-learning.ts\x1b[0m");
+  console.log("\x1b[31m  The Quick start in the repository's README.md has the steps.\x1b[0m");
   process.exit(1);
 }
 if (agents.length === 0) {
@@ -516,25 +518,29 @@ $(green "Ready. http://localhost:$APP_PORT")
 
 Next steps:
 
-  - Direct Bot chat:       http://localhost:$APP_PORT/bot
-  - Bots:                  http://localhost:$APP_PORT/bots
+  - The app:               http://localhost:$APP_PORT/
+  - Setup checklist:       http://localhost:$APP_PORT/settings/setup
+  - Approval rules:        http://localhost:$APP_PORT/settings/approvals
+  - Routines:              http://localhost:$APP_PORT/routines
   - Audit trail:           http://localhost:$APP_PORT/admin/audit
-  - Boundaries/policy:     http://localhost:$APP_PORT/admin/boundaries
-  - Setup docs:            README.md
-  - Configuration docs:    docs/configuration.md
+  - Setup docs:            $REPO_ROOT/README.md
+  - Configuration docs:    $ROOT/docs/configuration.md
 
 Try:
 
-  1. Open /bot and ask: Open news.ycombinator.com and tell me the top story.
-  2. Create a Bot in /bots and start a channel with it.
-  3. Review browser/file actions in /admin/audit.
-  4. Add a deny rule in /admin/boundaries, then retry the same action.
+  1. Ask $PRODUCT_NAME to do something in its own browser, and watch it work on its computer.
+  2. Choose what it must ask you about first, at /settings/approvals.
+  3. Ask it to do something on a schedule. You will find it at /routines.
+  4. Connect Gmail and Google Calendar. The setup checklist shows what is still open, and the
+     Quick start in README.md lists the steps, including the fake Google for trying it without
+     an account.
 
 Logs: $LOGS
   Routine sweep worker: $LOGS/worker.log
 
 Stop all of it: bash scripts/stop.sh
-  The app, the worker, the API server, the Docker services, and each Bot's computer, which compose
-  does not own because the supervisor makes it. Pass --keep-computers to leave the browsers signed
-  in. Nothing is deleted either way: the database, the files and the browser profiles are volumes.
+  The app, the worker, the API server, the Docker services, and this deployment's Bot computers
+  (those with its COMPUTER_NAMESPACE), which compose does not own because the supervisor makes them.
+  Pass --keep-computers to leave the browsers signed in. No data is deleted either way: the
+  database, the files and the browser profiles are volumes.
 EOF

@@ -6,7 +6,8 @@
 # Four things run, and they are stopped in this order so nothing is left calling something that has
 # gone: the app, then the routine worker, then the API server, then Docker. The Bot computers come
 # last because they are made by the supervisor rather than by compose, so `docker compose down`
-# leaves them running and they are the heaviest thing here, one Chromium each.
+# leaves them running and they are the heaviest thing here, one Chromium each. Only the computers of
+# this deployment's COMPUTER_NAMESPACE are removed; other installs on the host keep theirs.
 
 # Before anything else, and before the `set` line below, which is itself bash-only: this file is
 # bash, and being read by `sh` used to end it with exit 1 and no output at all. See that file.
@@ -28,7 +29,8 @@ for arg in "$@"; do
       cat <<'EOF'
 Usage: bash scripts/stop.sh [--keep-computers]
 
-Stops the app, the routine worker, the API server, the Docker services, and each Bot's computer.
+Stops the app, the routine worker, the API server, the Docker services, and this deployment's Bot
+computers: the ones with its COMPUTER_NAMESPACE (default: openbot), never another install's.
 
   --keep-computers  Leave the Bot computers running, so their browsers stay signed in and warm.
                     Their files and browser profiles are Docker volumes and survive either way.
@@ -144,9 +146,23 @@ else
   info "  compose services: not running"
 fi
 
-COMPUTERS="$(docker ps -q --filter label=openbot.supervisor=true 2>/dev/null || true)"
+# Only this deployment's computers.
+#
+# `openbot.supervisor=true` marks every computer that any supervisor on this Docker host made, so
+# filtering on that alone removed the computers of every other install on the host, including their
+# signed-in browsers. Each computer also carries its deployment's `COMPUTER_NAMESPACE` in
+# `openbot.namespace`, which is what the supervisor itself matches on, and a computer made before
+# that label existed counts as the default namespace, `openbot` (supervisor/src/docker.ts, `ours`).
+# This reads the namespace the way the supervisor does: blank is the default.
+COMPUTER_NAMESPACE="$(setting COMPUTER_NAMESPACE openbot | tr -d '[:space:]')"
+COMPUTER_NAMESPACE="${COMPUTER_NAMESPACE:-openbot}"
+COMPUTERS="$(docker ps --filter label=openbot.supervisor=true \
+  --format '{{.ID}} {{.Label "openbot.namespace"}}' 2>/dev/null \
+  | COMPUTER_NAMESPACE="$COMPUTER_NAMESPACE" awk '
+      { namespace = ($2 == "" ? "openbot" : $2) }
+      namespace == ENVIRON["COMPUTER_NAMESPACE"] { print $1 }' || true)"
 if [ -z "$COMPUTERS" ]; then
-  info "  Bot computers: none running"
+  info "  Bot computers: none running for namespace $COMPUTER_NAMESPACE"
 elif [ "$KEEP_COMPUTERS" = "true" ]; then
   info "  Bot computers: left running ($(printf '%s\n' "$COMPUTERS" | wc -l | tr -d ' ')), as asked"
 else
@@ -159,7 +175,7 @@ cat <<EOF
 
 $(green "Stopped.")
 
-Nothing was deleted. PostgreSQL, each Bot's files and each Bot's browser profile are Docker
+No data was deleted. PostgreSQL, each Bot's files and each Bot's browser profile are Docker
 volumes, so channels, credentials and signed-in sessions are all still there next time.
 
 Start again: bash scripts/start.sh

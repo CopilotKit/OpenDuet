@@ -129,7 +129,7 @@ export async function setupLearning(
   const envPath = resolve(directory, ".env");
   const original = await readFile(envPath, "utf8").catch(() => {
     throw new Error(
-      "Run this helper from the OpenBot root after copying .env.example to .env.",
+      "Run this helper from the directory that holds .env (the repository root in OpenDuet) after copying .env.example to .env.",
     );
   });
   const values = parseEnv(original);
@@ -214,7 +214,7 @@ export async function setupLearning(
   const selected = json(
     await readFile(projectPath, "utf8").catch(() => {
       throw new Error(
-        "Run npx --yes copilotkit@latest login and project select from the OpenBot root first.",
+        "Run npx --yes copilotkit@latest login and project select first, from the directory that holds .env (the repository root in OpenDuet).",
       );
     }),
   );
@@ -225,7 +225,10 @@ export async function setupLearning(
     );
   }
   // A saved record alone does not prove a stale CPK key belongs to it. Re-provision here.
-  // CLI project select removes INTELLIGENCE_API_KEY, hence the precondition above.
+  // This path runs only when no INTELLIGENCE_API_KEY is set: an existing one takes the branch above
+  // and is never replaced, because CLI project select removes INTELLIGENCE_API_KEY from .env. What
+  // it provisions arrives as CPK_INTELLIGENCE_API_KEY, which is copied to INTELLIGENCE_API_KEY at
+  // the end, after the container is verified.
   const provision = await run(
     ["project", "select", "--project", projectId, "--json"],
     directory,

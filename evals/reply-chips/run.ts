@@ -20,7 +20,7 @@ import { hasProseAnswer } from "../../openbot/scripts/evals/reply-answer";
 import { hasShortReplyChips } from "../../openbot/scripts/evals/reply-chips";
 
 const APP = process.env.OPENDUET_APP ?? "http://localhost:3041";
-if (/:(3030|3130)\b/.test(APP)) throw new Error("Refusing Jerel's real stack.");
+if (/:(3030|3130)\b/.test(APP)) throw new Error("Refusing a live stack.");
 if (process.env.OPENDUET_FAKE_MAILBOX !== "1")
   throw new Error(
     "Set OPENDUET_FAKE_MAILBOX=1 after verifying this stack uses Fake Google.",

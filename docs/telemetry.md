@@ -14,7 +14,7 @@ Create or pick the project from the repository root:
 ```sh
 npx --yes copilotkit@latest login
 npx --yes copilotkit@latest project select
-bun scripts/setup-learning.ts
+bun openbot/scripts/setup-learning.ts
 ```
 
 `project select` writes two values to `.env`. Keep both, and deploy them together:
