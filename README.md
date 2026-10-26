@@ -24,7 +24,7 @@ Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit In
 
 <table><tr><td>
 
-https://github.com/user-attachments/assets/0a26d2f9-a8fb-4c54-b51c-77131f5200f1
+https://github.com/user-attachments/assets/d8503c81-32d8-4c65-a2b9-2cb15071ff14
 
 </td></tr></table>
 
