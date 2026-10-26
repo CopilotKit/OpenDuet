@@ -3,7 +3,7 @@ import type { Message } from "@ag-ui/core";
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { ConversationView } from "@/components/channels/conversation-view";
 import { PageCardTool } from "@/lib/copilot/page-card-tool";
 import { settleReactWork } from "./settle-react-work";
@@ -72,12 +72,18 @@ const queries = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 });
 
-function Chat({ messages }: { messages: Message[] }) {
+function Chat({
+  messages,
+  busy = false,
+}: {
+  messages: Message[];
+  busy?: boolean;
+}) {
   return (
     <QueryClientProvider client={queries}>
       <CopilotKitProvider>
         <PageCardTool />
-        <ConversationView messages={messages} onSubmit={() => {}} />
+        <ConversationView busy={busy} messages={messages} onSubmit={() => {}} />
       </CopilotKitProvider>
     </QueryClientProvider>
   );
@@ -107,4 +113,71 @@ test("a refused call draws no card", async () => {
   );
   await view.findByText(/It's a 2-minute read/);
   expect(view.queryByRole("link", { name: /Hearth & Co/ })).toBeNull();
+});
+
+/** The person's system asks for less motion, or does not. */
+function prefersReducedMotion(reduce: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: reduce && query.includes("prefers-reduced-motion"),
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
+test("while the Bot is still writing, the card waits under its line, then rises in", async () => {
+  prefersReducedMotion(false);
+  const messages = made(JSON.stringify(saved));
+  const view = render(<Chat busy messages={messages} />);
+  await view.findByText(/It's a 2-minute read/);
+  // The turn is still being written: a finished line keeps the card's place, no card yet.
+  expect(view.queryByRole("link", { name: /Hearth & Co/ })).toBeNull();
+  const held = view.container.querySelector("[data-card-held]");
+  expect(held?.textContent).toContain("Put it together");
+  expect(held?.textContent).toContain(saved.title);
+
+  await act(async () => view.rerender(<Chat messages={messages} />));
+  const card = await view.findByRole("link", { name: /Hearth & Co/ });
+  expect(view.container.querySelector("[data-card-held]")).toBeNull();
+  const entrance = card.closest("[data-card-entrance]");
+  expect(entrance?.getAttribute("data-card-entrance")).toBe("rise");
+  // It starts 8px low and a little small.
+  expect((entrance as HTMLElement).style.transform).toMatch(
+    /translateY\(8px\)/,
+  );
+  expect((entrance as HTMLElement).style.transform).toMatch(/scale\(0\.98\)/);
+});
+
+test("with reduced motion the held card only fades in", async () => {
+  prefersReducedMotion(true);
+  const messages = made(JSON.stringify(saved));
+  const view = render(<Chat busy messages={messages} />);
+  await view.findByText(/It's a 2-minute read/);
+  expect(view.queryByRole("link", { name: /Hearth & Co/ })).toBeNull();
+
+  await act(async () => view.rerender(<Chat messages={messages} />));
+  const card = await view.findByRole("link", { name: /Hearth & Co/ });
+  const entrance = card.closest<HTMLElement>("[data-card-entrance]");
+  expect(entrance?.getAttribute("data-card-entrance")).toBe("fade");
+  // No rise and no scale: nothing moves, it only appears.
+  expect(entrance?.style.transform ?? "").not.toMatch(/translate|scale/);
+  // Nothing grows, so nothing is clipped: the card's hairline shows from the first frame.
+  expect(entrance?.parentElement?.className ?? "").not.toContain(
+    "overflow-hidden",
+  );
+  prefersReducedMotion(false);
+});
+
+test("a card read back from history is drawn as it is, with no entrance", async () => {
+  const view = render(<Chat messages={made(JSON.stringify(saved))} />);
+  const card = await view.findByRole("link", { name: /Hearth & Co/ });
+  expect(card.closest("[data-card-entrance]")).toBeNull();
+  // The preview sits on the neutral tile: no per-kind tint drawn over it.
+  const preview = card.querySelector<HTMLElement>("[data-preview]");
+  expect(preview?.className).toContain("bg-duet-tile");
+  expect(preview?.style.background).toBe("");
 });
