@@ -207,6 +207,30 @@ test("the local install's step says where its data really lives", async () => {
   expect(page).not.toContain("Only what you send to your model leaves it");
 });
 
+test("the organization step offers enterprise early access and CopilotKit's other products", async () => {
+  localEvaluation = true;
+  const view = open("/onboarding?step=organization");
+
+  await heading(view, "Deploy it for your organization");
+  expect(document.body.textContent).toContain(
+    "Enterprise deployments are available now in early access.",
+  );
+  const early = view.getByRole("link", { name: "Get early access" });
+  expect(early.getAttribute("href")).toBe(
+    "https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_app",
+  );
+  expect(early.getAttribute("target")).toBe("_blank");
+  for (const product of ["openbot", "openmuse", "opendots"]) {
+    const link = view
+      .getAllByRole("link")
+      .find((a) => a.getAttribute("href")?.includes(`/${product}?`));
+    expect(link?.getAttribute("href")).toBe(
+      `https://www.copilotkit.ai/${product}?ref=openduet_onboarding`,
+    );
+    expect(link?.getAttribute("target")).toBe("_blank");
+  }
+});
+
 test("Next adds a step to the address and to history, and saves it", async () => {
   const view = open("/onboarding?step=welcome");
   await heading(view, "Welcome to OpenDuet");
