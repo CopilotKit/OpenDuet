@@ -258,6 +258,7 @@ It is CopilotKit's open-source take on the proactive-agent category: assistants 
 
 **Rolling it out at your company?** [Talk to a CopilotKit engineer.](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
+- [copilotkit.ai/openduet](https://www.copilotkit.ai/openduet): OpenDuet's page
 - [Discord](https://discord.gg/6dffbvGU3D): ask a question or share what you are building
 - [@copilotkit on X](https://x.com/copilotkit): releases and what is shipping
 - [docs.copilotkit.ai](https://docs.copilotkit.ai): CopilotKit documentation
