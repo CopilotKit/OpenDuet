@@ -9,6 +9,7 @@ import {
   approvalInboxOptions,
   waitingOnYou,
 } from "@/lib/approvals";
+import { useSheetPresence } from "@/hooks/use-sheet-presence";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 import { DuetIcon } from "./icons";
@@ -34,6 +35,9 @@ export function QuestionSheet({
   const answer = useMutation(answerPersonQuestionMutationOptions(queryClient));
   const [draft, setDraft] = useState("");
   const popup = useRef<HTMLDivElement>(null);
+  // Fades out and sinks a little before the route closes it (use-sheet-presence.ts).
+  const presence = useSheetPresence();
+  const close = () => presence.close(onClose);
   const question = waitingOnYou(inbox.data).questions.find(
     (item) => item.id === questionId,
   );
@@ -44,33 +48,34 @@ export function QuestionSheet({
   const send = () => {
     const response = draft.trim();
     if (!question || !response || answer.isPending) return;
-    answer.mutate({ id: question.id, response }, { onSuccess: onClose });
+    answer.mutate({ id: question.id, response }, { onSuccess: close });
   };
 
   return (
     <DialogPrimitive.Root
       onOpenChange={(next) => {
-        if (!next) onClose();
+        if (!next) close();
       }}
-      open
+      onOpenChangeComplete={presence.onOpenChangeComplete}
+      open={presence.open}
     >
       <DialogPrimitive.Portal>
         <DialogPrimitive.Popup
           aria-modal="true"
           className={cn(
             "duet-veil duet-face group fixed inset-0 z-50 flex flex-col text-duet-ink outline-none",
-            "transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none",
+            "transition-opacity duration-[var(--duet-dur-enter)] data-ending-style:duration-[var(--duet-dur-swap)] data-ending-style:opacity-0 data-starting-style:opacity-0",
           )}
           initialFocus={popup}
           ref={popup}
         >
           <div className="mx-auto flex min-h-0 w-full max-w-[430px] flex-1 flex-col px-2.5 pt-[max(env(safe-area-inset-top),12px)] pb-[max(env(safe-area-inset-bottom),10px)]">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] bg-duet-card shadow-duet-raised transition-transform duration-300 ease-out motion-reduce:transition-none motion-safe:group-data-starting-style:translate-y-6">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] bg-duet-card shadow-duet-raised transition-transform duration-[var(--duet-dur-sheet)] group-data-ending-style:duration-[var(--duet-dur-swap)] motion-reduce:transition-none motion-safe:group-data-ending-style:translate-y-3 motion-safe:group-data-starting-style:translate-y-6">
               <header className="grid min-h-16 shrink-0 grid-cols-[44px_1fr_44px] items-center px-2 py-1">
                 <button
                   aria-label="Close"
                   className="grid size-[44px] place-items-center rounded-full text-duet-ink outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:bg-duet-tile"
-                  onClick={onClose}
+                  onClick={close}
                   type="button"
                 >
                   <DuetIcon name="x" size={22} stroke={2.1} />

@@ -62,7 +62,7 @@ export function PageCard({
     children: (
       <DuetCard
         className={cn(
-          "transition-transform duration-150 motion-safe:group-active:scale-[0.985]",
+          "transition-transform motion-safe:group-active:scale-[0.985]",
           size === "grid" && "rounded-[20px]",
         )}
         // Before the link navigates: the sheet it opens reads this as it mounts.

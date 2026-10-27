@@ -332,7 +332,7 @@ function Group({
 }
 
 const ROW_LINK =
-  "-my-1 block min-w-0 flex-1 rounded-[12px] py-1 outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/25";
+  "-my-1 block min-w-0 flex-1 rounded-[12px] py-1 outline-none transition-opacity focus-visible:ring-3 focus-visible:ring-duet-violet/25";
 
 /** The title of a row: bold, at most two lines. */
 function RowTitle({ children }: { children: ReactNode }) {
@@ -461,7 +461,7 @@ function CheckBox({
       <span
         aria-hidden
         className={cn(
-          "grid size-[22px] place-items-center rounded-[6px] transition-[background-color,box-shadow] duration-200 motion-reduce:transition-none",
+          "grid size-[22px] place-items-center rounded-[6px] transition-[background-color,box-shadow] duration-[var(--duet-dur-swap)] motion-reduce:transition-none",
           filled
             ? "bg-duet-ink text-duet-surface"
             : "bg-duet-card shadow-[inset_0_0_0_1.5px_var(--duet-hair)]",

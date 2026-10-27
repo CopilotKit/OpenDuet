@@ -14,6 +14,7 @@ import {
   pageKeys,
   pageListQueryOptions,
 } from "@/lib/pages/queries";
+import { DURATION, EASE_OUT } from "@/lib/motion";
 import { useReducedMotionPreference } from "@/lib/reduced-motion";
 import { type TaskRecord, taskListQueryOptions } from "@/lib/tasks/queries";
 import { cn } from "@/lib/utils";
@@ -90,6 +91,8 @@ export function filterPages(
 const MAKING_POLL_MS = 3_000;
 /** The gap between the + options as they fan out, nearest the + first. */
 const FAN_STAGGER_S = 0.045;
+/** Folding is quicker than fanning, so the gap between options folding away is shorter too. */
+const FOLD_STAGGER_S = 0.025;
 
 /** A task started here, with no page baseline until the list has been read. */
 type Started = {
@@ -457,7 +460,7 @@ function MakingCard({
       params={{ taskId }}
       to="/tasks/$taskId"
     >
-      <DuetCard className="rounded-[20px] transition-transform duration-150 motion-safe:group-active:scale-[0.985]">
+      <DuetCard className="rounded-[20px] transition-transform motion-safe:group-active:scale-[0.985]">
         <div
           aria-hidden
           className="relative grid place-items-center overflow-hidden bg-duet-tile"
@@ -493,6 +496,11 @@ function MakingCard({
  * The + and what it fans out: Page, Deck, Dashboard and Doc as pills stacked over it, the nearest
  * first, a beat apart. The + turns into × while they are out, and a tap anywhere else, or Escape,
  * folds them away. With reduced motion they fade in place.
+ *
+ * Each pill grows out of the +, from its right edge, and folds back into it farthest first, so the
+ * stack reads as coming from the button and going back into it. The list stays drawn until the last
+ * pill has folded (`folding`): it was `hidden` the moment the + was pressed again, which hid the
+ * fold before it could play, so the pills vanished on one frame.
  */
 function MakeFan({
   fanned,
@@ -504,6 +512,13 @@ function MakeFan({
   onPick: (kind: MakeKind) => void;
 }) {
   const reduced = useReducedMotionPreference();
+  // Still drawn while the pills fold away; hidden once the last one has gone.
+  const [folding, setFolding] = useState(false);
+  const [wasFanned, setWasFanned] = useState(fanned);
+  if (wasFanned !== fanned) {
+    setWasFanned(fanned);
+    setFolding(!fanned);
+  }
   useEffect(() => {
     if (!fanned) return;
     const onKey = (event: KeyboardEvent) => {
@@ -527,7 +542,7 @@ function MakeFan({
             key="scrim"
             onClick={() => onToggle(false)}
             tabIndex={-1}
-            transition={{ duration: 0.18 }}
+            transition={{ duration: DURATION.swap, ease: EASE_OUT }}
             type="button"
           />
         ) : null}
@@ -537,10 +552,10 @@ function MakeFan({
         // The 16px padding contains the rise animation and focus rings without moving the pills.
         // Cap the stack above the +; this overlay cannot use the screen body's scroll container.
         className="absolute right-[calc(1rem-16px)] bottom-[calc(var(--duet-tab-space,0px)+var(--make-plus-size)+10px)] z-30 flex max-h-[calc(100%-var(--duet-tab-space,0px)-var(--make-plus-size)-18px)] max-w-[calc(100%-2rem+32px)] flex-col items-end gap-2.5 overflow-y-auto overscroll-contain p-[16px] [scroll-padding:16px]"
-        hidden={!fanned}
+        hidden={!fanned && !folding}
         id="make-kinds"
       >
-        <AnimatePresence>
+        <AnimatePresence onExitComplete={() => setFolding(false)}>
           {fanned
             ? MAKE_KINDS.map((kind, index) => {
                 // Nearest the + goes first, so the stack unfolds upward from it.
@@ -548,11 +563,21 @@ function MakeFan({
                 return (
                   <motion.li
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    className="pointer-events-auto max-w-full shrink-0"
+                    className="pointer-events-auto max-w-full shrink-0 origin-bottom-right"
                     exit={
                       reduced
-                        ? { opacity: 0 }
-                        : { opacity: 0, y: 10, scale: 0.92 }
+                        ? { opacity: 0, transition: { duration: DURATION.tap } }
+                        : {
+                            opacity: 0,
+                            y: 10,
+                            scale: 0.92,
+                            transition: {
+                              duration: DURATION.tap,
+                              ease: EASE_OUT,
+                              // Farthest from the + first, so the stack folds down into it.
+                              delay: index * FOLD_STAGGER_S,
+                            },
+                          }
                     }
                     initial={
                       reduced
@@ -562,7 +587,7 @@ function MakeFan({
                     key={kind.id}
                     transition={
                       reduced
-                        ? { duration: 0.12 }
+                        ? { duration: DURATION.tap }
                         : {
                             type: "spring",
                             stiffness: 520,
@@ -605,7 +630,7 @@ function MakeFan({
       >
         <span
           className={cn(
-            "transition-transform duration-200 ease-out motion-reduce:transition-none",
+            "transition-transform duration-[var(--duet-dur-swap)] motion-reduce:transition-none",
             fanned && "rotate-45",
           )}
         >

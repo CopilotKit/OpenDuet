@@ -212,7 +212,8 @@ function TasksSwitch({
         </div>
       </div>
       {searching ? (
-        <div className="duet-glass mt-2.5 flex h-11 items-center gap-2 rounded-full pr-1 pl-4 shadow-duet-glass">
+        // Fades in under the switch as it opens, with a short drop that reduced motion leaves out.
+        <div className="duet-glass mt-2.5 flex h-11 items-center gap-2 rounded-full pr-1 pl-4 shadow-duet-glass animate-in fade-in duration-[var(--duet-dur-swap)] ease-[var(--duet-ease-out)] motion-safe:slide-in-from-top-1">
           <DuetIcon className="text-duet-ink-3" name="search" size={18} />
           <input
             aria-label="Search tasks"
@@ -230,7 +231,7 @@ function TasksSwitch({
           />
           <button
             aria-label="Close search"
-            className="grid size-9 shrink-0 place-items-center rounded-full text-duet-ink-2 hover:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40"
+            className="grid size-9 shrink-0 place-items-center rounded-full text-duet-ink-2 transition-colors hover:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40"
             onClick={onClose}
             type="button"
           >

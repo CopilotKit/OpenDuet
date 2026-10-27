@@ -1,5 +1,6 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { DURATION, EASE_OUT } from "@/lib/motion";
 import { OnboardingFrame } from "./onboarding-frame";
 
 /**
@@ -153,7 +154,7 @@ export function OnboardingWizard({
   return (
     <MotionConfig
       reducedMotion="user"
-      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: DURATION.enter, ease: EASE_OUT }}
     >
       <OnboardingFrame
         footnote={step?.footnote}

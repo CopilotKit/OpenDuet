@@ -111,7 +111,7 @@ export function SmallPill({
   return (
     <button
       className={cn(
-        "type-label min-h-11 flex-1 rounded-full px-3 py-2 font-semibold transition-[filter,transform,opacity] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
+        "type-label min-h-11 flex-1 rounded-full px-3 py-2 font-semibold transition-[filter,transform,opacity,background-color] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
         primary
           ? "bg-duet-black text-duet-on-black hover:brightness-125"
           : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",

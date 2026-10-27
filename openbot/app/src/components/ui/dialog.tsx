@@ -40,7 +40,7 @@ function DialogOverlay({
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/10 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs",
+        "fixed inset-0 z-50 bg-black/10 transition-opacity duration-[var(--duet-dur-enter)] data-ending-style:duration-[var(--duet-dur-tap)] data-ending-style:opacity-0 data-starting-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs",
         className,
       )}
       {...props}
@@ -78,8 +78,11 @@ function DialogContent({
            * `max-h-[85svh]` with the body scrolling, not the popup growing: a form that is long on a
            * laptop must not push its own submit button off the bottom of the screen, which is exactly
            * where somebody looks for it.
+           *
+           * It opens from 96% at the entrance duration and closes to 98% at the tap one: leaving, it
+           * only needs to be seen going. With reduced motion it fades without the scale.
            */
-          "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex max-h-[85svh] w-[calc(100%-2rem)] max-w-lg flex-col gap-4 rounded-xl border border-border bg-popover p-5 text-sm text-popover-foreground shadow-lg transition duration-150 ease-out data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0",
+          "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex max-h-[85svh] w-[calc(100%-2rem)] max-w-lg flex-col gap-4 rounded-xl border border-border bg-popover p-5 text-sm text-popover-foreground shadow-lg transition-[opacity,scale] duration-[var(--duet-dur-enter)] data-ending-style:duration-[var(--duet-dur-tap)] data-ending-style:opacity-0 data-starting-style:opacity-0 motion-safe:data-ending-style:scale-[0.98] motion-safe:data-starting-style:scale-[0.96]",
           className,
         )}
         {...props}

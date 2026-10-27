@@ -170,7 +170,7 @@ export function StepDashes({ index, total }: { index: number; total: number }) {
         <span
           aria-hidden
           className={cn(
-            "h-1 min-w-0 flex-1 rounded-full transition-colors duration-300 motion-reduce:transition-none",
+            "h-1 min-w-0 flex-1 rounded-full transition-colors duration-[var(--duet-dur-enter)] motion-reduce:transition-none",
             at === index ? "bg-duet-ink" : "bg-duet-ink-3/35",
           )}
           data-current={at === index ? "" : undefined}

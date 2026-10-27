@@ -28,6 +28,7 @@ import { agentKeys } from "@/lib/agents/queries";
 import { type PageSummary, pageKeys } from "@/lib/pages/queries";
 import { type TaskRecord, taskKeys } from "@/lib/tasks/queries";
 import { queryClient } from "@/query-client";
+import { runMotionFrames } from "./run-motion-frames";
 import { settleReactWork } from "./settle-react-work";
 
 /**
@@ -871,14 +872,21 @@ test("the + fans out Page, Deck, Dashboard and Doc, nearest first, and folds the
   for (const item of items)
     expect(item.style.transform).toContain("translateY");
 
-  // Escape folds them away.
+  // Escape folds them away. The list stays drawn while they fold back into the +, rather than
+  // being hidden on the press, which hid the fold before it could play.
   fireEvent.keyDown(document, { key: "Escape" });
   expect(plus.getAttribute("aria-expanded")).toBe("false");
+  expect(fan.hidden).toBe(false);
+  expect(within(fan).getAllByRole("button")).toHaveLength(6);
+  // Motion draws only on a frame, and this DOM gets none of its own: run them by hand until the
+  // last pill has folded, and the list is hidden again.
+  await runMotionFrames(40);
   await waitFor(() =>
     expect(view.queryByRole("button", { name: "Make a slides" }) === null).toBe(
       true,
     ),
   );
+  expect(fan.hidden).toBe(true);
 });
 
 test("with reduced motion the options fade in place, without rising", async () => {

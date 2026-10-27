@@ -435,7 +435,7 @@ export function ComputerView({
       src={`data:image/png;base64,${drawn.base64}`}
       alt="What the Bot is looking at"
       // Keep unexpected screenshot dimensions inside the reserved frame.
-      className="absolute inset-0 h-full w-full object-contain opacity-100 transition-opacity duration-300 starting:opacity-0"
+      className="absolute inset-0 h-full w-full object-contain opacity-100 transition-opacity duration-[var(--duet-dur-enter)] starting:opacity-0"
     />
   ) : null;
 

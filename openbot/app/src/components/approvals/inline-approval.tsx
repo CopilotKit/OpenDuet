@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { personWasAsked } from "@/lib/approval-view";
 import {
   approvalInboxOptions,
@@ -15,6 +15,9 @@ import { ApprovalCard } from "./approval-card";
  * continues the conversation, and this gives the line back to the tool's own renderer, under a
  * folded card saying who decided. A request the gate never put to the person (a saved rule allowed
  * it) leaves no card behind.
+ *
+ * The folded card is a new card, so it is told when it replaces a waiting one this screen showed:
+ * then its line and pill arrive rather than being drawn still, as they would be read back.
  */
 export function InlineApproval({
   toolCallId,
@@ -31,12 +34,14 @@ export function InlineApproval({
         (candidate) => candidate.action.toolCallId === toolCallId,
       )
     : undefined;
+  const [sawWaiting, setSawWaiting] = useState(false);
+  if (request?.status === "pending" && !sawWaiting) setSawWaiting(true);
   if (!request) return <>{fallback}</>;
   if (request.status !== "pending") {
     if (!personWasAsked(request) || !request.decision) return <>{fallback}</>;
     return (
       <div className="space-y-2">
-        <ApprovalCard compact request={request} />
+        <ApprovalCard compact decidedNow={sawWaiting} request={request} />
         {fallback}
       </div>
     );

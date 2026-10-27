@@ -57,7 +57,7 @@ export function VoiceSheet({
           aria-modal="true"
           className={cn(
             "duet-veil duet-face group fixed inset-0 z-50 flex flex-col overflow-y-auto text-duet-ink outline-none",
-            "transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none",
+            "transition-opacity duration-[var(--duet-dur-enter)] data-ending-style:duration-[var(--duet-dur-swap)] data-ending-style:opacity-0 data-starting-style:opacity-0",
           )}
           // The sheet itself takes focus, not ×: a stray Enter or Space should not throw the words away.
           initialFocus={popup}
@@ -74,7 +74,7 @@ export function VoiceSheet({
               </DialogPrimitive.Description>
             </div>
             <Status dictation={dictation} />
-            <div className="mt-7 flex items-center justify-center gap-8 transition-transform duration-300 ease-out motion-safe:group-data-starting-style:translate-y-3">
+            <div className="mt-7 flex items-center justify-center gap-8 transition-transform duration-[var(--duet-dur-sheet)] motion-safe:group-data-starting-style:translate-y-3">
               <Button
                 aria-label="Discard"
                 className={SIDE_CONTROL}
@@ -130,7 +130,7 @@ export function VoiceSheet({
 function Status({ dictation }: { dictation: Dictation }) {
   const { state, session } = dictation;
   const pill =
-    "duet-glass type-label flex min-h-10 max-w-full items-center gap-2.5 rounded-[20px] px-4 py-2.5 shadow-duet-glass animate-in fade-in duration-200 motion-reduce:animate-none";
+    "duet-glass type-label flex min-h-10 max-w-full items-center gap-2.5 rounded-[20px] px-4 py-2.5 shadow-duet-glass animate-in fade-in duration-[var(--duet-dur-swap)]";
   if (state.phase === "error") {
     return (
       <div className={cn(pill, "py-1.5 pr-1.5")}>
@@ -161,7 +161,7 @@ function Status({ dictation }: { dictation: Dictation }) {
   return (
     <div className={cn(pill, "text-duet-ink-2")} role="status">
       <span
-        className="flex items-center gap-2.5 animate-in fade-in duration-200 motion-reduce:animate-none"
+        className="flex items-center gap-2.5 animate-in fade-in duration-[var(--duet-dur-swap)]"
         key={state.phase}
       >
         {state.phase === "recording" ? (

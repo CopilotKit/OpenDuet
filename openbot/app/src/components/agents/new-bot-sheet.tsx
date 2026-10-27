@@ -41,6 +41,7 @@ import {
 } from "@/lib/agents/queries";
 import { isComposing } from "@/lib/composing";
 import { appConfig } from "@/lib/generated/application-config";
+import { DURATION, EASE_OUT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/query-client";
 
@@ -332,7 +333,7 @@ function NewBotFlow({ onCreated }: { onCreated: (agentId: string) => void }) {
             className="mt-6"
             initial={{ opacity: 0, x: 24 * direction }}
             key={step}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+            transition={{ duration: DURATION.swap, ease: EASE_OUT }}
           >
             {step === "about" ? (
               <AboutStep

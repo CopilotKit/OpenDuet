@@ -15,6 +15,7 @@ import {
   ChannelGlyph,
   channelColour,
 } from "@/components/duet/channel-look";
+import { useSheetPresence } from "@/hooks/use-sheet-presence";
 import { appConfig } from "@/lib/generated/application-config";
 import {
   archiveDuetChannelMutationOptions,
@@ -78,24 +79,34 @@ function GlassPill({ className, ...props }: ComponentProps<"button">) {
  *
  * The same sheet edits a channel from its own screen (`channel` set): "Edit channel" and Save, with
  * Archive or Unarchive at its foot.
+ *
+ * It rises from below the screen's edge over the veil, and sinks back before the parent hears that
+ * it closed, saved or archived (use-sheet-presence.ts). With reduced motion it fades in place.
  */
 export function ChannelSheet({
   botId,
   channel,
-  onClose,
-  onSaved,
-  onArchived,
+  onClose: closed,
+  onSaved: saved,
+  onArchived: archived,
 }: {
   botId: string;
   /** The channel being edited. Absent, the sheet makes a new one. */
   channel?: DuetChannel;
+  /** Dismissed, once the sheet has gone. */
   onClose: () => void;
-  /** Made or saved, with the channel as the server now has it. */
+  /** Made or saved, with the channel as the server now has it, once the sheet has gone. */
   onSaved: (channel: DuetChannel) => void;
-  /** Archived or brought back from the sheet. */
+  /** Archived or brought back from the sheet, once the sheet has gone. */
   onArchived?: (channel: DuetChannel) => void;
 }) {
   const editing = channel !== undefined;
+  const presence = useSheetPresence();
+  const onClose = () => presence.close(closed);
+  const onSaved = (next: DuetChannel) => presence.close(() => saved(next));
+  const onArchived = archived
+    ? (next: DuetChannel) => presence.close(() => archived(next))
+    : undefined;
   const [icon, setIcon] = useState<ChannelIcon>(
     channel?.icon ?? NEW_CHANNEL_LOOK.icon,
   );
@@ -189,14 +200,15 @@ export function ChannelSheet({
         }
         onClose();
       }}
-      open
+      onOpenChangeComplete={presence.onOpenChangeComplete}
+      open={presence.open}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Backdrop className="duet-veil fixed inset-0 z-50 transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
+        <DialogPrimitive.Backdrop className="duet-veil fixed inset-0 z-50 transition-opacity duration-[var(--duet-dur-sheet)] data-ending-style:duration-[var(--duet-dur-enter)] data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <DialogPrimitive.Popup
           className={cn(
             "duet-face fixed inset-x-0 top-[max(env(safe-area-inset-top),12px)] bottom-0 z-50 mx-auto flex w-full max-w-[430px] flex-col overflow-y-auto rounded-t-[38px] bg-duet-surface px-4 pb-[max(env(safe-area-inset-bottom),16px)] text-duet-ink shadow-duet-raised outline-none",
-            "transition-[opacity,translate] duration-300 ease-out data-ending-style:translate-y-8 data-ending-style:opacity-0 data-starting-style:translate-y-8 data-starting-style:opacity-0 motion-reduce:transition-none",
+            "transition-[opacity,translate] motion-safe:duration-[var(--duet-dur-sheet)] motion-safe:data-ending-style:duration-[var(--duet-dur-enter)] motion-safe:data-ending-style:translate-y-full motion-safe:data-starting-style:translate-y-full motion-reduce:duration-[var(--duet-dur-swap)] motion-reduce:data-ending-style:opacity-0 motion-reduce:data-starting-style:opacity-0",
           )}
           initialFocus={editing ? undefined : nameField}
         >
@@ -390,7 +402,7 @@ export function ChannelSheet({
             />
             {channel && onArchived ? (
               <button
-                className="type-label mt-6 self-center rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+                className="type-label mt-6 self-center rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
                 disabled={busy}
                 onClick={() =>
                   archive.mutate(

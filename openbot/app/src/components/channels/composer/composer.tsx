@@ -8,6 +8,7 @@ import {
   IconPlayerStopFilled,
   IconPlus,
 } from "@tabler/icons-react";
+import { AnimatePresence, motion } from "motion/react";
 import { PromptArea, type PromptAreaHandle } from "prompt-area";
 import {
   isSegmentsEmpty,
@@ -20,6 +21,7 @@ import {
   type ChangeEvent,
   type DragEvent,
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -37,7 +39,9 @@ import {
   mediaTypeOf,
   shouldClaimPaste,
 } from "@/lib/channels/attachments";
+import { DURATION, EASE_OUT } from "@/lib/motion";
 import { newId } from "@/lib/new-id";
+import { useReducedMotionPreference } from "@/lib/reduced-motion";
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
 import { AttachmentStrip } from "./attachment-strip";
@@ -1398,7 +1402,7 @@ export function Composer({
     void dictation.session.start();
   };
   const actionClassName = cn(
-    "rounded-full p-0",
+    "relative rounded-full p-0",
     compact
       ? "size-[44px] shrink-0 self-end bg-duet-black text-duet-on-black hover:bg-duet-black hover:brightness-125 disabled:opacity-30"
       : "size-7",
@@ -1412,7 +1416,9 @@ export function Composer({
       size="icon"
       type="button"
     >
-      <IconPlayerStopFilled className={compact ? "size-3.5" : "size-3"} />
+      <SwapGlyph name="stop">
+        <IconPlayerStopFilled className={compact ? "size-3.5" : "size-3"} />
+      </SwapGlyph>
     </Button>
   ) : callAction ? (
     <Button
@@ -1430,11 +1436,13 @@ export function Composer({
       size="icon"
       type="button"
     >
-      {compact ? (
-        <DuetIcon name="waveform" size={19} stroke={2.2} />
-      ) : (
-        <IconWaveform className="size-4" />
-      )}
+      <SwapGlyph name="call">
+        {compact ? (
+          <DuetIcon name="waveform" size={19} stroke={2.2} />
+        ) : (
+          <IconWaveform className="size-4" />
+        )}
+      </SwapGlyph>
     </Button>
   ) : voiceAction ? (
     <Button
@@ -1452,7 +1460,9 @@ export function Composer({
       size="icon"
       type="button"
     >
-      <DuetIcon name="waveform" size={19} stroke={2.2} />
+      <SwapGlyph name="speak">
+        <DuetIcon name="waveform" size={19} stroke={2.2} />
+      </SwapGlyph>
     </Button>
   ) : (
     <Button
@@ -1462,11 +1472,13 @@ export function Composer({
       size="icon"
       type="submit"
     >
-      {compact ? (
-        <DuetIcon name="arrowUp" size={20} stroke={2.4} />
-      ) : (
-        <IconArrowUp className="size-3.5" />
-      )}
+      <SwapGlyph name="send">
+        {compact ? (
+          <DuetIcon name="arrowUp" size={20} stroke={2.4} />
+        ) : (
+          <IconArrowUp className="size-3.5" />
+        )}
+      </SwapGlyph>
     </Button>
   );
 
@@ -1812,4 +1824,34 @@ function withMediaTypeOnly(file: File): File {
     lastModified: file.lastModified,
     type: mediaType,
   });
+}
+
+/**
+ * The glyph on the composer's one round button, which stands for four things in turn: Send, Stop
+ * while the Bot answers, a voice call, and speaking a message. When what it stands for changes, as
+ * it does the moment a message is sent and Stop takes Send's place, the old glyph shrinks into a
+ * blur as the new one grows out of it, both at once, in place. The button itself stays put.
+ *
+ * Drawn as it is on the first paint; only a change swaps. With reduced motion the two cross-fade.
+ */
+function SwapGlyph({ name, children }: { name: string; children: ReactNode }) {
+  const reduced = useReducedMotionPreference();
+  const away = reduced
+    ? { opacity: 0 }
+    : { opacity: 0, scale: 0.25, filter: "blur(2px)" };
+  return (
+    <AnimatePresence initial={false} mode="popLayout">
+      <motion.span
+        animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+        className="grid place-items-center"
+        data-glyph={name}
+        exit={away}
+        initial={away}
+        key={name}
+        transition={{ duration: DURATION.swap, ease: EASE_OUT }}
+      >
+        {children}
+      </motion.span>
+    </AnimatePresence>
+  );
 }

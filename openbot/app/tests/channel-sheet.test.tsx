@@ -246,17 +246,24 @@ test("editing a channel starts from it, saves only what changed, and can archive
   await user.click(within(dialog).getByRole("button", { name: "Change icon" }));
   await user.click(within(dialog).getByRole("radio", { name: "Berry" }));
   await user.click(within(dialog).getByRole("button", { name: "Save" }));
+  // Saved, the sheet sinks away first, and the screen hears of it once it has gone.
   await waitFor(() => expect(saved).toHaveLength(1));
   expect(sent[0]).toEqual({
     method: "PATCH",
     path: "/api/openduet/channels/c-kiln",
     body: { colour: "berry" },
   });
+  cleanup();
 
+  const again = draw({ channel: kiln });
+  const reopened = await again.view.findByRole("dialog", {
+    name: "Edit channel",
+  });
   await user.click(
-    within(dialog).getByRole("button", { name: "Archive channel" }),
+    within(reopened).getByRole("button", { name: "Archive channel" }),
   );
-  await waitFor(() => expect(archived).toHaveLength(1));
+  await waitFor(() => expect(again.archived).toHaveLength(1));
+  expect(archived).toHaveLength(0);
   expect(sent.at(-1)).toMatchObject({
     method: "POST",
     path: "/api/openduet/channels/c-kiln/archive",

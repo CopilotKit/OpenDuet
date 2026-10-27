@@ -116,7 +116,7 @@ export function TaskButton({
     <button
       aria-label={label}
       className={cn(
-        "type-label min-h-[44px] max-w-full shrink-0 rounded-full px-4 py-2 font-semibold outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50",
+        "type-label min-h-[44px] max-w-full shrink-0 rounded-full px-4 py-2 font-semibold outline-none transition-[filter,background-color] focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50",
         primary
           ? "bg-duet-black text-duet-on-black hover:brightness-125"
           : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
@@ -190,7 +190,7 @@ export function TaskCard({
         className:
           "group block w-full rounded-[22px] outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 focus-visible:ring-inset",
         children: (
-          <div className="transition-transform duration-150 motion-safe:group-active:scale-[0.985]">
+          <div className="transition-transform motion-safe:group-active:scale-[0.985]">
             <TaskRow
               channel={channel}
               failure={failure}
@@ -266,7 +266,7 @@ export function TaskLink({
 }) {
   return link({
     className:
-      "duet-face flex min-h-11 max-w-full items-center gap-[7px] rounded-xl pl-1 outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 hover:opacity-80",
+      "duet-face flex min-h-11 max-w-full items-center gap-[7px] rounded-xl pl-1 outline-none transition-opacity focus-visible:ring-3 focus-visible:ring-duet-violet/40 hover:opacity-80",
     children: (
       <>
         <svg

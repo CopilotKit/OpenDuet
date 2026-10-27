@@ -75,7 +75,7 @@ export function DictationSurface({
           aria-hidden={recording || undefined}
           inert={recording}
           className={cn(
-            "min-w-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transform-none motion-reduce:transition-none",
+            "min-w-0 transition-[opacity,transform] duration-[var(--duet-dur-swap)] motion-reduce:transform-none motion-reduce:transition-none",
             recording
               ? "pointer-events-none -translate-y-1 opacity-0"
               : "translate-y-0 opacity-100",

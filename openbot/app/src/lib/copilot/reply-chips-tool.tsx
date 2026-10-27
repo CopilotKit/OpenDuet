@@ -82,7 +82,8 @@ export function ReplyChips({
               <button
                 className={cn(
                   // parity-spec 2.14: a reply glyph, the sub size at regular weight, a hairline, 44px tall.
-                  "type-sub inline-flex h-11 max-w-full items-center gap-1.5 rounded-full pr-[18px] pl-3.5 font-normal outline-none transition-[transform,background-color] duration-[var(--duet-dur-tap)] focus-visible:ring-2 focus-visible:ring-duet-accent focus-visible:ring-offset-2 focus-visible:ring-offset-duet-surface",
+                  // Fill, ink and ring cross over together when one is chosen and the rest go quiet.
+                  "type-sub inline-flex h-11 max-w-full items-center gap-1.5 rounded-full pr-[18px] pl-3.5 font-normal outline-none transition-[transform,background-color,color,box-shadow] duration-[var(--duet-dur-tap)] focus-visible:ring-2 focus-visible:ring-duet-accent focus-visible:ring-offset-2 focus-visible:ring-offset-duet-surface",
                   chosen
                     ? "bg-duet-violet-soft text-duet-violet shadow-[0_0_0_1px_color-mix(in_oklab,var(--duet-violet)_28%,transparent)]"
                     : "bg-duet-card shadow-[0_0_0_1px_var(--duet-hair)]",
