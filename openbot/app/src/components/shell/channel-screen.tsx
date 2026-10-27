@@ -131,7 +131,7 @@ function ChannelHeader({
         <div className="flex items-center justify-between gap-3 rounded-[16px] bg-duet-tile px-4 py-2.5">
           <p className="type-sub text-duet-ink-2">This channel is archived.</p>
           <button
-            className="type-label shrink-0 rounded-full px-3 py-1.5 font-semibold text-duet-ink outline-none shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-card focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+            className="type-label shrink-0 rounded-full px-3 py-1.5 font-semibold text-duet-ink outline-none shadow-[inset_0_0_0_1px_var(--duet-hair)] transition-colors hover:bg-duet-card focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
             disabled={unarchive.isPending}
             onClick={() =>
               unarchive.mutate({ id: channel.id, archived: false })

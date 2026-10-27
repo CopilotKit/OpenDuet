@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useLayoutEffect, useRef, useState } from "react";
 import { PillButton } from "@/components/approvals/approval-card";
 import { DuetIcon } from "@/components/duet/icons";
+import { useSheetPresence } from "@/hooks/use-sheet-presence";
 import type { AgentProfile } from "@/lib/agents/queries";
 import {
   saveForUpNextMutationOptions,
@@ -22,6 +23,10 @@ export const STARTER_BLANK = "…";
  *
  * Make's + opens the same sheet with a starter line, such as "Make a deck about …", and the "…"
  * selected, so the person only types what it is about. A starter left as it was is not an ask yet.
+ *
+ * It rises from below the screen's edge onto the veil, and sinks back before `onClose` or `onAdded`
+ * is called, so the parent never takes it away mid-motion (use-sheet-presence.ts). With reduced
+ * motion it fades in place.
  */
 export function NewTaskSheet({
   bot,
@@ -46,6 +51,7 @@ export function NewTaskSheet({
   const field = useRef<HTMLTextAreaElement>(null);
   const start = useMutation(startTaskMutationOptions(queryClient));
   const save = useMutation(saveForUpNextMutationOptions(queryClient));
+  const presence = useSheetPresence();
   const busy = start.isPending || save.isPending;
   const error = start.error ?? save.error;
   const instruction = draft.trim() === starter.trim() ? "" : draft.trim();
@@ -69,21 +75,24 @@ export function NewTaskSheet({
   const startNow = () => {
     if (!instruction || busy) return;
     save.reset();
-    start.mutate(ask, { onSuccess: (task) => onAdded("active", task) });
+    start.mutate(ask, {
+      onSuccess: (task) => presence.close(() => onAdded("active", task)),
+    });
   };
   return (
     <DialogPrimitive.Root
       onOpenChange={(next) => {
-        if (!next && !busy) onClose();
+        if (!next && !busy) presence.close(onClose);
       }}
-      open
+      onOpenChangeComplete={presence.onOpenChangeComplete}
+      open={presence.open}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Backdrop className="duet-veil fixed inset-0 z-50 transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none" />
+        <DialogPrimitive.Backdrop className="duet-veil fixed inset-0 z-50 transition-opacity duration-[var(--duet-dur-enter)] data-ending-style:duration-[var(--duet-dur-swap)] data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <DialogPrimitive.Popup
           className={cn(
             "duet-face fixed inset-x-0 bottom-0 z-50 mx-auto max-h-dvh w-full max-w-[430px] overflow-y-auto overscroll-contain px-2.5 pb-[max(env(safe-area-inset-bottom),12px)] text-duet-ink outline-none",
-            "transition-[opacity,translate] duration-300 ease-out data-ending-style:translate-y-6 data-ending-style:opacity-0 data-starting-style:translate-y-6 data-starting-style:opacity-0 motion-reduce:transition-none",
+            "transition-[opacity,translate] motion-safe:duration-[var(--duet-dur-sheet)] motion-safe:data-ending-style:duration-[var(--duet-dur-enter)] motion-safe:data-ending-style:translate-y-full motion-safe:data-starting-style:translate-y-full motion-reduce:duration-[var(--duet-dur-swap)] motion-reduce:data-ending-style:opacity-0 motion-reduce:data-starting-style:opacity-0",
           )}
           initialFocus={field}
         >
@@ -96,7 +105,7 @@ export function NewTaskSheet({
                 aria-label="Close"
                 className="grid size-11 shrink-0 place-items-center rounded-full text-duet-ink-2 outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
                 disabled={busy}
-                onClick={onClose}
+                onClick={() => presence.close(onClose)}
                 type="button"
               >
                 <DuetIcon name="x" size={20} stroke={2.1} />
@@ -145,7 +154,8 @@ export function NewTaskSheet({
                   onClick={() => {
                     start.reset();
                     save.mutate(ask, {
-                      onSuccess: () => onAdded("up_next", null),
+                      onSuccess: () =>
+                        presence.close(() => onAdded("up_next", null)),
                     });
                   }}
                 >

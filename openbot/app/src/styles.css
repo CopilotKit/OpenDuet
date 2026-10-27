@@ -343,6 +343,14 @@ body {
   --shadow-duet-card: var(--duet-shadow-card);
   --shadow-duet-raised: var(--duet-shadow-raised);
   --shadow-duet-glass: var(--duet-shadow-glass);
+  /*
+   * A bare `transition-colors` or `transition-opacity` takes the motion tokens, not Tailwind's own
+   * 150ms on its weak built-in curve. Hover and press states were written as bare utilities all over
+   * the app, so this is where they learn the tap duration and the strong ease-out, all at once. A
+   * class that names its own `duration-*` or `ease-*` still wins.
+   */
+  --default-transition-duration: var(--duet-dur-tap);
+  --default-transition-timing-function: var(--duet-ease-out);
 }
 
 /*
@@ -533,10 +541,14 @@ body {
   }
 }
 
-/* A task checked off on Tasks: the check pops in a little past full size and settles. */
+/*
+ * A task checked off on Tasks: the check pops in a little past full size and settles. 320ms, longer
+ * than any token on purpose: it is two movements in one, the overshoot in its first 60% and the
+ * settle after it, and each needs its own share of the time to be seen.
+ */
 .duet-check-land {
   display: block;
-  animation: duet-check-land 320ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  animation: duet-check-land 320ms var(--duet-ease-out) both;
 }
 
 @keyframes duet-check-land {
@@ -556,6 +568,33 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .duet-check-land {
     animation: none;
+  }
+}
+
+/*
+ * Menus, selects and tooltips grow out of what opened them and shrink back into it: a fade with a
+ * small zoom from the trigger's side (`origin-(--transform-origin)`), in at the swap duration and
+ * out at the tap one. With reduced motion they keep the fade and lose the zoom and the slide.
+ *
+ * Unlayered on purpose: the zoom and slide utilities live in Tailwind's utilities layer, and an
+ * unlayered rule wins over any layered one, so this needs no `!important` to undo them.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="tooltip-content"]
+  ) {
+    --tw-enter-scale: 1;
+    --tw-exit-scale: 1;
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
   }
 }
 

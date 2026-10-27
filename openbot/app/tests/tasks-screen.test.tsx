@@ -24,6 +24,7 @@ import {
 } from "@/components/shell/tasks-screen";
 import { agentKeys } from "@/lib/agents/queries";
 import { queryClient } from "@/query-client";
+import { runMotionFrames } from "./run-motion-frames";
 import { settleReactWork } from "./settle-react-work";
 
 /**
@@ -1147,6 +1148,49 @@ test("an Up next card slides off: right starts it, left hides it, a short drag d
       path: "/api/proactive/suggestions/s-2/dismiss",
       body: undefined,
     }),
+  );
+});
+
+test("a swiped card's place closes as soon as it has flown, and it comes back with the reason if starting fails", async () => {
+  quiet();
+  suggestions = [
+    suggestion({ id: "s-1" }),
+    suggestion({
+      id: "s-2",
+      title: "Pay the booth balance",
+      createdAt: ago(90),
+    }),
+  ];
+  serving();
+  // The start is held open, so what the list does before the answer is in can be seen.
+  let refuse = () => {};
+  const served = global.fetch;
+  global.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/proactive/suggestions/s-1/start")
+      return new Promise<Response>((resolve) => {
+        refuse = () =>
+          resolve(
+            Response.json({ error: "Couldn't start that" }, { status: 500 }),
+          );
+      });
+    return served(input, init);
+  }) as unknown as typeof fetch;
+  const view = await upNext();
+  swipe(await view.findByText("Reply to Rosa about the glaze"), 200);
+  await flown();
+  await runMotionFrames(40);
+  // Flown off and gone from the list while the answer is still on its way: the card under it has
+  // its place, rather than a gap the size of a card waiting on the server.
+  await waitFor(() =>
+    expect(view.queryByText("Reply to Rosa about the glaze")).toBeNull(),
+  );
+  expect(view.getByText("Pay the booth balance")).toBeTruthy();
+
+  refuse();
+  // Refused, it is back in its place, with why on it.
+  expect(await view.findByText("Reply to Rosa about the glaze")).toBeTruthy();
+  expect((await view.findByRole("alert")).textContent).toBe(
+    "Couldn't start that",
   );
 });
 

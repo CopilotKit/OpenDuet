@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { DuetIcon } from "@/components/duet/icons";
 import { ChannelTagOf } from "@/components/duet/channel-tag";
@@ -19,6 +20,8 @@ import {
   resolveSuggestionMutationOptions,
   turnOnResearchMutationOptions,
 } from "@/lib/proactive";
+import { DURATION, EASE_OUT } from "@/lib/motion";
+import { useReducedMotionPreference } from "@/lib/reduced-motion";
 import { matchesSearch, type SortOrder, sortByTime } from "@/lib/tasks/groups";
 import { queryClient } from "@/query-client";
 import {
@@ -49,6 +52,14 @@ export const LOOK_FOR_MS = 3 * 60_000;
  * off, right to start it as a task and left to hide it, or takes Start and Hide.
  *
  * Empty, it asks what it can take off the person's plate, and Show me looks now.
+ *
+ * A card that goes, by a swipe or a button, leaves its place to the cards under it: they slide up
+ * into it (`layout`, which moves them by transform) rather than jumping on the frame the list is read
+ * again. A swiped card has already flown off the screen, so its place closes as soon as it lands,
+ * not a request later: the gap it left read as the list having stalled. If the answer then fails the
+ * card comes back, with the reason on it. One answered by a button stays, busy, until the answer is
+ * in, then fades as the cards under it close over it. Cards that arrive later, as Show me finds them,
+ * fade in. With reduced motion nothing slides: the card fades and the rest take its place.
  */
 export function UpNextView({
   agents,
@@ -68,9 +79,19 @@ export function UpNextView({
     enabled: Boolean(bot),
   });
   const act = useMutation(resolveSuggestionMutationOptions(queryClient));
+  const reduced = useReducedMotionPreference();
   const cancel = useMutation(cancelFollowUpMutationOptions(queryClient));
   // Who took the last started suggestion, said once it has gone from the list.
   const [started, setStarted] = useState<string | null>(null);
+  // Cards a swipe sent off the screen, left out of the list while their answer is on its way.
+  const [flown, setFlown] = useState<ReadonlySet<string>>(new Set());
+  const land = (id: string, gone: boolean) =>
+    setFlown((current) => {
+      const next = new Set(current);
+      if (gone) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   const setting = bot
     ? settings.data?.find((row) => row.agentId === bot.id)
     : undefined;
@@ -82,7 +103,10 @@ export function UpNextView({
   const open = suggestions.data ?? [];
   const shown = sortByTime(
     open
-      .filter((suggestion) => matchesSearch(suggestion.title, query))
+      .filter(
+        (suggestion) =>
+          !flown.has(suggestion.id) && matchesSearch(suggestion.title, query),
+      )
       .map((suggestion) => ({ suggestion, at: suggestion.createdAt })),
     order,
   ).map(({ suggestion }) => suggestion);
@@ -104,13 +128,20 @@ export function UpNextView({
     (suggestion: ProactiveSuggestion): AnswerSuggestion =>
     (action, comeBack) => {
       setStarted(null);
+      // Only a swipe hands over `comeBack`, and by then its card has left the screen.
+      if (comeBack) land(suggestion.id, true);
       act.mutate(
         { id: suggestion.id, action },
         {
           onSuccess: () => {
             if (action === "start") setStarted(botName(suggestion.agentId));
+            // The list has been read again by now, without it.
+            land(suggestion.id, false);
           },
-          onError: () => comeBack?.(),
+          onError: () => {
+            land(suggestion.id, false);
+            comeBack?.();
+          },
         },
       );
     };
@@ -132,33 +163,58 @@ export function UpNextView({
         </p>
       ) : (
         <section aria-label="Up next">
-          <ul>
-            {shown.map((suggestion) => (
-              <li key={suggestion.id}>
-                <UpNextCard
-                  busy={act.isPending && act.variables?.id === suggestion.id}
-                  error={
-                    act.error && act.variables?.id === suggestion.id
-                      ? act.error.message
-                      : null
-                  }
-                  from={
-                    suggestion.agentId === bot?.id
-                      ? null
-                      : botName(suggestion.agentId)
-                  }
-                  onAnswer={answer(suggestion)}
-                  suggestion={suggestion}
-                />
-              </li>
-            ))}
+          {/*
+           * Positioned, so a card on its way out can be lifted out of the list's flow. Drawn afresh
+           * for each search, so typing narrows the list at once rather than fading every card that
+           * stopped matching.
+           */}
+          <ul className="relative">
+            <AnimatePresence initial={false} key={query} mode="popLayout">
+              {shown.map((suggestion) => (
+                <motion.li
+                  animate={{ opacity: 1 }}
+                  data-up-next={suggestion.id}
+                  exit={{ opacity: 0 }}
+                  initial={{ opacity: 0 }}
+                  key={suggestion.id}
+                  layout={reduced ? false : "position"}
+                  transition={{
+                    duration: DURATION.swap,
+                    ease: EASE_OUT,
+                    layout: { duration: DURATION.enter, ease: EASE_OUT },
+                  }}
+                >
+                  <UpNextCard
+                    busy={act.isPending && act.variables?.id === suggestion.id}
+                    error={
+                      act.error && act.variables?.id === suggestion.id
+                        ? act.error.message
+                        : null
+                    }
+                    from={
+                      suggestion.agentId === bot?.id
+                        ? null
+                        : botName(suggestion.agentId)
+                    }
+                    onAnswer={answer(suggestion)}
+                    suggestion={suggestion}
+                  />
+                </motion.li>
+              ))}
+            </AnimatePresence>
           </ul>
         </section>
       )}
       {started ? (
-        <p className="type-sub px-1 text-duet-ink-2" role="status">
+        <motion.p
+          animate={{ opacity: 1, filter: "blur(0px)" }}
+          className="type-sub px-1 text-duet-ink-2"
+          initial={{ opacity: 0, filter: reduced ? "none" : "blur(2px)" }}
+          role="status"
+          transition={{ duration: DURATION.swap, ease: EASE_OUT }}
+        >
           Started. {started} is on it.
-        </p>
+        </motion.p>
       ) : null}
       {researchOff && bot && open.length > 0 ? (
         <DuetCard>
@@ -206,7 +262,7 @@ function UpNextCard({
       : null;
   const source = suggestion.sourceLink ? (
     <a
-      className="underline decoration-duet-hair underline-offset-2 hover:text-duet-ink"
+      className="underline decoration-duet-hair underline-offset-2 transition-colors hover:text-duet-ink"
       href={suggestion.sourceLink}
       rel="noreferrer"
       target="_blank"

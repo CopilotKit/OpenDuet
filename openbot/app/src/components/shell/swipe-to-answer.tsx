@@ -27,27 +27,85 @@ const MAX_TILT = 4;
 /** How blurred the card's content is at the threshold and past it, in pixels: no word survives it. */
 const MAX_BLUR = 14;
 /**
+ * How much of the card's content still shows at the threshold and past it, under the tint.
+ *
+ * A blur pushes what is dark in the content out to the card's edge, and the card's clip cuts it off
+ * there. The black Start pill sat on that edge and smeared into a hard-cut dark band down the side
+ * of a card that was otherwise soft: the "blurs badly near the edge" Jerel saw. Fading the content
+ * on the same ramp as the blur leaves its shapes as a ghost under the tint, the way Duet's card
+ * reads at its threshold, so nothing dark reaches the edge to be cut.
+ */
+const CONTENT_AT_THRESHOLD = 0.4;
+/**
  * The share of the threshold by which a mark is fully drawn. Early, so the person sees what the
  * drag will do while it is still small, and the mark then fills in when letting go would do it.
  */
 const MARK_IN = 0.3;
 /**
- * The corner radius of the card this wraps. While the content is blurred it is clipped to it, so the
- * slab keeps its edge instead of the blur spilling past its corners.
+ * The corner radius of the card this wraps, the card token itself. While the content is blurred it
+ * is clipped to it, so the slab keeps its edge instead of the blur spilling past its corners. It was
+ * a 22px written here against a 20px card, so the slab and the tint stood a little inside the card's
+ * own corners.
  */
-const CARD_RADIUS = 22;
+const CARD_RADIUS = "var(--duet-radius-card)";
 /**
  * Within this many pixels of its place the card counts as at rest: no blur, slab, tint or mark. The
  * last stretch of a spring back is drawn as the card at rest, not as a faint hand-off.
  */
 const REST = 2;
-/** How long a card answered by a drag takes to leave the screen. The answer is sent when it has. */
+/** The longest a card answered by a drag takes to leave the screen. The answer is sent when it has. */
 const FLY_SECONDS = 0.28;
+/** The shortest: a card let go nearly off the screen still takes a beat to be seen going. */
+const FLY_MIN_SECONDS = 0.16;
 /**
- * How far past the screen's edge the card flies, so its shadow has gone too. Its tilt keeps it
+ * The least speed a card sets off at when it is let go, in pixels a second.
+ *
+ * A finger that stops at the threshold and then lets go has no speed to hand on, and the flight
+ * used to set off from rest at a fixed 280ms, however little of the screen was left to cross: let
+ * go 90px from the edge, the card crept to it, blurred, for a quarter of a second, and read as stuck
+ * rather than thrown. It now leaves at this speed or the finger's, whichever is faster, and the
+ * flight is as long as the distance needs, between the two durations above.
+ */
+const FLING_SPEED = 1100;
+/**
+ * How far past the edge it is seen to the card flies, so its shadow has gone too. Its tilt keeps it
  * inside its own width on the side it trails, so the edge is all there is to clear.
  */
 const EXIT_MARGIN = 16;
+/**
+ * The share of the flight after which the card fades, to nothing by the time it has gone.
+ *
+ * It flies to the edge of what shows it, which on a phone is the screen's but on a wide screen is
+ * the phone-wide column's, in the middle of the page. There the card used to be sliced off by an
+ * edge nobody can see, still blurred, which read as a smear across the column. Fading over the second
+ * half of the flight, it dissolves as it reaches that edge instead of being cut by it.
+ */
+const FADE_FROM = 0.5;
+
+/**
+ * The left and right of what is seen of `element`: the screen, narrowed by every ancestor that clips
+ * what overflows it sideways, such as the scrolling column a card sits in.
+ */
+function visibleEdges(element: Element | null): {
+  left: number;
+  right: number;
+} {
+  let left = 0;
+  let right = window.innerWidth;
+  for (
+    let ancestor = element?.parentElement ?? null;
+    ancestor && ancestor !== document.body;
+    ancestor = ancestor.parentElement
+  ) {
+    const overflow = getComputedStyle(ancestor).overflowX;
+    if (!overflow || overflow === "visible") continue;
+    const box = ancestor.getBoundingClientRect();
+    if (box.width <= 0) continue;
+    left = Math.max(left, box.left);
+    right = Math.min(right, box.right);
+  }
+  return { left, right };
+}
 /**
  * How long past the flight to wait before answering anyway. Motion only moves on an animation
  * frame, and a tab in the background gets none, so a card flung just before the person switched
@@ -68,11 +126,14 @@ type Answer = "start" | "hide";
  *
  * Once the card moves it stops being something to read and becomes something being handed over. It
  * tilts toward where it is going, about its bottom edge, like a playing card slid off a table. Its
- * content blurs, quickly at first and to nothing legible by the threshold, and it takes on a tint:
- * green toward Start, grey toward Hide. On its top corner, where the eye already is, a mark says what
- * letting go will do: an outlined ring with a play glyph and "Start" (an × and "Hide" the other way),
- * which fills in solid at the threshold. The blur, the tint and the mark all follow the drag, so a
- * card let go short loses them on its way back and comes to rest exactly as it was.
+ * content blurs and fades, quickly at first and to a ghost of nothing legible by the threshold, and
+ * it takes on a tint: green toward Start, grey toward Hide. On its top corner, where the eye already
+ * is, a mark says what letting go will do: an outlined ring with a play glyph and "Start" (an × and
+ * "Hide" the other way), which fills in solid at the threshold. The blur, the fade, the tint and the
+ * mark all follow the drag, so a card let go short loses them on its way back and comes to rest
+ * exactly as it was. Let go past the threshold, it is thrown: it leaves at the finger's speed or a
+ * brisk least one, and is gone in a sixth to a quarter of a second, however near the edge it was,
+ * fading as it reaches the edge of what shows it.
  *
  * The blur is a filter on the card's own content, not on what is behind it. A backdrop filter on a
  * layer that moves and rotates has to resample the page every frame, and comes out soft or smeared
@@ -169,9 +230,23 @@ export function SwipeToAnswer({
     blurred(value) ? `blur(${blur(value).toFixed(2)}px)` : "none",
   );
   const clipPath = useTransform(x, (value) =>
-    blurred(value) ? `inset(0 round ${CARD_RADIUS}px)` : "none",
+    blurred(value) ? `inset(0 round ${CARD_RADIUS})` : "none",
+  );
+  // The content fades on the blur's own ramp, to a ghost under the tint by the threshold.
+  const contentOpacity = useTransform(x, (value) =>
+    blurred(value) ? 1 - (1 - CONTENT_AT_THRESHOLD) * reach(value) : 1,
   );
   const slab = useTransform(x, (value) => (blurred(value) ? 1 : 0));
+  // Where a card let go past the threshold is flying from and to, while it flies.
+  const flightPath = useRef<{ from: number; to: number } | null>(null);
+  const flightOpacity = useTransform(x, (value) => {
+    const path = flightPath.current;
+    if (!path || path.to === path.from) return 1;
+    const progress = (value - path.from) / (path.to - path.from);
+    return progress <= FADE_FROM
+      ? 1
+      : Math.max(0, 1 - (progress - FADE_FROM) / (1 - FADE_FROM));
+  });
   useMotionValueEvent(x, "change", (value) => {
     setReached(
       value >= threshold.current
@@ -195,6 +270,7 @@ export function SwipeToAnswer({
   const answer = (side: Answer) => {
     const send = side === "start" ? onStart : onHide;
     const comeBack = () => {
+      flightPath.current = null;
       setLeaving(false);
       settle();
     };
@@ -204,24 +280,27 @@ export function SwipeToAnswer({
       return;
     }
     setLeaving(true);
-    // Just past the screen's edge, from where the card sits at rest.
+    // Just past the edge of what shows it, from where the card sits at rest.
     const place = slot.current?.getBoundingClientRect();
+    const edges = visibleEdges(slot.current);
     const away =
       side === "start"
-        ? window.innerWidth - (place?.left ?? 0) + EXIT_MARGIN
-        : -((place?.right ?? 0) + EXIT_MARGIN);
+        ? edges.right - (place?.left ?? 0) + EXIT_MARGIN
+        : edges.left - (place?.right ?? 0) - EXIT_MARGIN;
     const from = x.get();
-    // The finger's speed toward the edge, against the flight's average. The curve sets off at that
-    // speed, so a flick carries on and a card held still sets off from rest, and it ends at the
-    // average speed, so it leaves the screen still moving rather than easing to a stop at its edge.
-    const average = Math.abs(away - from) / FLY_SECONDS;
-    const lead =
-      average > 0
-        ? Math.min(
-            1.5,
-            Math.max(0, (x.getVelocity() * Math.sign(away)) / average),
-          )
-        : 1;
+    flightPath.current = { from, to: away };
+    const distance = Math.abs(away - from);
+    // The finger's speed toward the edge, never less than the least a thrown card leaves at.
+    const speed = Math.max(FLING_SPEED, x.getVelocity() * Math.sign(away));
+    const seconds = Math.min(
+      FLY_SECONDS,
+      Math.max(FLY_MIN_SECONDS, distance / speed),
+    );
+    // That speed against the flight's average. The curve sets off at it, so a flick carries on, and
+    // it ends at the average speed, so it leaves the screen still moving rather than easing to a stop
+    // at its edge.
+    const average = distance / seconds;
+    const lead = average > 0 ? Math.min(1.5, speed / average) : 1;
     let landed = false;
     const land = () => {
       if (landed) return;
@@ -230,11 +309,11 @@ export function SwipeToAnswer({
       send(comeBack);
     };
     flight.current = animate(x, away, {
-      duration: FLY_SECONDS,
+      duration: seconds,
       ease: [0.3, 0.3 * lead, 0.7, 0.7],
       onComplete: land,
     });
-    landing.current = setTimeout(land, FLY_SECONDS * 1000 + LANDING_GRACE_MS);
+    landing.current = setTimeout(land, seconds * 1000 + LANDING_GRACE_MS);
   };
 
   return (
@@ -306,31 +385,35 @@ export function SwipeToAnswer({
           else settle();
         }}
         ref={card}
-        style={{ x, rotate: reduceMotion ? 0 : rotate }}
+        style={{
+          x,
+          rotate: reduceMotion ? 0 : rotate,
+          opacity: flightOpacity,
+        }}
       >
         {/* The slab the blurred card is drawn on, opaque, so nothing behind shows through it. */}
         <motion.div
           aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-[22px] bg-duet-card shadow-duet-glass"
+          className="pointer-events-none absolute inset-0 rounded-[var(--duet-radius-card)] bg-duet-card shadow-duet-glass"
           data-swipe-slab=""
           style={{ opacity: slab }}
         />
         <motion.div
           className="relative"
           data-swipe-content=""
-          style={{ filter, clipPath }}
+          style={{ filter, clipPath, opacity: contentOpacity }}
         >
           {children}
         </motion.div>
         <motion.div
           aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-[22px] bg-duet-green/10 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--duet-green)_32%,transparent)]"
+          className="pointer-events-none absolute inset-0 rounded-[var(--duet-radius-card)] bg-duet-green/10 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--duet-green)_32%,transparent)]"
           data-swipe-tint="start"
           style={{ opacity: startReach }}
         />
         <motion.div
           aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-[22px] bg-duet-ink-3/12 shadow-[inset_0_0_0_1px_var(--duet-hair)]"
+          className="pointer-events-none absolute inset-0 rounded-[var(--duet-radius-card)] bg-duet-ink-3/12 shadow-[inset_0_0_0_1px_var(--duet-hair)]"
           data-swipe-tint="hide"
           style={{ opacity: hideReach }}
         />
@@ -384,7 +467,7 @@ function Mark({
     >
       <span
         className={cn(
-          "grid size-11 place-items-center rounded-full transition-[background-color,color,box-shadow] duration-150",
+          "grid size-11 place-items-center rounded-full transition-[background-color,color,box-shadow] duration-[var(--duet-dur-tap)]",
           start
             ? reached
               ? "bg-(--swipe-green) text-duet-card"

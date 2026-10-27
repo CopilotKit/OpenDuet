@@ -227,7 +227,7 @@ export function ActivityLine({
     />
   );
   const linkClass =
-    "block min-w-0 flex-1 rounded-[14px] outline-none hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25";
+    "block min-w-0 flex-1 rounded-[14px] outline-none transition-colors hover:bg-duet-tile/60 focus-visible:ring-3 focus-visible:ring-duet-violet/25";
   const link = row.taskId ? (
     <Link
       className={linkClass}
@@ -275,7 +275,7 @@ export function RowButton({
     <button
       aria-label={label}
       className={cn(
-        "type-label h-8 shrink-0 rounded-full px-3 font-semibold disabled:opacity-50",
+        "type-label h-8 shrink-0 rounded-full px-3 font-semibold transition-[filter,background-color] disabled:opacity-50",
         primary
           ? "bg-duet-black text-duet-on-black hover:brightness-125"
           : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",

@@ -1,4 +1,7 @@
+import { AnimatePresence, motion } from "motion/react";
 import { Fragment, type ReactNode, useState } from "react";
+import { DURATION, EASE_OUT } from "@/lib/motion";
+import { useReducedMotionPreference } from "@/lib/reduced-motion";
 import { cn } from "@/lib/utils";
 import { BuildIn } from "./build-in";
 import { DuetIcon } from "./icons";
@@ -210,19 +213,33 @@ function BriefSection({
   );
 }
 
+/** How far a label travels as it swaps, in pixels: enough to read as a change, not a move. */
+const SWAP_RISE = 4;
+
 /**
  * The row's action as a line of text under its why. A pill in its own column left the title and
  * the why a narrow strip on a phone; as text it reads as the row's next step.
+ *
+ * Pressed, "Start →" turns into "✓ Started" in place: the old words lift and blur away as the new
+ * ones rise out of a blur into their place, both at once over the swap duration, and the colour
+ * crosses from the accent to done green with them. Drawn already done, it is simply done. With
+ * reduced motion the words cross-fade without moving or blurring.
  */
 function RowAction({ action }: { action: BriefAction }) {
   const done = action.done !== undefined;
+  const reduced = useReducedMotionPreference();
+  const label = action.done ?? action.label;
+  const away = reduced
+    ? { opacity: 0 }
+    : { opacity: 0, y: -SWAP_RISE, filter: "blur(2px)" };
   return (
     <button
       aria-label={action.done ?? action.name}
       // 44px to tap (parity-spec 2.11) with the box pulled back by the margins, so the text sits
-      // as close under the why as a line would; weight 500, as buttons are (2.3).
+      // as close under the why as a line would; weight 500, as buttons are (2.3). Positioned, so the
+      // words on their way out can be lifted out of the line while the new ones take it.
       className={cn(
-        "type-sub -mx-2 -my-2.5 inline-flex h-11 items-center gap-1 rounded-full px-2 font-medium transition-opacity focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
+        "type-sub -mx-2 -my-2.5 relative inline-flex h-11 items-center rounded-full px-2 font-medium transition-[opacity,color] duration-[var(--duet-dur-swap)] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40",
         done
           ? "text-duet-status-done"
           : "text-duet-accent hover:opacity-80 active:opacity-60 disabled:text-duet-ink-3 disabled:hover:opacity-100",
@@ -231,9 +248,25 @@ function RowAction({ action }: { action: BriefAction }) {
       onClick={action.onPress}
       type="button"
     >
-      {done ? <DuetIcon name="check" size={15} stroke={2.4} /> : null}
-      {action.done ?? action.label}
-      {done ? null : <DuetIcon name="arrowRight" size={15} stroke={2.4} />}
+      <AnimatePresence initial={false} mode="popLayout">
+        <motion.span
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          className="inline-flex items-center gap-1 whitespace-nowrap"
+          data-row-action={done ? "done" : "ready"}
+          exit={away}
+          initial={
+            reduced
+              ? { opacity: 0 }
+              : { opacity: 0, y: SWAP_RISE, filter: "blur(2px)" }
+          }
+          key={done ? "done" : "ready"}
+          transition={{ duration: DURATION.swap, ease: EASE_OUT }}
+        >
+          {done ? <DuetIcon name="check" size={15} stroke={2.4} /> : null}
+          {label}
+          {done ? null : <DuetIcon name="arrowRight" size={15} stroke={2.4} />}
+        </motion.span>
+      </AnimatePresence>
     </button>
   );
 }

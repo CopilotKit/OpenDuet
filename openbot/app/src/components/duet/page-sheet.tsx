@@ -10,6 +10,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
+import { AnimatePresence, motion } from "motion/react";
 import { type PointerEvent, useEffect, useRef, useState } from "react";
 import { useConversationSend } from "@/components/channels/conversation-send";
 import { NewTaskSheet } from "@/components/shell/new-task-sheet";
@@ -25,6 +26,8 @@ import {
   slidesOf,
 } from "@/lib/pages/queries";
 import { pageThemeStyle } from "@/lib/pages/theme";
+import { DURATION, EASE_OUT } from "@/lib/motion";
+import { useReducedMotionPreference } from "@/lib/reduced-motion";
 import { searchText } from "@/lib/search-text";
 import { startTaskMutationOptions } from "@/lib/tasks/mutations";
 import { cn } from "@/lib/utils";
@@ -103,6 +106,7 @@ export function PageSheet({
     else onClose();
   };
   const popup = useRef<HTMLDivElement>(null);
+  const reduced = useReducedMotionPreference();
   const morph = useSheetMorph(pageId, onClose, (summary, size) => (
     <PageCardFace page={summary} size={size} />
   ));
@@ -121,7 +125,7 @@ export function PageSheet({
           className={cn(
             "duet-face group fixed inset-0 z-50 flex flex-col bg-duet-surface text-duet-ink outline-none",
             // The veil fades in and out with reduced motion too: a fade is the reduced transition.
-            "transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0",
+            "transition-opacity duration-[var(--duet-dur-swap)] data-ending-style:opacity-0 data-starting-style:opacity-0",
             morph.fading && "opacity-0",
           )}
           data-closing={morph.fading || undefined}
@@ -138,9 +142,11 @@ export function PageSheet({
               className={cn(
                 // A size container, so the header below can ask how much room it has.
                 "@container flex min-h-0 flex-1 flex-col overflow-hidden motion-reduce:transition-none",
+                // Morphing, the card fades in under the stand-in as it leaves, on the morph's own
+                // short hand-over (page-morph.tsx), not a token; otherwise it rises like a sheet.
                 morph.morphing
                   ? "transition-opacity duration-150 ease-out"
-                  : "transition-transform duration-300 ease-out motion-safe:group-data-starting-style:translate-y-6",
+                  : "transition-transform duration-[var(--duet-dur-sheet)] motion-safe:group-data-starting-style:translate-y-6",
                 morph.hidden && "opacity-0",
               )}
               data-morph-hidden={morph.hidden || undefined}
@@ -176,73 +182,110 @@ export function PageSheet({
                 >
                   …
                 </button>
-                {actions ? (
-                  <div className="absolute top-full right-0 z-20 flex min-w-48 flex-col rounded-2xl bg-duet-card p-2 shadow-duet-raised">
-                    <button
-                      className="min-h-11 rounded-xl px-3 text-left hover:bg-duet-tile"
-                      type="button"
-                      onClick={async () => {
-                        setActionError("");
-                        try {
-                          await navigator.clipboard.writeText(
-                            new URL(
-                              `/make/${encodeURIComponent(pageId)}`,
-                              window.location.origin,
-                            ).href,
-                          );
-                          setNotice("Link copied");
-                          setActions(false);
-                        } catch {
-                          setActionError("Couldn't copy the link. Try again.");
-                        }
-                      }}
-                    >
-                      Share
-                    </button>
-                    <button
-                      className="min-h-11 rounded-xl px-3 text-left hover:bg-duet-tile disabled:opacity-50"
-                      disabled={!bot}
-                      type="button"
-                      onClick={() => {
-                        setRevise(true);
-                        setActions(false);
-                      }}
-                    >
-                      Revise
-                    </button>
-                    <button
-                      className="min-h-11 rounded-xl px-3 text-left hover:bg-duet-tile disabled:opacity-50"
-                      disabled={!page.data?.botId || start.isPending}
-                      type="button"
-                      onClick={() => {
-                        if (!page.data?.botId) return;
-                        start.mutate(
-                          {
-                            botId: page.data.botId,
-                            instruction: `Read saved page ${pageId} with read_page, then carry out the plan in “${page.data.title}”. Ask before any external action that needs approval.`,
-                          },
-                          { onSuccess: (task) => openTask(task.id) },
-                        );
-                      }}
-                    >
-                      Turn into a task
-                    </button>
-                    <button
-                      className="min-h-11 rounded-xl px-3 text-left text-duet-red hover:bg-duet-tile disabled:opacity-50"
-                      disabled={remove.isPending}
-                      type="button"
-                      onClick={() =>
-                        remove.mutate(undefined, { onSuccess: onClose })
+                {/*
+                 * Grows out of "…" from its corner and shrinks back into it: in at the swap duration
+                 * from 97%, out at the tap one to 99%, so it is seen going without being waited on.
+                 * With reduced motion it only fades.
+                 */}
+                <AnimatePresence>
+                  {actions ? (
+                    <motion.div
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      className="absolute top-full right-0 z-20 flex min-w-48 origin-top-right flex-col rounded-2xl bg-duet-card p-2 shadow-duet-raised"
+                      data-page-actions=""
+                      exit={
+                        reduced
+                          ? {
+                              opacity: 0,
+                              transition: { duration: DURATION.tap },
+                            }
+                          : {
+                              opacity: 0,
+                              scale: 0.99,
+                              transition: {
+                                duration: DURATION.tap,
+                                ease: EASE_OUT,
+                              },
+                            }
                       }
+                      initial={
+                        reduced
+                          ? { opacity: 0 }
+                          : { opacity: 0, scale: 0.97, y: -4 }
+                      }
+                      transition={{ duration: DURATION.swap, ease: EASE_OUT }}
                     >
-                      Delete
-                    </button>
-                  </div>
-                ) : null}
+                      <button
+                        className="min-h-11 rounded-xl px-3 text-left transition-colors hover:bg-duet-tile"
+                        type="button"
+                        onClick={async () => {
+                          setActionError("");
+                          try {
+                            await navigator.clipboard.writeText(
+                              new URL(
+                                `/make/${encodeURIComponent(pageId)}`,
+                                window.location.origin,
+                              ).href,
+                            );
+                            setNotice("Link copied");
+                            setActions(false);
+                          } catch {
+                            setActionError(
+                              "Couldn't copy the link. Try again.",
+                            );
+                          }
+                        }}
+                      >
+                        Share
+                      </button>
+                      <button
+                        className="min-h-11 rounded-xl px-3 text-left transition-colors hover:bg-duet-tile disabled:opacity-50"
+                        disabled={!bot}
+                        type="button"
+                        onClick={() => {
+                          setRevise(true);
+                          setActions(false);
+                        }}
+                      >
+                        Revise
+                      </button>
+                      <button
+                        className="min-h-11 rounded-xl px-3 text-left transition-colors hover:bg-duet-tile disabled:opacity-50"
+                        disabled={!page.data?.botId || start.isPending}
+                        type="button"
+                        onClick={() => {
+                          if (!page.data?.botId) return;
+                          start.mutate(
+                            {
+                              botId: page.data.botId,
+                              instruction: `Read saved page ${pageId} with read_page, then carry out the plan in “${page.data.title}”. Ask before any external action that needs approval.`,
+                            },
+                            { onSuccess: (task) => openTask(task.id) },
+                          );
+                        }}
+                      >
+                        Turn into a task
+                      </button>
+                      <button
+                        className="min-h-11 rounded-xl px-3 text-left text-duet-red transition-colors hover:bg-duet-tile disabled:opacity-50"
+                        disabled={remove.isPending}
+                        type="button"
+                        onClick={() =>
+                          remove.mutate(undefined, { onSuccess: onClose })
+                        }
+                      >
+                        Delete
+                      </button>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
               </header>
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-10">
                 {notice ? (
-                  <p className="type-label mb-3 text-duet-green" role="status">
+                  <p
+                    className="type-label mb-3 text-duet-green animate-in fade-in duration-[var(--duet-dur-swap)]"
+                    role="status"
+                  >
                     {notice}
                   </p>
                 ) : null}
@@ -430,7 +473,7 @@ export function SlideDeck({
         onPointerUp={onPointerUp}
       >
         <div
-          className="flex transition-transform duration-300 ease-out motion-reduce:transition-none"
+          className="flex transition-transform duration-[var(--duet-dur-enter)] motion-reduce:transition-none"
           style={{ transform: `translateX(-${index * 100}%)` }}
         >
           {slides.map((slide, at) => (

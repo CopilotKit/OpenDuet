@@ -302,6 +302,23 @@ test("the Tasks badge counts what Needs input lists: a task waiting on the perso
   ).toBeTruthy();
 });
 
+test("the current tab sits on the one capsule, which slides between tabs, and the badge pops in with its count", async () => {
+  inbox = { requests: [pending("a"), pending("b")], questions: [] };
+  serving();
+  const view = draw(<TabBar current="tasks" />, undefined, "/tasks");
+  const tasksTab = await view.findByRole("link", { name: "Tasks, 2 waiting" });
+  const nav = view.getByRole("navigation", { name: "Main" });
+  // One capsule, under the current tab only: it is moved, not drawn afresh in each tab.
+  const capsules = nav.querySelectorAll("[data-tab-capsule]");
+  expect(capsules).toHaveLength(1);
+  expect(tasksTab.contains(capsules[0] as Node)).toBe(true);
+  const badge = tasksTab.querySelector<HTMLElement>("[data-tab-badge]");
+  expect(badge?.textContent).toBe("2");
+  // Arriving, it starts small and clear of its place, and springs into it.
+  expect(badge?.style.opacity).toBe("0");
+  expect(badge?.style.transform).toContain("scale(0.5)");
+});
+
 test("with nothing waiting Tasks carries no badge", async () => {
   inbox = { requests: [], questions: [] };
   serving();

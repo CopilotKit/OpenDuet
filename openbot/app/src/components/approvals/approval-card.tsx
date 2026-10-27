@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from "motion/react";
 import {
   type ComponentProps,
   Fragment,
@@ -15,6 +16,8 @@ import {
   describeApproval,
 } from "@/lib/approval-view";
 import type { ApprovalDecision, ApprovalRequest } from "@/lib/approvals";
+import { DURATION, EASE_OUT } from "@/lib/motion";
+import { useReducedMotionPreference } from "@/lib/reduced-motion";
 import { cn } from "@/lib/utils";
 
 const KIND_ICON: Record<
@@ -37,7 +40,7 @@ export function PillButton({
   return (
     <button
       className={cn(
-        "type-row inline-flex min-h-[46px] min-w-0 flex-1 basis-[7rem] items-center justify-center rounded-full px-4 py-2.5 font-semibold transition-[filter,transform,opacity] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
+        "type-row inline-flex min-h-[46px] min-w-0 flex-1 basis-[7rem] items-center justify-center rounded-full px-4 py-2.5 font-semibold transition-[filter,transform,opacity,background-color] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40 active:scale-[0.98] disabled:opacity-50",
         primary
           ? "bg-duet-black text-duet-on-black hover:brightness-125"
           : "text-duet-ink shadow-[inset_0_0_0_1px_var(--duet-hair)] hover:bg-duet-tile",
@@ -58,6 +61,12 @@ export function PillButton({
  *
  * Once decided, the answers fold into a line saying who decided and when, and a pill says how it
  * ended. Everything the request carries stays one tap away under Details.
+ *
+ * Decided while the person watched, the line arrives the way a word swaps in, rising out of a short
+ * blur, with its check landing, and the pill pops in beside the title. When the pill's word changes
+ * after that, Allowed to Sent, it turns over in place. A card drawn already decided, read back from
+ * history, is drawn still: `decidedNow` says the card was put up in place of a waiting one, which a
+ * conversation does by drawing a new, folded card (inline-approval.tsx).
  */
 export function ApprovalCard({
   request,
@@ -66,6 +75,7 @@ export function ApprovalCard({
   error,
   onDecide,
   compact = false,
+  decidedNow = false,
   className,
 }: {
   request: ApprovalRequest;
@@ -76,10 +86,17 @@ export function ApprovalCard({
   onDecide?: (choice: ApprovalDecision) => void;
   /** Only the title, the outcome and who decided: a decided card left in a conversation. */
   compact?: boolean;
+  /** The request was decided while it was on screen, in a card this one replaces. */
+  decidedNow?: boolean;
   className?: string;
 }) {
   const view = describeApproval(request);
   const waiting = request.status === "pending";
+  // Drawn waiting at some point, so a decision that comes in is one the person saw being made.
+  const [sawWaiting, setSawWaiting] = useState(waiting);
+  if (waiting && !sawWaiting) setSawWaiting(true);
+  const arrives = decidedNow || sawWaiting;
+  const reduced = useReducedMotionPreference();
   const handOff = request.action.policy?.behaviour === "hand_off";
   const outcome = approvalOutcome(request);
   const receipt = waiting ? null : decisionReceipt(request);
@@ -94,7 +111,7 @@ export function ApprovalCard({
       raised
       role={waiting ? "region" : undefined}
     >
-      <div className="flex min-h-[54px] items-center gap-2.5 px-4 py-2.5">
+      <div className="relative flex min-h-[54px] items-center gap-2.5 px-4 py-2.5">
         <Tile icon={KIND_ICON[view.kind]} size={32} />
         <div className="min-w-0 flex-1">
           <p className="type-row font-semibold">
@@ -104,14 +121,34 @@ export function ApprovalCard({
             <p className="type-label truncate text-duet-ink-3">{caption}</p>
           ) : null}
         </div>
-        {outcome ? (
-          <OutcomePill
-            icon={outcome.tone === "green" ? "check" : null}
-            tone={outcome.tone}
-          >
-            {outcome.label}
-          </OutcomePill>
-        ) : null}
+        <AnimatePresence initial={arrives} mode="popLayout">
+          {outcome ? (
+            <motion.span
+              animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+              className="shrink-0"
+              data-outcome={outcome.label}
+              exit={
+                reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.9, filter: "blur(2px)" }
+              }
+              initial={
+                reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.85, filter: "blur(2px)" }
+              }
+              key={outcome.label}
+              transition={{ duration: DURATION.swap, ease: EASE_OUT }}
+            >
+              <OutcomePill
+                icon={outcome.tone === "green" ? "check" : null}
+                tone={outcome.tone}
+              >
+                {outcome.label}
+              </OutcomePill>
+            </motion.span>
+          ) : null}
+        </AnimatePresence>
       </div>
       {compact ? null : (
         <ApprovalContent handOff={handOff} request={request} view={view} />
@@ -154,7 +191,7 @@ export function ApprovalCard({
           </div>
           {handOff ? null : (
             <button
-              className="type-sub mx-auto mt-1 flex h-11 items-center rounded-full px-3 font-medium text-duet-ink-2 hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 disabled:opacity-50"
+              className="type-sub mx-auto mt-1 flex h-11 items-center rounded-full px-3 font-medium text-duet-ink-2 transition-colors hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40 disabled:opacity-50"
               disabled={busy}
               onClick={() => onDecide("allow_always")}
               type="button"
@@ -164,14 +201,29 @@ export function ApprovalCard({
           )}
         </div>
       ) : null}
-      {receipt ? (
-        <DecidedLine
-          at={request.decidedAt ?? null}
-          tone={request.decision === "deny" ? "red" : "green"}
-        >
-          {receipt}
-        </DecidedLine>
-      ) : null}
+      <AnimatePresence initial={arrives}>
+        {receipt ? (
+          <motion.div
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            data-decided-line=""
+            initial={
+              reduced
+                ? { opacity: 0 }
+                : { opacity: 0, y: 4, filter: "blur(2px)" }
+            }
+            key="decided"
+            transition={{ duration: DURATION.swap, ease: EASE_OUT }}
+          >
+            <DecidedLine
+              at={request.decidedAt ?? null}
+              landing={arrives}
+              tone={request.decision === "deny" ? "red" : "green"}
+            >
+              {receipt}
+            </DecidedLine>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </DuetCard>
   );
 }
@@ -270,7 +322,7 @@ function ApprovalBody({ body }: { body: string }) {
         <button
           aria-controls={bodyId}
           aria-expanded={open}
-          className="type-label mx-4 mb-1 inline-flex min-h-11 items-center gap-1 rounded-full font-semibold text-duet-ink-2 hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40"
+          className="type-label mx-4 mb-1 inline-flex min-h-11 items-center gap-1 rounded-full font-semibold text-duet-ink-2 transition-colors hover:text-duet-ink focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40"
           onClick={() => setOpen((shown) => !shown)}
           type="button"
         >
@@ -293,10 +345,13 @@ function DecidedLine({
   children,
   at,
   tone,
+  landing,
 }: {
   children: ReactNode;
   at: string | null;
   tone: "green" | "red";
+  /** Decided just now: the check lands as Tasks' does when a task is checked off. */
+  landing: boolean;
 }) {
   return (
     <div className="relative flex min-h-[52px] items-center gap-[9px] px-4">
@@ -304,7 +359,12 @@ function DecidedLine({
         aria-hidden
         className="absolute top-0 right-4 left-4 h-px bg-duet-hair-2"
       />
-      <span className={tone === "green" ? "text-duet-green" : "text-duet-red"}>
+      <span
+        className={cn(
+          tone === "green" ? "text-duet-green" : "text-duet-red",
+          landing && "duet-check-land",
+        )}
+      >
         <DuetIcon
           name={tone === "green" ? "checkCircle" : "x"}
           size={20}

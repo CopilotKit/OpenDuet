@@ -102,7 +102,7 @@ function RowIcon({ name }: { name: DuetIconName }) {
 
 /** A row with a disc, a name and a line under it: Everything and each channel. */
 const TALL_ROW =
-  "flex min-h-[50px] w-full items-center gap-3 rounded-[24px] px-2.5 py-1.5 text-left hover:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40";
+  "flex min-h-[50px] w-full items-center gap-3 rounded-[24px] px-2.5 py-1.5 text-left transition-colors hover:bg-duet-tile focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-violet/40";
 
 /**
  * The drawer behind the header's left disc, which is for focus, not history. From the top: the
@@ -274,7 +274,7 @@ export function MenuSheet({
                         />
                         <button
                           aria-label={`Unarchive ${channel.name}`}
-                          className="type-label shrink-0 rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
+                          className="type-label shrink-0 rounded-full px-3 py-1.5 font-semibold text-duet-ink-2 outline-none transition-colors hover:bg-duet-tile focus-visible:ring-3 focus-visible:ring-duet-violet/40 disabled:opacity-50"
                           disabled={
                             unarchive.isPending &&
                             unarchive.variables?.id === channel.id

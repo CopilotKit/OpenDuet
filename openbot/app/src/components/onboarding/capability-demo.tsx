@@ -128,6 +128,8 @@ export function CapabilityDemo({ kind }: { kind: CapabilityDemoKind }) {
             y: phase === 0 && !reduced ? 8 : 0,
           }}
           initial={false}
+          // Slower than any token on purpose: this is a demo the person watches, one beat
+          // (DEMO_BEAT_MS) at a time, not a control answering a press.
           transition={{ duration: reduced ? 0 : 0.45, ease: [0.16, 1, 0.3, 1] }}
         >
           {approval ? (

@@ -106,6 +106,10 @@ describe("the card, while it is slid", () => {
     await card.hold(THRESHOLD * 0.25);
     const quarter = blurOf(card.content);
     const quarterTint = opacityOf(card.tint("start"));
+    // The content fades on the blur's own ramp: already going a quarter of the way.
+    const quarterContent = opacityOf(card.content);
+    expect(quarterContent).toBeLessThan(1);
+    expect(quarterContent).toBeGreaterThan(0.4);
     // Already unreadable a quarter of the way: the card reads as on its way the moment it moves.
     expect(quarter).toBeGreaterThan(4);
     expect(quarterTint).toBeGreaterThan(0);
@@ -122,8 +126,12 @@ describe("the card, while it is slid", () => {
     // The blur is the content's own, drawn on an opaque slab of the card's colour.
     expect(card.content.style.filter).toMatch(/^blur\(/);
     expect(opacityOf(card.slab)).toBe(1);
-    // Clipped to the card's corners, so the slab keeps its edge.
-    expect(card.content.style.clipPath).toBe("inset(0 round 22px)");
+    // Clipped to the card's own corners, the card token, so the slab keeps its edge.
+    expect(card.content.style.clipPath).toBe(
+      "inset(0 round var(--duet-radius-card))",
+    );
+    // And faded to a ghost under the tint, so nothing dark in it is blurred out to that edge.
+    expect(opacityOf(card.content)).toBeCloseTo(0.4, 2);
     // And it still tilts toward where it is going.
     expect(card.layer.style.transform).toContain("rotate(4deg)");
 
@@ -148,6 +156,7 @@ describe("the card, while it is slid", () => {
     const atRest = () => {
       // `none`, not a zero blur: any filter would cut the card's glass off from what is behind it.
       expect(card.content.style.filter).toBe("none");
+      expect(opacityOf(card.content)).toBe(1);
       expect(card.content.style.clipPath).toBe("none");
       expect(opacityOf(card.slab)).toBe(0);
       expect(opacityOf(card.tint("start"))).toBe(0);
@@ -225,6 +234,7 @@ describe("the card, while it is slid", () => {
     await runFrames(6);
     const midway = travelOf(card.layer);
     expect(midway).toBeGreaterThan(THRESHOLD + 20);
+    expect(opacityOf(card.layer)).toBe(1);
     expect(midway).toBeLessThan(OFF_SCREEN);
     expect(blurOf(card.content)).toBe(14);
     expect(card.mark("start").getAttribute("data-state")).toBe("filled");
@@ -239,6 +249,9 @@ describe("the card, while it is slid", () => {
     await runFrames(4);
     expect(travelOf(card.layer)).toBe(OFF_SCREEN);
     expect(card.answers).toEqual(["start"]);
+    // Faded out over the second half of the way, so it dissolves at the edge of what shows it
+    // rather than being cut off by it.
+    expect(opacityOf(card.layer)).toBe(0);
   });
 
   test("let go past the threshold in a tab that gets no frames, it still answers, once", async () => {
