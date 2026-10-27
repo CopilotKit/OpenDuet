@@ -373,6 +373,30 @@ function AgentsStep() {
   );
 }
 
+/**
+ * CopilotKit's other open products, named and described as the website's own Products menu has them
+ * (copilotkit.ai). Somebody trying OpenDuet on their own machine is the person most likely to want
+ * one of them, and this is the slide about what comes after trying it. `ref` tells CopilotKit the
+ * visit came from onboarding.
+ */
+const MORE_FROM_COPILOTKIT = [
+  {
+    name: "OpenBot",
+    line: "The self-hosted assistant OpenDuet is built on.",
+    href: "https://www.copilotkit.ai/openbot?ref=openduet_onboarding",
+  },
+  {
+    name: "OpenMuse",
+    line: "A personal agent with its own browser and files, on iOS, Android and web.",
+    href: "https://www.copilotkit.ai/openmuse?ref=openduet_onboarding",
+  },
+  {
+    name: "OpenDots",
+    line: "Always-on coworkers for text, calls and Slack.",
+    href: "https://www.copilotkit.ai/opendots?ref=openduet_onboarding",
+  },
+] as const;
+
 function OrganizationStep() {
   return (
     <div className="w-full flex flex-col items-center justify-center">
@@ -381,13 +405,14 @@ function OrganizationStep() {
       </h1>
       <p className="mt-3 max-w-md text-center text-muted-foreground">
         Run one container image, or a Helm chart for EKS, GKE or AKS. Your
-        people sign in with Google, Microsoft or Okta.
+        people sign in with Google, Microsoft or Okta. Enterprise deployments
+        are available now in early access.
       </p>
       <div className="h-8" />
       <CapabilityDemo kind="task" />
       {/*
-       * The one real control on these slides, so it sits outside the frame: a frame means picture.
-       * A new tab, because following it must not cost this person their place in onboarding.
+       * The real controls on these slides, so they sit outside the frame: a frame means picture.
+       * New tabs, because following one must not cost this person their place in onboarding.
        */}
       <a
         className={cn(
@@ -398,8 +423,46 @@ function OrganizationStep() {
         rel="noopener noreferrer"
         target="_blank"
       >
-        Talk to an engineer
+        Get early access
       </a>
+      <section
+        aria-labelledby="more-from-copilotkit"
+        className="mt-8 w-full max-w-lg"
+      >
+        <h2
+          className="type-sub px-1 font-medium text-duet-ink-2"
+          id="more-from-copilotkit"
+        >
+          More from CopilotKit
+        </h2>
+        <ul className="mt-2 overflow-hidden rounded-2xl border border-border">
+          {MORE_FROM_COPILOTKIT.map((product, index) => (
+            <li
+              className={index > 0 ? "border-t border-border" : undefined}
+              key={product.name}
+            >
+              <a
+                className="flex min-h-[44px] items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-duet-accent/40"
+                href={product.href}
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="type-body block font-medium">
+                    {product.name}
+                  </span>
+                  <span className="type-sub block text-duet-ink-2">
+                    {product.line}
+                  </span>
+                </span>
+                <span aria-hidden className="text-duet-ink-3">
+                  ↗
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }
