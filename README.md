@@ -73,6 +73,7 @@ Everything below works today when you run this repository.
 | Skills                       | Reusable instructions you write once and call with `/`. |
 | Gmail and Google Calendar    | Each person connects their own account. OpenDuet reads mail and today's calendar, and sends a reply only after you answer. |
 | Connected apps               | Governed MCP connectors, including Google Drive and Notion. |
+| Public-web research          | Search public sources, read selected pages and make a brief with source links after an administrator grants the research tools. [Set up Parallel Search](docs/web-research.md). |
 | Scheduled work               | Routines: ask it to do something on a schedule and it runs as you. |
 | Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). |
 | What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). |
@@ -168,6 +169,12 @@ To try it without a Google account, use the fake Google that ships for tests and
 5. Open `/connections/google-workspace` and press **Connect**. The fake consents at once, as `maya@marlowceramics.com`, and sends you straight back.
 
 `OPENBOT_PUBLIC_URL` has to match the API's port, because the fake sends you back through it. `curl http://127.0.0.1:4900/__fake/sent` shows anything OpenDuet sent. The variable is ignored when `NODE_ENV=production`. To switch to real Google, remove it, restart, and connect again: the stored sign-in belongs to the fake.
+
+### Search the public web
+
+The OpenDuet Bot ships with a public-web research skill. [Set up Parallel Search](docs/web-research.md) to let it find sources and read pages without using its browser. The catalogue includes an anonymous entry for light use and an API-key entry for higher limits. An administrator enables the connector and grants its search and fetch tools to OpenDuet.
+
+Then try `/research-public-web` with a request such as “Compare three public project-management tools for a small team, check their current pricing, and make a brief with source links.”
 
 ## Make it your own
 

@@ -108,6 +108,7 @@ agents:
       - morning-brief
       - first-day
       - reply-to-an-email
+      - research-public-web
       - bot-creator
       - skill-creator
 
