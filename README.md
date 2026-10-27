@@ -10,7 +10,7 @@ Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
 
- **Each agent has a computer of its own. Use it on the web, in Slack, or in Microsoft Teams.**
+ **Each agent has a computer of its own. Use it on the web, on mobile, in Slack, or in Microsoft Teams.**
 
 Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
 
@@ -25,6 +25,14 @@ Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit In
 <table><tr><td>
 
 https://github.com/user-attachments/assets/f3439f74-855e-4d95-bb5c-713fded3c66e
+
+</td></tr></table>
+
+Setting it up takes a minute: onboarding ends on a checklist of what OpenDuet depends on.
+
+<table><tr><td>
+
+https://github.com/user-attachments/assets/55b74b87-708e-4e69-af1e-16e4071ead95
 
 </td></tr></table>
 
@@ -47,6 +55,10 @@ OpenDuet does not wait to be asked. It starts your day with a short brief, keeps
 - **Yours to run.** Self-host it, choose your own model, and keep your data in your own database.
 
 See [Features and Capabilities](#features-and-capabilities) for what works today.
+
+<p align="center">
+  <img src="docs/images/openduet-screens.png" alt="Five OpenDuet screens on a phone: Chat with the morning brief, Tasks, Make with the pages it made, the side panel listing channels, and a suggested task being swiped right to start it." width="880">
+</p>
 
 ## Features and Capabilities
 
@@ -180,6 +192,14 @@ Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your cop
 | `scripts/`            | `start.sh` and `stop.sh`, which run OpenBot's scripts with this repository's `.env`.               |
 | `docs/`               | What OpenDuet sends as telemetry, and how to turn it off. OpenBot's own documentation is in `openbot/docs`. |
 | `assets/`             | The banner.                                                                                        |
+
+## Built on OpenBot
+
+<p align="center">
+  <a href="https://www.copilotkit.ai/openbot"><img src="docs/images/openbot.png" alt="OpenBot" width="560"></a>
+</p>
+
+OpenDuet is built on top of [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform. OpenBot provides the server, the app, each Bot's computer, the approval boundary, the audit trail, sign-in, and the Slack and Teams channels. OpenDuet adds the morning brief, Tasks, Make and its own Bots and skills on top; its name, Bots and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). To build a different assistant on the same foundation, start from [OpenBot](https://github.com/CopilotKit/openbot), or read more at [copilotkit.ai/openbot](https://www.copilotkit.ai/openbot).
 
 ## How it works
 
