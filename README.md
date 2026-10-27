@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/55b74b87-708e-4e69-af1e-16e4071ead95
 
 OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
 
-**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief; watching your mail as it arrives is being built now. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
+**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
@@ -75,8 +75,8 @@ Everything below works today when you run this repository.
 | Connected apps               | Governed MCP connectors, including Google Drive and Notion. |
 | Scheduled work               | Routines: ask it to do something on a schedule and it runs as you. |
 | Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). |
-| What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). Slack comes later. |
-| Morning brief                | The first time you open Chat each day after your first, it is already there: what needs you and why, what can wait, today's calendar, and anything it could not check, posted once a day however many tabs or devices you open. You can also ask for it any time. **Start** on a row that needs you hands that email to OpenDuet. Getting the brief on a schedule, through routines, is not yet verified. |
+| What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). |
+| Morning brief                | The first time you open Chat each day after your first, it is already there: what needs you and why, what can wait, today's calendar, and anything it could not check, posted once a day however many tabs or devices you open. You can also ask for it any time. **Start** on a row that needs you hands that email to OpenDuet. |
 | Tasks                        | One tab for what needs you, answered right there, what OpenDuet suggests from its background research, and what it is working on. Its newest suggestion also waits above Chat's composer, with **Start** and **Hide**. A suggestion you start stays in view: under **Working** while OpenDuet works, then **Ready for review** or **Needs input** with OpenDuet's next step, opening at its own message. Answer it in Chat, on its card or by deciding its approval, and it goes back to **Working** until OpenDuet replies. A run that fails says why, with **Try again** where running it again can help. Check one off and it folds into **Resolved**. |
 | Setup checklist              | Onboarding asks you to connect Gmail and Calendar and to turn on notifications, each with **Not now**, then ends on a list of what OpenDuet depends on: Intelligence, the model key, Google, your Gmail and Calendar, notifications, and the optional extras. Each is **Ready**, **Not checked** or **Needs setup**, from the real answer, with how to fix it. **Check again** asks Intelligence and the model provider again. **Settings → Setup** opens it again. |
 | Gets to know you             | On your first day it speaks first: it greets you, reads your recent mail and this week's calendar, then answers in three short bubbles (who you are, three ways it can help, and an invitation to correct it), with **Sounds right** and **Something's off** to tap. With Gmail and Calendar not connected, it promises no mail: it says what it can do now and shows the card to connect them. |
@@ -203,17 +203,15 @@ OpenDuet is built on top of [OpenBot](https://github.com/CopilotKit/openbot), Co
 
 ## How it works
 
-This is the planned design. Everything not marked _in progress_ works in this repository today.
+Everything below works in this repository today.
 
 ```text
-You: web · Slack / Microsoft Teams · phone inbox (in progress)
+You: web · Slack / Microsoft Teams
         │                             ▲
         │ asks, answers, approvals    │ morning brief, "this needs you"
         ▼                             │
 OpenDuet server   (OpenBot: Hono + CopilotKit runtime)
-  ├── watchers        mail · calendar · Slack              (in progress)
   ├── triage          what needs you / what can wait
-  ├── outgoing check  sensitive-info classifier            (in progress)
   ├── approvals       Allow once · Always allow · Refuse
   └── gateway         policy → audit record → act
         │ AG-UI
@@ -228,9 +226,9 @@ PostgreSQL + pgvector     policy, approvals, audit, encrypted credentials
 MCP connectors            Google Drive, Notion, and more through Composio
 ```
 
-**Channels.** You reach OpenDuet where you already are: the web app, Slack, or Microsoft Teams, all of which OpenBot supports today. A phone inbox that collects everything waiting on you is in progress; its notifications will say that something needs you, not what it says.
+**Channels.** You reach OpenDuet where you already are: the web app, Slack, or Microsoft Teams, all of which OpenBot supports today.
 
-**Server.** OpenBot's server hosts the CopilotKit runtime and sends each turn to the agent over [AG-UI](https://github.com/ag-ui-protocol/ag-ui). OpenDuet adds three pieces in front of it: a triage step that decides what needs you and what can wait, a morning brief built from it, and watchers that notice new mail, calendar changes, and Slack messages as they arrive. Triage and the brief work today, when the brief is made. The watchers are in progress. All three build on OpenBot's routines, which already give an agent scheduled turns that run as you.
+**Server.** OpenBot's server hosts the CopilotKit runtime and sends each turn to the agent over [AG-UI](https://github.com/ag-ui-protocol/ag-ui). OpenDuet adds two pieces in front of it: a triage step that decides what needs you and what can wait, and a morning brief built from it. Both build on OpenBot's routines, which give an agent scheduled turns that run as you.
 
 **Agent.** Any endpoint that speaks AG-UI can be the agent, whether it is built with LangGraph, Mastra, CrewAI, Pydantic AI, Google ADK, or written by hand. OpenDuet is not tied to one framework or one model.
 
@@ -240,7 +238,7 @@ MCP connectors            Google Drive, Notion, and more through Composio
 
 **Passwords and credentials.** When a site needs a secret, the agent asks for it through a masked box. The value goes to the site; the transcript records only that a secret was requested. Credentials you store are encrypted at rest, write-only, never returned by an API, and redacted from audit events.
 
-**What leaves.** OpenBot already treats any tool it cannot positively classify as a read as a write, and redacts secrets from its audit trail. OpenDuet adds a sensitive-information check on every outgoing message (in progress). The planned design always holds back the most sensitive kinds, such as card numbers and government IDs, and sends other sensitive details, such as health or personal finances, only when you have asked it to.
+**What leaves.** OpenBot treats any tool it cannot positively classify as a read as a write, and redacts secrets from its audit trail. A message to other people always asks first, showing who it goes to and what it says.
 
 **Memory.** Threads and memory live in [CopilotKit Intelligence](https://docs.copilotkit.ai), so conversations survive restarts and what it has learned about you carries over. You can see what it remembers about you, and tell it facts directly.
 
@@ -258,6 +256,7 @@ It is CopilotKit's open-source take on the proactive-agent category: assistants 
 
 **Rolling it out at your company?** [Talk to a CopilotKit engineer.](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
+- [copilotkit.ai/openduet](https://www.copilotkit.ai/openduet): OpenDuet's page
 - [Discord](https://discord.gg/6dffbvGU3D): ask a question or share what you are building
 - [@copilotkit on X](https://x.com/copilotkit): releases and what is shipping
 - [docs.copilotkit.ai](https://docs.copilotkit.ai): CopilotKit documentation
