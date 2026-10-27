@@ -1,5 +1,5 @@
-import Avatar from "boring-avatars";
 import { memo } from "react";
+import { orbColourFor } from "@/components/agents/abstract-avatar";
 import { MicOrb } from "@/components/duet/mic-orb";
 import { isTenantBot } from "@/lib/agents/primary-bot";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
  * `typing` overlays a working indicator at the bottom-right — three bouncing dots, so a channel
  * whose agent is mid-turn reads as busy from the roster without moving the row's layout.
  *
- * The tenant's own Bot is the mic orb, still, as `AbstractAvatar` draws it.
+ * Each Bot is the mic orb, still, in the colour `AbstractAvatar` gives it: Ocean for the tenant's
+ * own Bot, another of the orb's colours for every other Bot, picked from its id.
  */
 export const ChannelAvatar = memo(function ChannelAvatar({
   participantIds,
@@ -110,10 +111,12 @@ function GroupFaces({
 }
 
 function Face({ id, size }: { id: string; size: number }) {
-  return isTenantBot(id) ? (
-    <MicOrb size={size} still />
-  ) : (
-    <Avatar className="size-full" name={id} size={size} />
+  return (
+    <MicOrb
+      colour={isTenantBot(id) ? "ocean" : orbColourFor(id)}
+      size={size}
+      still
+    />
   );
 }
 

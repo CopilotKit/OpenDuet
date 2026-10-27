@@ -18,7 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, render } from "@testing-library/react";
-import { AbstractAvatar } from "@/components/agents/abstract-avatar";
+import {
+  AbstractAvatar,
+  orbColourFor,
+} from "@/components/agents/abstract-avatar";
 import { ChannelAvatar } from "@/components/channels/avatar";
 import { isTenantBot } from "@/lib/agents/primary-bot";
 import { appConfig } from "@/lib/generated/application-config";
@@ -105,6 +108,12 @@ const drawings = (element: Element) => ({
   discs: element.querySelectorAll("svg").length,
 });
 
+/** The orb colours drawn, in order: Ocean is the tenant's own Bot's, the rest another Bot's. */
+const colours = (element: Element) =>
+  Array.from(element.querySelectorAll("[data-colour]"), (orb) =>
+    orb.getAttribute("data-colour"),
+  );
+
 describe("<AbstractAvatar>", () => {
   test("draws the tenant's own Bot as the mic orb, its glow unclipped", () => {
     const view = render(
@@ -116,13 +125,21 @@ describe("<AbstractAvatar>", () => {
     expect(avatar.style.width).toBe("28px");
   });
 
-  test("draws every other Bot as the disc from its seed, even one seeded like the tenant's", () => {
+  test("draws every other Bot as the orb in another of its colours, even one seeded like the tenant's", () => {
     const view = render(
       <AbstractAvatar id="helper" name="Helper" seed={own} size={28} />,
     );
     const avatar = view.getByRole("img", { name: "Helper" });
-    expect(drawings(avatar)).toEqual({ orbs: 0, discs: 1 });
-    expect(avatar.className).toContain("rounded-full");
+    expect(drawings(avatar)).toEqual({ orbs: 1, discs: 0 });
+    expect(colours(avatar)).toEqual([orbColourFor("helper")]);
+    expect(colours(avatar)).not.toContain("ocean");
+  });
+
+  test("gives a Bot the same colour every time, and never Ocean", () => {
+    for (const id of ["helper", "support-desk", "your-agent", "a", ""]) {
+      expect(orbColourFor(id)).toBe(orbColourFor(id));
+      expect(["ember", "lime", "graphite"]).toContain(orbColourFor(id));
+    }
   });
 });
 
@@ -132,15 +149,21 @@ describe("<ChannelAvatar>", () => {
     expect(drawings(view.container)).toEqual({ orbs: 1, discs: 0 });
   });
 
-  test("keeps the disc for a conversation with another Bot", () => {
+  test("draws a conversation with another Bot as the orb in that Bot's colour", () => {
     const view = render(<ChannelAvatar participantIds={["helper"]} />);
-    expect(drawings(view.container)).toEqual({ orbs: 0, discs: 1 });
+    expect(drawings(view.container)).toEqual({ orbs: 1, discs: 0 });
+    expect(colours(view.container)).toEqual([orbColourFor("helper")]);
   });
 
-  test("draws the tenant's own Bot as the orb among a group's faces", () => {
+  test("draws the tenant's own Bot in Ocean among a group's faces, the others in theirs", () => {
     const view = render(
       <ChannelAvatar participantIds={["helper", own, "another"]} />,
     );
-    expect(drawings(view.container)).toEqual({ orbs: 1, discs: 2 });
+    expect(drawings(view.container)).toEqual({ orbs: 3, discs: 0 });
+    expect(colours(view.container)).toEqual([
+      orbColourFor("helper"),
+      "ocean",
+      orbColourFor("another"),
+    ]);
   });
 });

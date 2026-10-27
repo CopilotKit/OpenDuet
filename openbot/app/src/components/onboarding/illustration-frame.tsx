@@ -14,6 +14,11 @@ import type * as React from "react";
  *
  * The label sits on a wrapper rather than on the inert element because an inert element is removed
  * from the accessibility tree along with everything in it, its own name included.
+ *
+ * CENTRED BY ITSELF. Placed straight in a step's centred column it was centred by the column, but
+ * the capability demo wraps it in a full-width box, and there it sat at the box's left edge: on a
+ * desktop, "Bring the agents you already have" showed the brief left of centre over a frame of
+ * frameworks right of it.
  */
 export function IllustrationFrame({
   label,
@@ -26,7 +31,7 @@ export function IllustrationFrame({
   className?: string;
 }) {
   return (
-    <div aria-label={label} className="w-full max-w-lg" role="img">
+    <div aria-label={label} className="mx-auto w-full max-w-lg" role="img">
       <div
         className={`pointer-events-none select-none rounded-2xl border border-border bg-muted/60 ${className}`}
         inert

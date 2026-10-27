@@ -9,6 +9,7 @@ import {
   FINISH_S,
   mulberry32,
   nodCurve,
+  type OrbColour,
   type OrbPose,
   restLook,
   type Track,
@@ -198,12 +199,15 @@ const secondsSince = (start: number) => (performance.now() - start) / 1000;
  */
 export function MicOrb({
   className,
+  colour = "ocean",
   keystrokes,
   size,
   state = "idle",
   still = false,
 }: {
   className?: string;
+  /** Ocean is OpenDuet's own; another Bot wears one of the others (`AbstractAvatar`). */
+  colour?: OrbColour;
   keystrokes?: number;
   size: number;
   state?: MicOrbState;
@@ -263,7 +267,10 @@ export function MicOrb({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, box, box);
       ctx.translate(box / 2, box / 2);
-      drawMicOrb(ctx, size, pose, { dark: canvas.closest(".dark") !== null });
+      drawMicOrb(ctx, size, pose, {
+        dark: canvas.closest(".dark") !== null,
+        colour,
+      });
     };
     if (reduced) {
       // A composed still in the state's pose: eyes open, its look held, no ping; finished, the check
@@ -294,7 +301,7 @@ export function MicOrb({
       frame = requestAnimationFrame(loop);
     });
     return () => cancelAnimationFrame(frame);
-  }, [size, reduced, state]);
+  }, [size, reduced, state, colour]);
 
   const spill = size * SPILL;
   return (
@@ -304,6 +311,7 @@ export function MicOrb({
         "pointer-events-none relative inline-block shrink-0",
         className,
       )}
+      data-colour={colour}
       data-state={state}
       style={{ width: size, height: size }}
     >
