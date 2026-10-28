@@ -73,7 +73,7 @@ Everything below works today when you run this repository.
 | Skills                       | Reusable instructions you write once and call with `/`. |
 | Gmail and Google Calendar    | Each person connects their own account. OpenDuet reads mail and today's calendar, and sends a reply only after you answer. |
 | Connected apps               | Governed MCP connectors, including Google Drive and Notion. |
-| Public-web research          | Search public sources, read selected pages and make a brief with source links after an administrator grants the research tools. [Set up Parallel Search](docs/web-research.md). |
+| Public-web research          | Search public sources, read selected pages and make a brief with source links after an administrator grants the research tools. [Set up a research provider](openbot/docs/web-research.md). |
 | Scheduled work               | Routines: ask it to do something on a schedule and it runs as you. |
 | Make it your own             | Its name, Bots, channels, model, and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). |
 | What needs you, what can wait | Sorts new mail into what needs you and what can wait, with a one-line reason for each. Measured on a labelled set in [`evals/triage`](evals/triage). |
@@ -172,7 +172,7 @@ To try it without a Google account, use the fake Google that ships for tests and
 
 ### Search the public web
 
-The OpenDuet Bot ships with a public-web research skill. [Set up Parallel Search](docs/web-research.md) to let it find sources and read pages without using its browser. The catalogue includes an anonymous entry for light use and an API-key entry for higher limits. An administrator enables the connector and grants its search and fetch tools to OpenDuet.
+The OpenDuet Bot ships with a public-web research skill. [Set up a research provider](openbot/docs/web-research.md) to let it find sources and read pages without using its browser. The catalogue includes Parallel, Exa and Firecrawl. An administrator enables a connector and grants its search and fetch tools after reviewing the guide's controls and data-sharing risks.
 
 Then try `/research-public-web` with a request such as “Compare three public project-management tools for a small team, check their current pricing, and make a brief with source links.”
 

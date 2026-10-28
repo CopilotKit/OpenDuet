@@ -8,6 +8,11 @@ import {
 import { parse } from "yaml";
 import { z } from "zod";
 import {
+  type ActionPolicy,
+  evaluateActionPolicy,
+  type PolicyContext,
+} from "../src/computer/policy";
+import {
   catalogueEntry,
   classifyTool,
   researchRoleFor,
@@ -74,6 +79,16 @@ describe("research providers in the catalogue", () => {
     ).toContain("drive: search");
   });
 
+  test("Parallel tools added later require write controls until reviewed", () => {
+    for (const key of ["parallel", "parallel-authenticated"]) {
+      const entry = catalogueEntry(key)!;
+      expect(classifyTool(entry, "new_unreviewed_tool", true)).toBe("write");
+      expect(classifyTool(entry, "new_unreviewed_tool", true, "read")).toBe(
+        "write",
+      );
+    }
+  });
+
   test("a tool outside an entry's reads is a write, even one the vendor called a read", () => {
     const firecrawl = catalogueEntry("firecrawl")!;
     // Published as a family, so no write list could have named it.
@@ -110,6 +125,41 @@ describe("research providers in the catalogue", () => {
     ).toBeUndefined();
     expect(tokenHeaderFor(catalogueEntry("parallel"))).toBeUndefined();
     expect(tokenHeaderFor(null)).toBeUndefined();
+  });
+});
+
+describe("the documented research policy", () => {
+  test("blocks routine search and fetch across providers while allowing person-started calls", () => {
+    const guide = readFileSync(
+      new URL("../../docs/web-research.md", import.meta.url),
+      "utf8",
+    );
+    const example = guide.match(/```json\n([\s\S]*?)\n```/);
+    expect(example).not.toBeNull();
+    const policy: ActionPolicy = JSON.parse(example![1]);
+    for (const [server, names] of Object.entries(RESEARCH_TOOLS)) {
+      for (const name of names) {
+        const context: PolicyContext = {
+          tool: { name: `mcp__${server}__${name}` },
+          bot: { id: "openduet" },
+          actor: { id: "owner" },
+          page: { url: "", host: "" },
+          mcp: { server, tool: name, effect: "read" },
+          intent: "read_tool",
+          initiator: { kind: "routine", id: "scheduled-research" },
+        };
+        const denied = evaluateActionPolicy(policy, context);
+        expect(denied.allowed).toBe(false);
+        expect(denied.forward).toBe(false);
+        expect(denied.source).toBe("deny");
+        expect(
+          evaluateActionPolicy(policy, {
+            ...context,
+            initiator: { kind: "person", id: "" },
+          }).allowed,
+        ).toBe(true);
+      }
+    }
   });
 });
 
