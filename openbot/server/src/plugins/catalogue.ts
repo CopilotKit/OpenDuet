@@ -174,6 +174,9 @@ export function researchRoleFor(ref: string): ResearchRole | null {
 /** Gmail and Google Calendar, as one entry. Named because the development override keys on it. */
 export const GOOGLE_WORKSPACE = "google-workspace";
 
+/** Only the reviewed search and page-reading tools can run as reads. */
+const PARALLEL_READ_TOOLS = Object.freeze(["web_search", "web_fetch"]);
+
 /** Exa's research and multi-step agent tools spend credits, so only the three that read are reads. */
 const EXA_READ_TOOLS = Object.freeze([
   "web_search_exa",
@@ -230,6 +233,7 @@ const REVIEWED: readonly CatalogueEntry[] = Object.freeze([
     path: "/mcp",
     auth: { kind: "none" },
     writeTools: Object.freeze([]),
+    readTools: PARALLEL_READ_TOOLS,
     docsUrl: "https://docs.parallel.ai/integrations/mcp/search-mcp",
   },
   {
@@ -242,6 +246,7 @@ const REVIEWED: readonly CatalogueEntry[] = Object.freeze([
     path: "/mcp",
     auth: { kind: "deployment-bearer" },
     writeTools: Object.freeze([]),
+    readTools: PARALLEL_READ_TOOLS,
     docsUrl: "https://docs.parallel.ai/integrations/mcp/search-mcp",
   },
   {

@@ -22,6 +22,7 @@ import type { PageBlock, PageSlide } from "@/lib/pages/queries";
 import { cn } from "@/lib/utils";
 import { DuetIcon } from "./icons";
 import { RichBlock } from "./page-rich-block";
+import { PageText } from "./page-text";
 
 /*
  * A page the Bot made, drawn from its blocks in the shell's own type and colours. The viewer draws
@@ -111,7 +112,7 @@ function Block({
             block.text.length > HEADLINE_LENGTH ? "type-title" : "type-big",
           )}
         >
-          {block.text}
+          <PageText text={block.text} />
         </p>
       ) : (
         /*
@@ -121,7 +122,7 @@ function Block({
          * reader was drawn with, at the default 17px.
          */
         <p className="type-body mt-3 whitespace-pre-line text-duet-ink leading-[1.6] [overflow-wrap:anywhere] first:mt-0">
-          {block.text}
+          <PageText text={block.text} />
         </p>
       );
     case "bullets":
@@ -566,7 +567,7 @@ function SlideBlock({
     case "text":
       return (
         <p className="whitespace-pre-line text-[15px] text-duet-ink-2 leading-[20px] [overflow-wrap:anywhere]">
-          {block.text}
+          <PageText text={block.text} />
         </p>
       );
     case "bullets":

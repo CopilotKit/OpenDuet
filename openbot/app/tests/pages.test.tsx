@@ -914,3 +914,56 @@ test("a dashboard's headline is set large, and a long one steps down a size", ()
   const plain = render(<PageBlocks blocks={[{ type: "text", text: short }]} />);
   expect(plain.getByText(short).className).toContain("type-body");
 });
+
+test("a research page renders source URLs as links without changing its text", () => {
+  const text =
+    "Pricing: https://example.com/pricing. See also (https://example.org/plans).";
+  const view = render(<PageBlocks blocks={[{ type: "text", text }]} />);
+  const links = view.getAllByRole("link");
+  expect(links.map((link) => link.getAttribute("href"))).toEqual([
+    "https://example.com/pricing",
+    "https://example.org/plans",
+  ]);
+  expect(view.container.textContent).toBe(text);
+  for (const link of links) {
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  }
+});
+
+test("source links keep balanced URL parentheses and support HTTP sources", () => {
+  const text = "https://example.com/wiki/Project_(software) http://example.org";
+  const view = render(<PageBlocks blocks={[{ type: "text", text }]} />);
+  expect(
+    view.getAllByRole("link").map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "https://example.com/wiki/Project_(software)",
+    "http://example.org/",
+  ]);
+  expect(view.container.textContent).toBe(text);
+});
+
+test("source text never turns markup, unsafe schemes or URL credentials into links", () => {
+  const text =
+    "<script>alert(1)</script> javascript:alert(1) data:text/html,unsafe https://user:secret@example.com/private https://";
+  const view = render(<PageBlocks blocks={[{ type: "text", text }]} />);
+  expect(view.queryAllByRole("link")).toHaveLength(0);
+  expect(view.container.querySelector("script")).toBeNull();
+  expect(view.container.textContent).toBe(text);
+});
+
+test("a research slide opens the same source URLs as a page", () => {
+  const view = render(
+    <SlideDeck
+      slides={[
+        {
+          title: "Pricing sources",
+          blocks: [{ type: "text", text: "https://example.com/pricing" }],
+        },
+      ]}
+    />,
+  );
+  expect(view.getByRole("link").getAttribute("href")).toBe(
+    "https://example.com/pricing",
+  );
+});
