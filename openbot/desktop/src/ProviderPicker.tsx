@@ -78,6 +78,12 @@ const endpointPresets: Record<
     model: "grok-4.7",
     keyUrl: "https://console.x.ai/",
   },
+  // https://llmtr.com/docs/quickstart/
+  llmtr: {
+    baseUrl: "https://llmtr.com/v1",
+    model: "qwen/qwen3.8-27b-free",
+    keyUrl: "https://llmtr.com/docs/api-keys/",
+  },
 };
 
 function endpointIdentity(baseUrl: string | undefined): string {
@@ -133,8 +139,8 @@ export function recordedModel(held: HeldConfiguration): ModelChoice | null {
 /**
  * Connect a model.
  *
- * Plans remain the default wherever supported. Google and xAI use the same endpoint credential
- * route as custom models, while their named rows supply the address for the user.
+ * Plans remain the default wherever supported. Google, xAI and LLMTR use the same endpoint
+ * credential route as custom models, while their named rows supply the address for the user.
  */
 export function ProviderPicker({
   chosen,
