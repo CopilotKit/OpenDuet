@@ -10,6 +10,8 @@ Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
 
+<a href="https://trendshift.io/repositories/321847" target="_blank"><img src="https://trendshift.io/api/badge/trendshift/repositories/321847/daily?language=TypeScript" alt="#3 TypeScript Repository Of The Day on Trendshift" width="250" height="55"/></a>
+
  **Each agent has a computer of its own. Use it on the web, on mobile, in Slack, or in Microsoft Teams.**
 
 Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
