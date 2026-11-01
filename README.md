@@ -122,6 +122,15 @@ To use another provider or model:
 
 - **Another OpenAI model.** Change `default_model` in `openbot/examples/openduet/model.yaml`, or in your copy of it (see [Make it your own](#make-it-your-own)). `BOT_MODEL` does not change an OpenAI model on its own. It is used only when `OPENAI_BASE_URL` is also set to an OpenAI-compatible endpoint, and then it names the model that endpoint serves.
 - **Anthropic.** Set `BOT_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...`. The model is `BOT_MODEL` if you set one, such as `BOT_MODEL=claude-sonnet-5-5`, and `claude-sonnet-4-5` if you do not.
+- **LLM Gateway.** [LLM Gateway](https://llmgateway.io) serves models from many providers behind one OpenAI-compatible key. Point the OpenAI settings at it:
+
+  ```sh
+  OPENAI_BASE_URL=https://api.llmgateway.io/v1
+  OPENAI_API_KEY=llmgtwy_...
+  BOT_MODEL=gemini-3.6-flash
+  ```
+
+  `BOT_MODEL` takes any ID from [its model list](https://llmgateway.io/models); unset, the Bot runs `gpt-5.6-terra` through the gateway. Pick one that supports tools and JSON output: the Bot needs tools to use its computer, and OpenDuet asks for JSON when it chooses skills, routes a message or reviews an action. LLM Gateway refuses OpenAI's JSON mode for Claude models, so for those set `BOT_PROVIDER=anthropic`, `ANTHROPIC_BASE_URL=https://api.llmgateway.io` and `ANTHROPIC_API_KEY=llmgtwy_...` instead, with `BOT_MODEL=claude-sonnet-5-5`. Either way, **Settings → Setup** shows the model key as **Not checked**, because OpenDuet only asks OpenAI and Anthropic themselves about a key.
 
 Set these before you start it. **Settings → Setup** in the app says whether the model key works.
 
