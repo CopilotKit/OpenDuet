@@ -122,6 +122,7 @@ To use another provider or model:
 
 - **Another OpenAI model.** Change `default_model` in `openbot/examples/openduet/model.yaml`, or in your copy of it (see [Make it your own](#make-it-your-own)). `BOT_MODEL` does not change an OpenAI model on its own. It is used only when `OPENAI_BASE_URL` is also set to an OpenAI-compatible endpoint, and then it names the model that endpoint serves.
 - **Anthropic.** Set `BOT_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...`. The model is `BOT_MODEL` if you set one, such as `BOT_MODEL=claude-sonnet-5-5`, and `claude-sonnet-4-5` if you do not.
+- **LLMTR.** Set `OPENAI_BASE_URL=https://llmtr.com/v1`, `OPENAI_API_KEY` to an LLMTR key (it starts with `llmtr-`), and `BOT_MODEL` to a catalogue id such as `qwen/qwen3.8-27b-free`. Leave `BOT_PROVIDER` as `openai`. The id is sent as published, slash included. Keys are created from [LLMTR's API keys page](https://llmtr.com/docs/api-keys/); `GET https://llmtr.com/v1/models` lists models and needs no key. `llmtr/qwen3-8-27b` is the Turkey-hosted alternative. Leave `BOT_REASONING_EFFORT` unset.
 
 Set these before you start it. **Settings → Setup** in the app says whether the model key works.
 
