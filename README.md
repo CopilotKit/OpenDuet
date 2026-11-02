@@ -2,14 +2,14 @@
 
 # OpenDuet now lives in OpenBot
 
-**[OpenBot](https://github.com/CopilotKit/OpenBot) is where OpenDuet is maintained from here on.** The OpenDuet look is a skin built into OpenBot, alongside OpenDots and OpenMuse.
+**[OpenBot](https://github.com/CopilotKit/OpenBot) is the source of truth.** OpenDuet is a skin on top of OpenBot, alongside OpenDots and OpenMuse.
 
 [**Get OpenBot**](https://github.com/CopilotKit/OpenBot) · [**copilotkit.ai/openbot**](https://www.copilotkit.ai/openbot) · [**Talk to an engineer**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
 </div>
 
 > [!IMPORTANT]
-> This repository is no longer maintained. New features and fixes happen in [OpenBot](https://github.com/CopilotKit/OpenBot). The original OpenDuet README is kept below for reference.
+> This repository is community maintained. New features and fixes land in [OpenBot](https://github.com/CopilotKit/OpenBot), which CopilotKit maintains. The original OpenDuet README is kept below for reference.
 
 ## Run OpenDuet inside OpenBot
 
