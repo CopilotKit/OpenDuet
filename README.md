@@ -16,7 +16,12 @@ Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https
 
 Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
 
-[**Building on OpenDuet? Talk to a CopilotKit engineer →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
+**OpenDuet is now available as a UX skin in [OpenBot](https://github.com/CopilotKit/OpenBot)**, a more robust version with sign-in, per-Bot permissions and an audit trail, maintained by CopilotKit. This repo stays a community-maintained starter for building your own project.
+
+<a href="https://github.com/CopilotKit/OpenBot"><img src="docs/images/openbot-openduet-skin.png" alt="OpenBot running the OpenDuet skin" width="720"></a><br>
+<sub>OpenBot with the OpenDuet skin, picked under Settings → Skin</sub>
+
+[**Bringing OpenDuet to your company? Talk to us about OpenBot →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
 </div>
 
@@ -40,11 +45,23 @@ https://github.com/user-attachments/assets/55b74b87-708e-4e69-af1e-16e4071ead95
 
 </div>
 
+## OpenDuet and OpenBot
+
+OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source agent platform, and ships inside it as a skin alongside [OpenDots](https://github.com/CopilotKit/OpenDots) and [OpenMuse](https://github.com/CopilotKit/openmuse). Pick it there and you get OpenDuet's look, with everything OpenBot does underneath.
+
+| If you want to | Start here |
+| --- | --- |
+| Try OpenDuet, or make it your own | This repo: [Quick start](#quick-start) |
+| Run it for your team, with sign-in, per-Bot permissions and an audit trail | [OpenBot](https://github.com/CopilotKit/OpenBot#quick-start), then **Settings → Skin → OpenDuet** |
+| Have us stand it up inside your company | [Talk to an engineer](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme_openbot) |
+
+OpenDots, OpenMuse and OpenDuet are community maintained, and issues and pull requests are welcome in each repo. OpenBot is the one the CopilotKit team maintains and ships fixes to.
+
 ## Overview
 
 OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
 
-**Early, and in active development.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
+**Early.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
@@ -259,7 +276,7 @@ OpenDuet is early, so please open an issue before starting substantial work. Muc
 
 ## About
 
-OpenDuet is built and maintained by [CopilotKit](https://www.copilotkit.ai), the team behind [OpenBot](https://github.com/CopilotKit/openbot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
+OpenDuet was built by [CopilotKit](https://www.copilotkit.ai) and is community maintained. CopilotKit is the team behind [OpenBot](https://github.com/CopilotKit/openbot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
 
 It is CopilotKit's open-source take on the proactive-agent category: assistants that reach out first, such as Claude Duet. OpenDuet is an independent project and is not affiliated with or endorsed by Anthropic.
 
