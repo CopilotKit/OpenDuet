@@ -16,20 +16,10 @@ Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https
 
 Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
 
-<table>
-  <tr>
-    <th><sub>Maintained by CopilotKit</sub></th>
-    <th colspan="3"><sub>Community maintained</sub></th>
-  </tr>
-  <tr>
-    <td align="center"><a href="https://github.com/CopilotKit/OpenBot"><b>OpenBot</b></a><br><sub>The core</sub></td>
-    <td align="center"><a href="https://github.com/CopilotKit/OpenDots"><b>OpenDots</b></a><br><sub>Always-on coworkers</sub></td>
-    <td align="center"><a href="https://github.com/CopilotKit/openmuse"><b>OpenMuse</b></a><br><sub>Personal agent, mobile-first</sub></td>
-    <td align="center"><b>OpenDuet</b><br><sub>You are here</sub></td>
-  </tr>
-</table>
+**OpenDuet is now available as a UX skin in [OpenBot](https://github.com/CopilotKit/OpenBot)**, a more robust version with sign-in, per-Bot permissions and an audit trail, maintained by CopilotKit. This repo stays a community-maintained starter for building your own project.
 
-OpenDuet is a modified template on top of [OpenBot](https://github.com/CopilotKit/OpenBot), the officially maintained product. Use this as a starter for building your own project, or start directly with OpenBot desktop or [self-hosted](https://github.com/CopilotKit/OpenBot#deploy-it).
+<a href="https://github.com/CopilotKit/OpenBot"><img src="docs/images/openbot-openduet-skin.png" alt="OpenBot running the OpenDuet skin" width="720"></a><br>
+<sub>OpenBot with the OpenDuet skin, picked under Settings → Skin</sub>
 
 [**Bringing OpenDuet to your company? Talk to us about OpenBot →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
