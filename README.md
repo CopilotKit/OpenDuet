@@ -122,13 +122,14 @@ To use another provider or model:
 
 - **Another OpenAI model.** Change `default_model` in `openbot/examples/openduet/model.yaml`, or in your copy of it (see [Make it your own](#make-it-your-own)). `BOT_MODEL` does not change an OpenAI model on its own. It is used only when `OPENAI_BASE_URL` is also set to an OpenAI-compatible endpoint, and then it names the model that endpoint serves.
 - **Anthropic.** Set `BOT_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...`. The model is `BOT_MODEL` if you set one, such as `BOT_MODEL=claude-sonnet-5-5`, and `claude-sonnet-4-5` if you do not.
+- **LLM Gateway.** [LLM Gateway](https://llmgateway.io) serves models from many providers behind one OpenAI-compatible key. Set `OPENAI_BASE_URL=https://api.llmgateway.io/v1`, `OPENAI_API_KEY` to your LLM Gateway key, and `BOT_MODEL` to the name the gateway publishes, such as `openai/gpt-5`. The model needs tools and JSON output: the Bot uses tools for its computer, and skill choice, routing and action review ask for JSON. Claude models go through the Anthropic settings instead (`BOT_PROVIDER=anthropic` with `ANTHROPIC_BASE_URL=https://api.llmgateway.io/v1` and your gateway key as `ANTHROPIC_API_KEY`), because the gateway refuses OpenAI's JSON mode for them. **Settings → Setup** reads **Not checked** for a gateway key.
 
 Set these before you start it. **Settings → Setup** in the app says whether the model key works.
 
 Then start it:
 
 ```sh
-bash scripts/start.sh
+bun run dev
 ```
 
 and open <http://localhost:3010>. The script starts Postgres and each Bot's computer in Docker, applies the database migrations, and starts the API server, the routine worker, and the app. It checks that each one answers before it prints the next steps. `bash scripts/stop.sh` stops the app, the worker, the API server and the Docker services, and removes the Bot computers that belong to this install, the ones with its `COMPUTER_NAMESPACE`. It does not touch another install's. The database, each Bot's files and its browser profile are Docker volumes, so they stay. Add `--keep-computers` to leave the Bot computers running.
