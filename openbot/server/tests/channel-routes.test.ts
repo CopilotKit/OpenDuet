@@ -722,12 +722,11 @@ describe("the first day's date", () => {
         return { channel: channel(), claimed: true };
       },
     });
-    const response = await post(store, {
-      agentId: "agent-1",
-      date: "2026-10-26",
-    });
+    // The server drops a date more than a day from its own clock, so the date follows the clock.
+    const date = new Date().toISOString().slice(0, 10);
+    const response = await post(store, { agentId: "agent-1", date });
     expect(response.status).toBe(200);
-    expect(calls).toEqual([[actor, "agent-1", undefined, "2026-10-26"]]);
+    expect(calls).toEqual([[actor, "agent-1", undefined, date]]);
   });
 
   /*
