@@ -235,6 +235,16 @@ model:
   default_model: openai/gpt-5.6-terra
 ```
 
+[LLMTR](https://llmtr.com) is one such gateway. Its address is `https://llmtr.com/v1`, the key goes in `OPENAI_API_KEY` (an LLMTR key starts with `llmtr-`), and `BOT_PROVIDER` stays `openai`:
+
+```sh
+OPENAI_BASE_URL=https://llmtr.com/v1
+OPENAI_API_KEY=llmtr-...
+BOT_MODEL=qwen/qwen3.8-27b-free
+```
+
+`BOT_MODEL` is the catalogue id, sent verbatim, so an id that already contains a slash is written in full. `qwen/qwen3.8-27b-free` accepts chat completions and tools. `llmtr/qwen3-8-27b` is the same shape and is hosted in Turkey. `GET https://llmtr.com/v1/models` lists the catalogue and needs no key. Keys are created from the [API keys page](https://llmtr.com/docs/api-keys/). Leave `BOT_REASONING_EFFORT` unset: that setting is sent as an object, and LLMTR accepts `reasoning` only as a boolean.
+
 Most gateways publish a model list, which is the way to check a name before configuring it.
 
 Two things are worth knowing before pointing a deployment at any gateway. Not every catalogue entry accepts tools, and a Bot without tool calling cannot drive its computer; the model list says which do. And `BOT_RESPONSES_API=true` needs an endpoint that implements the Responses API, not only chat completions.
