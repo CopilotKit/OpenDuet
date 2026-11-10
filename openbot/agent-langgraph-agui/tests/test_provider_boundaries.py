@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from threading import Thread
 
 import httpx2
 import pytest
+from anthropic import Anthropic
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -337,8 +339,14 @@ async def test_anthropic_selection_reaches_anthropic_boundary_without_openai_key
     assert result["messages"][0].content == "anthropic proof"
     assert "OPENAI_API_KEY" not in os.environ
     assert captured[0]["url"] == "http://127.0.0.1:4311/v1/messages"
-    assert captured[0]["headers"]["x-api-key"] == "sk-ant-openbot-ci"
-    assert captured[0]["headers"]["anthropic-version"] == "2023-06-01"
+    # Anthropic 2.3 uses Bearer authentication; older SDKs send x-api-key.
+    headers = captured[0]["headers"]
+    assert (
+        headers.get("x-api-key") == "sk-ant-openbot-ci"
+        or headers.get("authorization") == "Bearer sk-ant-openbot-ci"
+    )
+    with Anthropic(api_key="sk-ant-openbot-ci") as sdk:
+        assert headers["anthropic-version"] == sdk.default_headers["anthropic-version"]
     assert captured[0]["body"]["model"] == request_model
     assert captured[0]["body"]["messages"] == [
         {"role": "user", "content": "Say hello."}
@@ -469,6 +477,11 @@ async def test_openai_keeps_a_skill_turn_beside_the_message_it_was_picked_for(
     ]
 
 
+
+def _without_api_version(path):
+    # google-genai 3.x calls the v1 API; older SDKs call v1beta.
+    return re.sub(r"^/v1(beta)?/", "/", path)
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider", "model"),
@@ -497,9 +510,12 @@ async def test_google_provider_reaches_google_genai_boundary(
     )
 
     assert result["messages"][0].content == "google loopback proof"
-    assert captured == [
+    assert [
+        {**request, "path": _without_api_version(request["path"])}
+        for request in captured
+    ] == [
         {
-            "path": "/v1beta/models/gemini-2.5-flash:generateContent",
+            "path": "/models/gemini-2.5-flash:generateContent",
             "x_goog_api_key_present": True,
             "body": {
                 "contents": [
@@ -545,7 +561,10 @@ async def test_google_spec_model_reaches_google_request(
 
     assert result["messages"][0].content == "google loopback proof"
     assert len(captured) == 1
-    assert captured[0]["path"] == "/v1beta/models/gemini-spec-model:generateContent"
+    assert (
+        _without_api_version(captured[0]["path"])
+        == "/models/gemini-spec-model:generateContent"
+    )
 
 
 def _write_synthetic_chatgpt_store(path: Path):
