@@ -185,12 +185,20 @@ def test_a_run_reaches_the_model_the_setup_screen_chose(monkeypatch, provider, c
     assert seen == [expected]
 
 
+def _anthropic_key(headers):
+    # anthropic 2.x sends the key as a Bearer token; older SDKs send x-api-key.
+    bearer = headers.get("authorization", "")
+    if bearer.startswith("Bearer "):
+        return bearer.removeprefix("Bearer ")
+    return headers.get("x-api-key")
+
+
 def test_an_anthropic_key_uses_the_official_endpoint_when_compose_sets_a_blank_url(monkeypatch):
     seen = []
 
     async def respond(transport, request):
         body = json.loads(request.content)
-        seen.append((str(request.url), request.headers.get("x-api-key"), body["model"]))
+        seen.append((str(request.url), _anthropic_key(request.headers), body["model"]))
         return httpx2.Response(
             200,
             request=request,
