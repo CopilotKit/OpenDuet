@@ -45,6 +45,7 @@ const cloudProviders = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
     model: "gemini-3.8-flash",
     keyUrl: "https://aistudio.google.com/apikey",
+    oauth: true,
   },
   {
     id: "xai",
@@ -52,6 +53,15 @@ const cloudProviders = [
     baseUrl: "https://api.x.ai/v1",
     model: "grok-4.7",
     keyUrl: "https://console.x.ai/",
+    oauth: true,
+  },
+  {
+    id: "llmtr",
+    name: "LLMTR",
+    baseUrl: "https://llmtr.com/v1",
+    model: "qwen/qwen3.8-27b-free",
+    keyUrl: "https://llmtr.com/dashboard/api-keys",
+    oauth: false,
   },
 ];
 
@@ -849,7 +859,9 @@ test("OAuth tab switch cancels a late authorization before opening the browser",
 });
 
 for (const provider of cloudProviders) {
-  test(`${provider.name} OAuth completes through native storage without exposing tokens`, async () => {
+  test.skipIf(!provider.oauth)(
+    `${provider.name} OAuth completes through native storage without exposing tokens`,
+    async () => {
     invokeHandler = async (command) => {
       if (command === "providers")
         return allProviders.map((row) =>
@@ -898,7 +910,8 @@ for (const provider of cloudProviders) {
       command: "finish_model_oauth",
       args: { attemptId: "synthetic-attempt" },
     });
-  });
+    },
+  );
 
   test(`${provider.name} opens its API key page externally without sending entered credentials`, async () => {
     invokeHandler = async (command) => {
