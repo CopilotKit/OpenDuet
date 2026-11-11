@@ -90,6 +90,7 @@ import {
   firstDayWelcome,
   firstNameOf,
 } from "./first-day-greeting";
+import { ReadAloudButton, ReadAloudContext, useReadAloud } from "./read-aloud";
 import { ReplyHoldProvider } from "./reply-hold";
 import { splitBubbles } from "./split-bubbles";
 import { TeamBotConsentCard } from "./team-bot-consent";
@@ -105,6 +106,7 @@ import { VoiceChatCard } from "./voice-chat-card";
 
 type ChatTranscriptProps = {
   busy?: boolean;
+  conversationId?: string;
   /** Comma-separated `/` command names, used to tell a skill chip from a leading slash. */
   commandNames?: string;
   messages: ReadonlyArray<Readonly<Message>>;
@@ -677,7 +679,15 @@ export function firstDayParts(text: string): string[] {
   return parts.length > 0 ? parts : [text];
 }
 
-function FirstDayAnswer({ delay, text }: { delay: number; text: string }) {
+function FirstDayAnswer({
+  delay,
+  text,
+  action,
+}: {
+  delay: number;
+  text: string;
+  action: ReactNode;
+}) {
   return (
     <MessageRow align="start">
       <MessageContent>
@@ -694,6 +704,7 @@ function FirstDayAnswer({ delay, text }: { delay: number; text: string }) {
             </Bubble>
           </Arriving>
         ))}
+        {action}
       </MessageContent>
     </MessageRow>
   );
@@ -851,6 +862,7 @@ function ResponsibilityFiring({
  * It is also what keeps the entrance honest — no remount means no replay of the fade.
  */
 const TranscriptMessage = memo(function TranscriptMessage({
+  id,
   commandNames = "",
   delay,
   firstDayAnswer = false,
@@ -859,6 +871,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   seen = false,
   replay = false,
 }: {
+  id: string;
   commandNames?: string;
   delay: number;
   /** The Bot's answer to the first-day message, drawn one bubble per part. */
@@ -875,7 +888,13 @@ const TranscriptMessage = memo(function TranscriptMessage({
     return <p className="type-label text-duet-ink-3">Trying again.</p>;
   }
   if (!isUser && firstDayAnswer) {
-    return <FirstDayAnswer delay={delay} text={text} />;
+    return (
+      <FirstDayAnswer
+        delay={delay}
+        text={text}
+        action={<ReadAloudButton id={id} text={text} />}
+      />
+    );
   }
   /*
    * Checked before anything else a person's message gets. A firing is not a person's message: the
@@ -994,6 +1013,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
             </div>
           )}
           {seen ? <Seen /> : null}
+          {!isUser && <ReadAloudButton id={id} text={text} />}
         </Arriving>
       </MessageContent>
     </MessageRow>
@@ -1936,6 +1956,7 @@ function useSmoothSendScroll(
 }
 
 export function ChatTranscript({
+  conversationId,
   busy = false,
   commandNames = "",
   messages,
@@ -1947,6 +1968,10 @@ export function ChatTranscript({
   contentClassName,
   folded = false,
 }: ChatTranscriptProps) {
+  const playback = useReadAloud(
+    conversationId,
+    Boolean(busy || restoring || folded),
+  );
   const isDrawn = useDrawnTool();
   /*
    * NOT MEMOISED, AND THAT IS DELIBERATE. `useMemo` keyed on `messages` looks obviously right and
@@ -2079,7 +2104,7 @@ export function ChatTranscript({
     }
   }, [hasItems, delays]);
 
-  return (
+  const transcript = (
     <MessageScrollerProvider
       autoScroll={!folded && !briefArriving}
       scrollPreviousItemPeek={48}
@@ -2224,6 +2249,7 @@ export function ChatTranscript({
                   scrollAnchor={anchorRows.has(item.id)}
                 >
                   <TranscriptMessage
+                    id={item.id}
                     commandNames={commandNames}
                     delay={delays.delayFor(item.id, index, items.length)}
                     firstDayAnswer={firstDay?.answer.has(item.id) === true}
@@ -2263,5 +2289,15 @@ export function ChatTranscript({
         <ScrollNewestQueuedIntoView newest={queued.at(-1)?.id ?? null} />
       </MessageScroller>
     </MessageScrollerProvider>
+  );
+  return (
+    <ReadAloudContext.Provider value={playback}>
+      {transcript}
+      {playback.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {playback.error}
+        </p>
+      )}
+    </ReadAloudContext.Provider>
   );
 }

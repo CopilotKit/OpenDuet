@@ -584,6 +584,7 @@ export function ConversationView({
            * whole conversation to change nothing.
            */}
           <ChatTranscript
+            conversationId={channelId}
             busy={busy}
             {...(inShell
               ? {
