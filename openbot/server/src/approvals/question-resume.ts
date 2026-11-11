@@ -68,27 +68,55 @@ export async function resumePersonQuestion(input: {
       throw new ApprovalRefusedError(
         "That answer does not belong to this responsibility's conversation.",
       );
-    const [latest] = await input.responsibilities.listRuns(
+    const runs = await input.responsibilities.listRuns(
       ownerUserId,
       responsibility.id,
     );
+    const [latest] = runs;
     /*
-     * The run that asked is waiting for exactly this: resume it, with the answer as its question's
-     * result. It runs again as the responsibility's current run, so it may record progress and
-     * complete, and its reply goes wherever a responsibility's replies go.
+     * Concurrent events can create several runs for one responsibility. The newest run may
+     * be waiting for a different question: resuming it with this older question's answer
+     * consumes the wrong interrupt and leaves the original question unanswered.
+     *
+     * A headless suspension carries the AG-UI runId in its continuation; use it to find
+     * the run that actually asked this question, even when it is not the newest one.
+     * Older waiting records without a continuation remain supported only when there is
+     * exactly one run to resume, so ambiguous legacy records cannot cross-answer.
      */
-    if (
+    const waitingForQuestion = runs.find((run) => {
+      if (
+        run.status !== "waiting" ||
+        run.waiting?.kind !== PERSON_QUESTION_WAITING
+      )
+        return false;
+      const continuation = run.waiting.continuation;
+      return (
+        continuation !== null &&
+        typeof continuation === "object" &&
+        "runId" in continuation &&
+        continuation.runId === question.runId
+      );
+    }) ?? (
+      runs.length === 1 &&
       latest?.status === "waiting" &&
-      latest.waiting?.kind === PERSON_QUESTION_WAITING
-    ) {
-      await input.responsibilities.resumeWaiting(ownerUserId, latest.id, {
-        content: `The person answered: ${input.response}`,
-      });
-      return { replyText: "", responsibilityId: responsibility.id };
+      latest.waiting?.kind === PERSON_QUESTION_WAITING &&
+      !latest.waiting.continuation
+        ? latest
+        : undefined
+    );
+    if (waitingForQuestion) {
+      const resumed = await input.responsibilities.resumeWaiting(
+        ownerUserId,
+        waitingForQuestion.id,
+        { content: `The person answered: ${input.response}` },
+      );
+      if (resumed)
+        return { replyText: "", responsibilityId: responsibility.id };
     }
+    // Never bind a detached answer to some *other* suspended run's progress tools.
     const run = input.responsibilityTurn({
       responsibility,
-      responsibilityRunId: latest?.id,
+      responsibilityRunId: latest?.status === "waiting" ? undefined : latest?.id,
     });
     const outcome = await run({
       ownerUserId,
