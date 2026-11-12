@@ -220,7 +220,7 @@ test("the organization step offers enterprise early access and CopilotKit's othe
     "https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_app",
   );
   expect(early.getAttribute("target")).toBe("_blank");
-  for (const product of ["openbot", "openmuse", "opendots"]) {
+  for (const product of ["openbot", "openfuse", "opendots"]) {
     const link = view
       .getAllByRole("link")
       .find((a) => a.getAttribute("href")?.includes(`/${product}?`));
