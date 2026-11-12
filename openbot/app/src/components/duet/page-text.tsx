@@ -6,16 +6,23 @@ export function PageText({ text }: { text: string }) {
   let cursor = 0;
   for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/g)) {
     const start = match.index;
-    let source = match[0].replace(/[.,;:!?]+$/, "");
-    for (const [open, close] of [
-      ["(", ")"],
-      ["[", "]"],
-    ]) {
-      while (
-        source.endsWith(close) &&
-        source.split(close).length > source.split(open).length
-      ) {
-        source = source.slice(0, -1);
+    // A period or comma can sit just inside the closing bracket. Trim, peel
+    // unmatched closers, and trim again until the suffix stops changing.
+    let source = match[0];
+    let previous = "";
+    while (source !== previous) {
+      previous = source;
+      source = source.replace(/[.,;:!?]+$/, "");
+      for (const [open, close] of [
+        ["(", ")"],
+        ["[", "]"],
+      ]) {
+        while (
+          source.endsWith(close) &&
+          source.split(close).length > source.split(open).length
+        ) {
+          source = source.slice(0, -1);
+        }
       }
     }
     let url: URL;
