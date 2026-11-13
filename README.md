@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/55b74b87-708e-4e69-af1e-16e4071ead95
 
 ## OpenDuet and OpenBot
 
-OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source agent platform, and ships inside it as a skin alongside [OpenDots](https://github.com/CopilotKit/OpenDots) and [OpenMuse](https://github.com/CopilotKit/openmuse). Pick it there and you get OpenDuet's look, with everything OpenBot does underneath.
+OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source agent platform, and ships inside it as a skin alongside [OpenDots](https://github.com/CopilotKit/OpenDots) and [OpenFuse](https://github.com/CopilotKit/openmuse). Pick it there and you get OpenDuet's look, with everything OpenBot does underneath.
 
 | If you want to | Start here |
 | --- | --- |
@@ -55,7 +55,7 @@ OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's 
 | Run it for your team, with sign-in, per-Bot permissions and an audit trail | [OpenBot](https://github.com/CopilotKit/OpenBot#quick-start), then **Settings → Skin → OpenDuet** |
 | Have us stand it up inside your company | [Talk to an engineer](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme_openbot) |
 
-OpenDots, OpenMuse and OpenDuet are community maintained, and issues and pull requests are welcome in each repo. OpenBot is the one the CopilotKit team maintains and ships fixes to.
+OpenDots, OpenFuse and OpenDuet are community maintained, and issues and pull requests are welcome in each repo. OpenBot is the one the CopilotKit team maintains and ships fixes to.
 
 ## Overview
 

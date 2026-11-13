@@ -386,9 +386,9 @@ const MORE_FROM_COPILOTKIT = [
     href: "https://www.copilotkit.ai/openbot?ref=openduet_onboarding",
   },
   {
-    name: "OpenMuse",
+    name: "OpenFuse",
     line: "A personal agent with its own browser and files, on iOS, Android and web.",
-    href: "https://www.copilotkit.ai/openmuse?ref=openduet_onboarding",
+    href: "https://www.copilotkit.ai/openfuse?ref=openduet_onboarding",
   },
   {
     name: "OpenDots",
