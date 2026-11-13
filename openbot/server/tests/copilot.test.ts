@@ -220,6 +220,90 @@ describe("deployment model selection", () => {
   );
 
   /*
+   * A compatible endpoint keeps no response store. With `store` on, the AI SDK sends a step's
+   * reasoning back as an `item_reference`, which such an endpoint (Ollama, for one) refuses, so a
+   * reasoning model failed every turn at its first tool call.
+   */
+  test("a compatible endpoint is sent the earlier step in full, not by reference", async () => {
+    const recorder = new LLMock();
+    const originalBase = process.env.OPENAI_BASE_URL;
+    // The journal keeps a normalised body, so the request is read as sent, on its way through.
+    const bodies: { store?: unknown; input?: unknown }[] = [];
+    let proxy: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const base = await recorder.start();
+      proxy = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        async fetch(request) {
+          const body = await request.text();
+          bodies.push(JSON.parse(body));
+          return fetch(`${base}${new URL(request.url).pathname}`, {
+            method: "POST",
+            headers: request.headers,
+            body,
+          });
+        },
+      });
+      process.env.OPENAI_BASE_URL = `${proxy.url.origin}/v1`;
+      recorder.on({ hasToolResult: true }, { content: "The balance is 42." });
+      recorder.onMessage(/balance/, {
+        reasoning: "Read the balance before answering.",
+        toolCalls: [
+          {
+            id: "balance-call",
+            name: "read_balance",
+            arguments: { account: "demo" },
+          },
+        ],
+      });
+      const agents = await resolveRuntimeAgents(
+        async () => [
+          {
+            id: "general-assistant",
+            name: "General Assistant",
+            type: "built_in" as const,
+            systemPrompt: "Answer using the granted balance tool.",
+          },
+        ],
+        { provider: "openai", defaultModel: "selected-local-model" },
+        async () => "synthetic-model-key",
+        undefined,
+        async () => [
+          {
+            name: "read_balance",
+            ref: "bank/read_balance",
+            description: "Read the balance.",
+            parameters: z.object({ account: z.string() }),
+            execute: async () => "42",
+          },
+        ],
+      );
+      const agent = agents["general-assistant"]?.clone();
+      if (!agent) throw new Error("Expected General Assistant.");
+      agent.addMessage({
+        id: "compatible-store-request",
+        role: "user",
+        content: "Read my balance.",
+      });
+      await agent.runAgent();
+
+      expect(agent.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: "The balance is 42.",
+      });
+      expect(bodies).toHaveLength(2);
+      expect(bodies.map((body) => body.store)).toEqual([false, false]);
+      expect(JSON.stringify(bodies[1]?.input)).not.toContain("item_reference");
+    } finally {
+      if (originalBase === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = originalBase;
+      await proxy?.stop(true);
+      await recorder.stop();
+    }
+  });
+
+  /*
    * Switching the provider away from the package's own, without naming a model. The two fallbacks are
    * not the same source: OpenAI's is the built-in Bot's own (it speaks the Responses API), Anthropic's
    * is the shared spec's. See BUILT_IN_OPENAI_FALLBACK_MODEL in copilot.ts.

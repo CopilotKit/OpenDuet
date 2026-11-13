@@ -470,6 +470,17 @@ export function builtInAgentConfiguration(
     ].join("\n\n"),
     ...(planModel ? {} : { apiKey: apiKey ?? undefined }),
     /*
+     * An OpenAI-compatible endpoint other than OpenAI (OPENAI_BASE_URL) keeps no response store, so
+     * the Responses API must resend earlier items in full. With `store` on, the AI SDK sends a
+     * reasoning model's previous thinking back as `item_reference`, and an endpoint such as Ollama
+     * refuses the whole step after the first tool call ("unknown input item type").
+     */
+    ...(!planModel &&
+    model.provider === "openai" &&
+    process.env.OPENAI_BASE_URL?.trim()
+      ? { providerOptions: { openai: { store: false } } }
+      : {}),
+    /*
      * A run stops after one step unless told otherwise, which for a Bot with tools means it calls
      * one and never speaks: the tool executes, the result arrives, and the run ends before the model
      * can say what it found. The person sees their own question and nothing else.

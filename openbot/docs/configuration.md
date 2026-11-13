@@ -239,6 +239,8 @@ Most gateways publish a model list, which is the way to check a name before conf
 
 Two things are worth knowing before pointing a deployment at any gateway. Not every catalogue entry accepts tools, and a Bot without tool calling cannot drive its computer; the model list says which do. And `BOT_RESPONSES_API=true` needs an endpoint that implements the Responses API, not only chat completions.
 
+With `OPENAI_BASE_URL` set, the built-in Bot sends its Responses API requests with `store: false` and each earlier step of a turn in full, because an endpoint other than OpenAI keeps no stored responses to refer back to. A reasoning model's thinking is therefore not carried from one step of a turn to the next, including on a gateway in front of OpenAI itself.
+
 ## Voice dictation
 
 Dictation inserts recorded speech into the composer for review before sending. It works with any
