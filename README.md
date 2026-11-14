@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/55b74b87-708e-4e69-af1e-16e4071ead95
 
 ## OpenDuet and OpenBot
 
-OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source agent platform, and ships inside it as a skin alongside [OpenDots](https://github.com/CopilotKit/OpenDots) and [OpenFuse](https://github.com/CopilotKit/openmuse). Pick it there and you get OpenDuet's look, with everything OpenBot does underneath.
+OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source agent platform, and ships inside it as a skin alongside [OpenDots](https://github.com/CopilotKit/OpenDots) and [OpenFuse](https://github.com/CopilotKit/openfuse). Pick it there and you get OpenDuet's look, with everything OpenBot does underneath.
 
 | If you want to | Start here |
 | --- | --- |
