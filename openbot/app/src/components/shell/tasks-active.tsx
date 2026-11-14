@@ -388,12 +388,17 @@ function TaskLine({
   onCheck: (done: boolean, failed: () => void) => void;
 }) {
   const { task, status } = item;
+  // The check follows the resolution timestamp, like the task page does — not the
+  // grouped status, which stays "needs_input" while a question waits even after
+  // the task was marked done. Otherwise the row offers "Mark done" again and
+  // resolves a second time instead of reopening.
+  const done = task.resolvedAt !== null;
   return (
     <>
       <div className="flex items-start gap-3">
         <CheckBox
           busy={busy}
-          done={status === "resolved"}
+          done={done}
           onCheck={onCheck}
           title={task.title}
         />
