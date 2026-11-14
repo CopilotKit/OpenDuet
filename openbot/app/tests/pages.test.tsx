@@ -931,6 +931,20 @@ test("a research page renders source URLs as links without changing its text", (
   }
 });
 
+test("source links drop punctuation left behind by an unmatched closing bracket", () => {
+  const text =
+    "(See https://example.com/pricing.) [See https://example.org/plans,] (See https://example.com/wiki/Project_(software).)";
+  const view = render(<PageBlocks blocks={[{ type: "text", text }]} />);
+  expect(
+    view.getAllByRole("link").map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "https://example.com/pricing",
+    "https://example.org/plans",
+    "https://example.com/wiki/Project_(software)",
+  ]);
+  expect(view.container.textContent).toBe(text);
+});
+
 test("source links keep balanced URL parentheses and support HTTP sources", () => {
   const text = "https://example.com/wiki/Project_(software) http://example.org";
   const view = render(<PageBlocks blocks={[{ type: "text", text }]} />);
