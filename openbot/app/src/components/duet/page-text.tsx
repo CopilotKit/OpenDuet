@@ -6,16 +6,26 @@ export function PageText({ text }: { text: string }) {
   let cursor = 0;
   for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/g)) {
     const start = match.index;
-    let source = match[0].replace(/[.,;:!?]+$/, "");
-    for (const [open, close] of [
-      ["(", ")"],
-      ["[", "]"],
-    ]) {
-      while (
-        source.endsWith(close) &&
-        source.split(close).length > source.split(open).length
-      ) {
-        source = source.slice(0, -1);
+    // Trim trailing sentence punctuation, then drop unmatched closers — and
+    // repeat, because a closer can hide punctuation behind it:
+    // "(see https://example.com/pricing.)" trims nothing first (the "."
+    // is not last), drops the ")", and only then exposes the ".".
+    // Balanced parentheses inside a URL are preserved throughout.
+    let source = match[0];
+    let previous = "";
+    while (source !== previous) {
+      previous = source;
+      source = source.replace(/[.,;:!?]+$/, "");
+      for (const [open, close] of [
+        ["(", ")"],
+        ["[", "]"],
+      ]) {
+        while (
+          source.endsWith(close) &&
+          source.split(close).length > source.split(open).length
+        ) {
+          source = source.slice(0, -1);
+        }
       }
     }
     let url: URL;
