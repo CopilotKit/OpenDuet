@@ -4,9 +4,14 @@
 
 ### An open-source proactive agent that gets your work done and keeps you in the loop
 
-Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https://docs.copilotkit.ai) · [Quick start](#quick-start) · [Overview](#overview) · [Features and Capabilities](#features-and-capabilities) · [How it works](#how-it-works) · [Contributing](#contributing)
+**OpenDuet is now available as a UX skin in [OpenBot](https://open.bot)**, a more robust version with sign-in, per-Bot permissions and an audit trail, maintained by CopilotKit. This repo stays a community-maintained starter for building your own project.
 
-[![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/openbot)
+[![Try OpenBot at open.bot](https://img.shields.io/badge/Try_OpenBot-open.bot_%E2%86%92-6E6AE0?style=for-the-badge&labelColor=3A3466)](https://open.bot)
+[![OpenBot on GitHub](https://img.shields.io/github/stars/CopilotKit/OpenBot?style=for-the-badge&logo=github&label=OpenBot%20on%20GitHub&labelColor=3A3466&color=6E6AE0)](https://github.com/CopilotKit/OpenBot)
+
+Built on [OpenBot](https://github.com/CopilotKit/OpenBot) and [CopilotKit](https://docs.copilotkit.ai) · [Quick start](#quick-start) · [Overview](#overview) · [Features and Capabilities](#features-and-capabilities) · [How it works](#how-it-works) · [Contributing](#contributing)
+
+[![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/OpenBot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
 
@@ -16,9 +21,7 @@ Built on [OpenBot](https://github.com/CopilotKit/openbot) and [CopilotKit](https
 
 Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
 
-**OpenDuet is now available as a UX skin in [OpenBot](https://github.com/CopilotKit/OpenBot)**, a more robust version with sign-in, per-Bot permissions and an audit trail, maintained by CopilotKit. This repo stays a community-maintained starter for building your own project.
-
-<a href="https://github.com/CopilotKit/OpenBot"><img src="docs/images/openbot-openduet-skin.png" alt="OpenBot running the OpenDuet skin" width="720"></a><br>
+<a href="https://open.bot"><img src="docs/images/openbot-openduet-skin.png" alt="OpenBot running the OpenDuet skin" width="720"></a><br>
 <sub>OpenBot with the OpenDuet skin, picked under Settings → Skin</sub>
 
 [**Bringing OpenDuet to your company? Talk to us about OpenBot →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
@@ -61,7 +64,7 @@ OpenDots, OpenFuse and OpenDuet are community maintained, and issues and pull re
 
 OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
 
-**Early.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
+**Early.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
 
 ## What it does
 
@@ -213,7 +216,7 @@ Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your cop
 
 | Path                  | What it is                                                                                         |
 | --------------------- | -------------------------------------------------------------------------------------------------- |
-| `openbot/`            | The platform OpenDuet runs on: [OpenBot](https://github.com/CopilotKit/openbot)'s server, app, worker, each Bot's computer, Docker and Helm files. |
+| `openbot/`            | The platform OpenDuet runs on: [OpenBot](https://github.com/CopilotKit/OpenBot)'s server, app, worker, each Bot's computer, Docker and Helm files. |
 | `openbot/examples/openduet` | OpenDuet's tenant package: its name, Bots, channels, model and skills.                       |
 | `scripts/`            | `start.sh` and `stop.sh`, which run OpenBot's scripts with this repository's `.env`.               |
 | `docs/`               | What OpenDuet sends as telemetry, and how to turn it off. OpenBot's own documentation is in `openbot/docs`. |
@@ -222,10 +225,10 @@ Copy the folder, change it, and point `TENANT_PACKAGE_DIR` in `.env` at your cop
 ## Built on OpenBot
 
 <p align="center">
-  <a href="https://www.copilotkit.ai/openbot"><img src="docs/images/openbot.png" alt="OpenBot" width="560"></a>
+  <a href="https://open.bot"><img src="docs/images/openbot.png" alt="OpenBot" width="560"></a>
 </p>
 
-OpenDuet is built on top of [OpenBot](https://github.com/CopilotKit/openbot), CopilotKit's open-source, self-hosted agent platform. OpenBot provides the server, the app, each Bot's computer, the approval boundary, the audit trail, sign-in, and the Slack and Teams channels. OpenDuet adds the morning brief, Tasks, Make and its own Bots and skills on top; its name, Bots and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). To build a different assistant on the same foundation, start from [OpenBot](https://github.com/CopilotKit/openbot), or read more at [copilotkit.ai/openbot](https://www.copilotkit.ai/openbot).
+OpenDuet is built on top of [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source, self-hosted agent platform. OpenBot provides the server, the app, each Bot's computer, the approval boundary, the audit trail, sign-in, and the Slack and Teams channels. OpenDuet adds the morning brief, Tasks, Make and its own Bots and skills on top; its name, Bots and skills live in one folder, [`openbot/examples/openduet`](openbot/examples/openduet). To build a different assistant on the same foundation, start from [OpenBot](https://github.com/CopilotKit/OpenBot), or read more at [open.bot](https://open.bot).
 
 ## How it works
 
@@ -272,11 +275,11 @@ MCP connectors            Google Drive, Notion, and more through Composio
 
 ## Contributing
 
-OpenDuet is early, so please open an issue before starting substantial work. Much of the foundation lives in [OpenBot](https://github.com/CopilotKit/openbot): changes to the computer, the gateway, approvals, credentials, or connectors usually belong there.
+OpenDuet is early, so please open an issue before starting substantial work. Much of the foundation lives in [OpenBot](https://github.com/CopilotKit/OpenBot): changes to the computer, the gateway, approvals, credentials, or connectors usually belong there.
 
 ## About
 
-OpenDuet was built by [CopilotKit](https://www.copilotkit.ai) and is community maintained. CopilotKit is the team behind [OpenBot](https://github.com/CopilotKit/openbot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
+OpenDuet was built by [CopilotKit](https://www.copilotkit.ai) and is community maintained. CopilotKit is the team behind [OpenBot](https://open.bot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
 
 It is CopilotKit's open-source take on the proactive-agent category: assistants that reach out first, such as Claude Duet. OpenDuet is an independent project and is not affiliated with or endorsed by Anthropic.
 
