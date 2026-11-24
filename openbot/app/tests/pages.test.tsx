@@ -943,6 +943,21 @@ test("source links keep balanced URL parentheses and support HTTP sources", () =
   expect(view.container.textContent).toBe(text);
 });
 
+test("a bracketed citation drops sentence punctuation from the link", () => {
+  const text =
+    "(See https://example.com/pricing.) [See https://example.org/plans,] (https://example.org/plans). https://example.com/wiki/Project_(software)";
+  const view = render(<PageBlocks blocks={[{ type: "text", text }]} />);
+  expect(
+    view.getAllByRole("link").map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "https://example.com/pricing",
+    "https://example.org/plans",
+    "https://example.org/plans",
+    "https://example.com/wiki/Project_(software)",
+  ]);
+  expect(view.container.textContent).toBe(text);
+});
+
 test("source text never turns markup, unsafe schemes or URL credentials into links", () => {
   const text =
     "<script>alert(1)</script> javascript:alert(1) data:text/html,unsafe https://user:secret@example.com/private https://";
