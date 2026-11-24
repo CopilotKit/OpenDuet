@@ -766,6 +766,51 @@ test("a done task's circle is filled, and pressing it reopens the task", async (
   );
 });
 
+test("a done task still offers Reopen under Needs input while its question waits", async () => {
+  quiet();
+  inbox = {
+    requests: [],
+    questions: [
+      {
+        id: "q-1",
+        botId: "openduet",
+        threadId: "question-task-thread",
+        question: "Which deck should I review?",
+        createdAt: ago(10),
+      },
+    ],
+  };
+  tasks = [
+    task({
+      id: "question-task",
+      title: "Choose a deck",
+      status: "needs_input",
+      resolvedAt: ago(3),
+    }),
+  ];
+  serving();
+  const view = draw();
+  const needs = await view.findByRole("region", { name: "Needs input" });
+  expect(within(needs).getByText("Choose a deck")).toBeTruthy();
+  const circle = await view.findByRole("button", {
+    name: "Reopen Choose a deck",
+  });
+  expect(circle.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(circle);
+  await waitFor(() =>
+    expect(sent).toContainEqual({
+      method: "POST",
+      path: "/api/openduet/tasks/question-task/reopen",
+      body: undefined,
+    }),
+  );
+  expect(sent).not.toContainEqual({
+    method: "POST",
+    path: "/api/openduet/tasks/question-task/resolve",
+    body: undefined,
+  });
+});
+
 test("Resolved keeps a week of done tasks, newest first, folded until its heading is pressed", async () => {
   quiet();
   tasks = [
