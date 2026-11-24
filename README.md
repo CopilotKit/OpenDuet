@@ -1,14 +1,5 @@
 <div align="center">
 
-<a href="https://open.bot"><img src="docs/images/openduet-now-in-openbot.png" alt="This is no longer maintained. We've merged OpenDuet into OpenBot as a skin. Get it at https://open.bot. The screenshot shows OpenBot with the OpenDuet skin, picked under Settings, Skin, OpenDuet." width="880"></a>
-
-</div>
-
-> [!IMPORTANT]
-> OpenDuet is no longer maintained. We've merged it into OpenBot as a skin. Get it at https://open.bot (code: https://github.com/CopilotKit/OpenBot)
-
-<div align="center">
-
 # OpenDuet
 
 ### An open-source proactive agent that gets your work done and keeps you in the loop
@@ -21,6 +12,15 @@
 ![Status: no longer maintained](https://img.shields.io/badge/status-no%20longer%20maintained-lightgrey.svg)
 
 <a href="https://trendshift.io/repositories/321847" target="_blank"><img src="https://trendshift.io/api/badge/trendshift/repositories/321847/daily?language=TypeScript" alt="#3 TypeScript Repository Of The Day on Trendshift" width="250" height="55"/></a>
+
+<a href="https://open.bot"><img src="docs/images/openduet-now-in-openbot.png" alt="This is no longer maintained. We've merged OpenDuet into OpenBot as a skin. Get it at https://open.bot. The screenshot shows OpenBot with the OpenDuet skin, picked under Settings, Skin, OpenDuet." width="880"></a>
+
+</div>
+
+> [!IMPORTANT]
+> OpenDuet is no longer maintained. We've merged it into OpenBot as a skin. Get it at https://open.bot (code: https://github.com/CopilotKit/OpenBot)
+
+<div align="center">
 
 [**Bringing OpenDuet to your company? Talk to us about OpenBot →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
