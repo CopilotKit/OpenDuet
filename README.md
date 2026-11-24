@@ -1,34 +1,50 @@
 <div align="center">
 
+<a href="https://open.bot"><img src="docs/images/openduet-now-in-openbot.png" alt="OpenDuet is now a skin in OpenBot. This repo is no longer maintained. Use it at open.bot. The screenshot shows OpenBot with the OpenDuet skin, picked under Settings, Skin, OpenDuet." width="880"></a>
+
+</div>
+
+> [!IMPORTANT]
+> OpenDuet is no longer maintained. It's now a skin in OpenBot. Use it at https://open.bot (code: https://github.com/CopilotKit/OpenBot)
+
+<div align="center">
+
 # OpenDuet
 
 ### An open-source proactive agent that gets your work done and keeps you in the loop
 
-**OpenDuet is now available as a UX skin in [OpenBot](https://open.bot)**, a more robust version with sign-in, per-Bot permissions and an audit trail, maintained by CopilotKit. This repo stays a community-maintained starter for building your own project.
-
 [![Try OpenBot at open.bot](https://img.shields.io/badge/Try_OpenBot-open.bot_%E2%86%92-6E6AE0?style=for-the-badge&labelColor=3A3466)](https://open.bot)
 [![OpenBot on GitHub](https://img.shields.io/github/stars/CopilotKit/OpenBot?style=for-the-badge&logo=github&label=OpenBot%20on%20GitHub&labelColor=3A3466&color=6E6AE0)](https://github.com/CopilotKit/OpenBot)
 
-Built on [OpenBot](https://github.com/CopilotKit/OpenBot) and [CopilotKit](https://docs.copilotkit.ai) · [Quick start](#quick-start) · [Overview](#overview) · [Features and Capabilities](#features-and-capabilities) · [How it works](#how-it-works) · [Contributing](#contributing)
-
 [![Built on OpenBot](https://img.shields.io/badge/built%20on-OpenBot-6430AB)](https://github.com/CopilotKit/OpenBot)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-![Status: early development](https://img.shields.io/badge/status-early%20development-orange.svg)
+![Status: no longer maintained](https://img.shields.io/badge/status-no%20longer%20maintained-lightgrey.svg)
 
 <a href="https://trendshift.io/repositories/321847" target="_blank"><img src="https://trendshift.io/api/badge/trendshift/repositories/321847/daily?language=TypeScript" alt="#3 TypeScript Repository Of The Day on Trendshift" width="250" height="55"/></a>
-
- **Each agent has a computer of its own. Use it on the web, on mobile, in Slack, or in Microsoft Teams.**
-
-Host OpenDuet yourself and choose your own model. Requires a free [CopilotKit Intelligence](https://docs.copilotkit.ai) project for threads and memory. Everything that makes it OpenDuet lives in [one folder](#make-it-your-own), so copy it and make it your own.
-
-<a href="https://open.bot"><img src="docs/images/openbot-openduet-skin.png" alt="OpenBot running the OpenDuet skin" width="720"></a><br>
-<sub>OpenBot with the OpenDuet skin, picked under Settings → Skin</sub>
 
 [**Bringing OpenDuet to your company? Talk to us about OpenBot →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme)
 
 </div>
 
----
+## Use OpenDuet in OpenBot
+
+OpenDuet is now a skin in [OpenBot](https://open.bot), CopilotKit's open-source agent platform. OpenDuet always ran on OpenBot; pick it there and you get OpenDuet's look, with everything OpenBot does underneath. OpenBot adds sign-in, per-Bot permissions and an audit trail, and the CopilotKit team maintains it.
+
+1. Get OpenBot at [open.bot](https://open.bot).
+2. In OpenBot, open **Settings** and pick **OpenDuet** under **Skin**.
+
+| If you want to | Go to |
+| --- | --- |
+| Use OpenDuet | [open.bot](https://open.bot), then **Settings → Skin → OpenDuet** |
+| Read or build on the code | [CopilotKit/OpenBot](https://github.com/CopilotKit/OpenBot) |
+| Have us stand it up inside your company | [Talk to an engineer](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme_openbot) |
+
+This repository is no longer maintained, and new work happens in OpenBot. The original README, with this repo's demos and setup, is kept below for reference.
+
+<details>
+<summary><b>Original README, including setup (no longer maintained)</b></summary>
+
+**Each agent has a computer of its own. Use it on the web, on mobile, in Slack, or in Microsoft Teams.**
 
 <div align="center">
 
@@ -48,23 +64,11 @@ https://github.com/user-attachments/assets/55b74b87-708e-4e69-af1e-16e4071ead95
 
 </div>
 
-## OpenDuet and OpenBot
-
-OpenDuet runs on [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source agent platform, and ships inside it as a skin alongside [OpenDots](https://github.com/CopilotKit/OpenDots) and [OpenFuse](https://github.com/CopilotKit/openfuse). Pick it there and you get OpenDuet's look, with everything OpenBot does underneath.
-
-| If you want to | Start here |
-| --- | --- |
-| Try OpenDuet, or make it your own | This repo: [Quick start](#quick-start) |
-| Run it for your team, with sign-in, per-Bot permissions and an audit trail | [OpenBot](https://github.com/CopilotKit/OpenBot#quick-start), then **Settings → Skin → OpenDuet** |
-| Have us stand it up inside your company | [Talk to an engineer](https://www.copilotkit.ai/talk-to-an-engineer?ref=openduet_readme_openbot) |
-
-OpenDots, OpenFuse and OpenDuet are community maintained, and issues and pull requests are welcome in each repo. OpenBot is the one the CopilotKit team maintains and ships fixes to.
-
 ## Overview
 
 OpenDuet does not wait to be asked. It starts your day with a short brief, keeps working on a computer of its own while you step away, and comes back only when something needs you. Before it sends, pays, signs, or deletes anything, it shows you exactly what it is about to do and waits for your answer.
 
-**Early.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today. Expect things to move. Issues and ideas are welcome.
+**Early.** OpenDuet runs today as [OpenBot](https://github.com/CopilotKit/OpenBot), CopilotKit's open-source, self-hosted agent platform, with OpenDuet's name, Bots and skills on top. It already reads your Gmail and calendar, sorts what needs you from what can wait, and makes the morning brief. [Features and Capabilities](#features-and-capabilities) lists what works today.
 
 ## What it does
 
@@ -272,14 +276,15 @@ MCP connectors            Google Drive, Notion, and more through Composio
 **Memory.** Threads and memory live in [CopilotKit Intelligence](https://docs.copilotkit.ai), so conversations survive restarts and what it has learned about you carries over. You can see what it remembers about you, and tell it facts directly.
 
 **Skills and connectors.** Skills are instructions you write once and call with `/`. Connected apps are governed MCP servers: Google Drive and Notion ship in OpenBot's catalogue, and Composio brokers more. A connector is granted to an agent before it can be used.
-
 ## Contributing
 
-OpenDuet is early, so please open an issue before starting substantial work. Much of the foundation lives in [OpenBot](https://github.com/CopilotKit/OpenBot): changes to the computer, the gateway, approvals, credentials, or connectors usually belong there.
+This repository is no longer maintained. To contribute, start at [OpenBot](https://github.com/CopilotKit/OpenBot).
+
+</details>
 
 ## About
 
-OpenDuet was built by [CopilotKit](https://www.copilotkit.ai) and is community maintained. CopilotKit is the team behind [OpenBot](https://open.bot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
+OpenDuet was built by [CopilotKit](https://www.copilotkit.ai) and is no longer maintained. CopilotKit is the team behind [OpenBot](https://open.bot) and the [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui).
 
 It is CopilotKit's open-source take on the proactive-agent category: assistants that reach out first, such as Claude Duet. OpenDuet is an independent project and is not affiliated with or endorsed by Anthropic.
 
