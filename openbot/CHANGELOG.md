@@ -35,6 +35,13 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
   request for an administrator to switch on a work app, grant it to a Bot, or connect a Shared app's
   team account is kept, with who answered it and when. It starts empty and nothing is backfilled.
 
+### Desktop setup offers LLMTR
+
+Desktop setup offers LLMTR beside Google Gemini and xAI. The row uses `https://llmtr.com/v1` and an
+API key, and the model name starts as `qwen/qwen3.8-27b-free`. A deployment configured by hand sets
+`OPENAI_BASE_URL` to that address, `OPENAI_API_KEY` to an LLMTR key, and `BOT_MODEL` to a catalogue
+id. `BOT_PROVIDER` stays `openai`.
+
 ### Plainer words, and one word for each thing
 
 OpenBot now says **Bot** everywhere a person reads it, where screens used to mix Bot, agent, coworker
