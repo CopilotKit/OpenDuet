@@ -237,7 +237,7 @@ model:
 
 Most gateways publish a model list, which is the way to check a name before configuring it.
 
-Two things are worth knowing before pointing a deployment at any gateway. Not every catalogue entry accepts tools, and a Bot without tool calling cannot drive its computer; the model list says which do. And `BOT_RESPONSES_API=true` needs an endpoint that implements the Responses API, not only chat completions.
+Two things are worth knowing before pointing a deployment at any gateway. Not every catalogue entry accepts tools, and a Bot without tool calling cannot drive its computer; the model list says which do. And `BOT_RESPONSES_API=true` needs an endpoint that implements the Responses API, not only chat completions. One gateway is stricter about a third setting: [LLMTR](https://llmtr.com) accepts `reasoning` only as a boolean, so leave `BOT_REASONING_EFFORT` unset when `OPENAI_BASE_URL=https://llmtr.com/v1`, because the Bot sends `reasoning.effort`, which it refuses.
 
 ## Voice dictation
 
